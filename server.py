@@ -9,9 +9,12 @@ def run_finbit():
 
     print("Running Finbit update...")
 
-    subprocess.Popen(["python3", "finbit.py"])
+    base = os.getcwd()
+    script = os.path.join(base, "finbit.py")
 
-    print("Finbit launched")
+    subprocess.Popen(["python3", script])
+
+    print("Finbit launched:", script)
 
 
 @app.route("/")
