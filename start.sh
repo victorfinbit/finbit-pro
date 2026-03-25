@@ -1,2 +1,2 @@
-python auto_update.py &
-python server.py
+#!/bin/bash
+python3 server.py
