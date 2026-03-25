@@ -29,7 +29,7 @@ def run_finbit():
 
     print("Running Finbit update...")
 
-    subprocess.run(["python", "finbit.py"])
+    subprocess.run(["python3", "finbit.py"])
 
     with open(LAST_UPDATE_FILE, "w") as f:
         f.write(str(time.time()))
