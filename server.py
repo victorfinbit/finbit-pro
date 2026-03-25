@@ -24,16 +24,18 @@ def should_update():
 
     return False
 
+
 def run_finbit():
 
     print("Running Finbit update...")
 
-    subprocess.run(["python3", "finbit.py"])
+    # Ejecutar en background para que Render no reinicie el server
+    subprocess.Popen(["python3", "finbit.py"])
 
     with open(LAST_UPDATE_FILE, "w") as f:
         f.write(str(time.time()))
 
-    print("Finbit updated")
+    print("Finbit launched")
 
 
 @app.route("/")
@@ -43,6 +45,7 @@ def dashboard():
         run_finbit()
 
     return send_file("dashboard.html")
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
