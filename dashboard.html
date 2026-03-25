@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>finbit pro</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--red:#dc2626;--red-l:#fef2f2;--red-b:#fecaca;--green:#16a34a;--green-l:#f0fdf4;--green-b:#bbf7d0;--yellow:#b45309;--yellow-l:#fffbeb;--yellow-b:#fde68a;--purple:#7c3aed;--purple-l:#f5f3ff;--purple-b:#ddd6fe;--bg:#f5f5f3;--surface:#fff;--surface2:#f8f8f6;--brd:#e5e5e3;--brd2:#d1d1cf;--text:#111;--muted:#666;--hint:#aaa;--mono:'DM Mono',monospace;--sans:'DM Sans',sans-serif;--r:8px;--r2:12px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;line-height:1.5}
+.topbar{background:var(--surface);border-bottom:1px solid var(--brd);position:sticky;top:0;z-index:200}
+.topbar-inner{max-width:1360px;margin:0 auto;padding:0 20px;height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.logo{font-size:16px;font-weight:600;letter-spacing:-.3px;color:var(--text)}
+.logo em{color:var(--red);font-style:normal}
+.topbar-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.tc-chip{font-size:11px;background:var(--surface2);border:1px solid var(--brd);border-radius:20px;padding:3px 10px;font-family:var(--mono)}
+.cfg-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cfg-lbl{font-size:10px;color:var(--muted)}
+.cfg-input{width:80px;padding:3px 7px;border:1px solid var(--brd);border-radius:6px;font-size:12px;font-family:var(--mono);background:var(--surface);color:var(--text)}
+.cfg-btn{padding:3px 10px;border:1px solid var(--brd);border-radius:6px;font-size:11px;background:var(--red);color:#fff;cursor:pointer;font-family:var(--sans)}
+.nav{background:var(--surface);border-bottom:1px solid var(--brd);position:sticky;top:50px;z-index:199;overflow-x:auto}
+.nav-inner{max-width:1360px;margin:0 auto;padding:0 20px;display:flex}
+.nb{font-size:13px;padding:11px 18px;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap;font-family:var(--sans);margin-bottom:-1px;transition:all .15s}
+.nb.active{color:var(--text);border-bottom-color:var(--red);font-weight:500}
+.nb:hover:not(.active){color:var(--text)}
+.wrap{max-width:1360px;margin:0 auto;padding:24px 20px 48px}
+.tab{display:none}.tab.active{display:block}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}
+.kpi{background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);padding:13px 15px}
+.kpi .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.kpi .val{font-size:20px;font-weight:500;font-family:var(--mono)}
+.pos{color:var(--green)}.neg{color:var(--red)}.warn{color:var(--yellow)}
+.tw{background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);overflow:hidden;margin-bottom:18px}
+.tw-head{padding:13px 17px;border-bottom:1px solid var(--brd);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-head span{font-size:13px;font-weight:500}
+.hint{font-size:11px;color:var(--muted)}
+table{width:100%;border-collapse:collapse}
+thead th{padding:8px 13px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--brd);background:var(--surface2);white-space:nowrap;font-weight:400}
+.datarow{border-bottom:1px solid var(--brd);cursor:pointer;transition:background .1s}
+.datarow:hover{background:var(--surface2)}
+td{padding:10px 13px;vertical-align:middle;font-size:12px}
+td strong{font-size:13px;font-weight:500}
+.num{font-family:var(--mono)}
+.badge{display:inline-flex;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:500;white-space:nowrap}
+.b-buy{background:var(--green-l);color:var(--green);border:1px solid var(--green-b)}
+.b-sell{background:var(--red-l);color:var(--red);border:1px solid var(--red-b)}
+.b-hold{background:var(--yellow-l);color:var(--yellow);border:1px solid var(--yellow-b)}
+.b-none{background:var(--surface2);color:var(--muted);border:1px solid var(--brd)}
+.b-rocket{background:var(--purple-l);color:var(--purple);border:1px solid var(--purple-b)}
+.detail{display:none}.detail.open{display:table-row}
+.detail-panel{background:var(--surface2);border-left:3px solid var(--red);padding:14px 16px}
+.dp-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:860px){.dp-grid{grid-template-columns:1fr}}
+.dp-sec{background:var(--surface);border:1px solid var(--brd);border-radius:var(--r);padding:11px 13px}
+.dp-sec-t{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:9px}
+.crit-list{display:flex;flex-direction:column}
+.crit-item{border-bottom:1px solid var(--brd);padding-bottom:5px;margin-bottom:3px}
+.crit-item:last-child{border-bottom:none}
+.crit-row{display:flex;align-items:center;gap:7px;padding:3px 0}
+.crit-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.crit-label{color:var(--muted);flex:1;font-size:11px}
+.crit-val{font-family:var(--mono);font-size:10px}
+.crit-reason{font-size:10px;color:var(--hint);margin:1px 0 4px 14px;line-height:1.5}
+/* Score block */
+.score-block{display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:4px}
+.score-num{font-size:42px;font-weight:600;font-family:var(--mono);line-height:1}
+.score-denom{font-size:22px;color:var(--muted);font-weight:400}
+.score-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.score-bar{width:100%;height:6px;background:var(--brd2);border-radius:3px;overflow:hidden;margin:4px 0}
+.score-fill{height:100%;border-radius:3px;transition:width .3s}
+/* TF chips */
+.tf-row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.tf-chip{border:1px solid var(--brd);border-radius:6px;padding:7px 9px;text-align:center;background:var(--surface2)}
+.tf-na{opacity:.4}
+.tf-name{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
+.tf-sig{font-size:12px;font-weight:500}
+.tf-sub{font-size:10px;color:var(--muted)}
+/* Sizing */
+.sz-grid{display:flex;flex-direction:column}
+.sz-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--brd);font-size:12px}
+.sz-row:last-child{border-bottom:none}
+.sz-note{font-size:10px;color:var(--muted);margin-top:7px;padding:6px 9px;background:var(--surface2);border-radius:5px;line-height:1.5}
+.frac-badge{font-size:9px;background:var(--purple-l);color:var(--purple);border:1px solid var(--purple-b);border-radius:20px;padding:1px 6px;margin-left:4px}
+.pl-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--brd);font-size:12px}
+.pl-row:last-child{border-bottom:none}
+.rec-box{border-radius:var(--r);padding:10px 13px;font-size:12px;line-height:1.7}
+.rec-buy{border:1px solid var(--green-b);background:var(--green-l);color:#14532d}
+.rec-hold{border:1px solid var(--yellow-b);background:var(--yellow-l);color:#78350f}
+.rec-sell{border:1px solid var(--red-b);background:var(--red-l);color:#7f1d1d}
+.rec-title{font-weight:600;font-size:13px;margin-bottom:4px}
+.conf-banner{display:flex;align-items:center;gap:8px;padding:7px 11px;border-radius:var(--r);font-size:12px;margin-bottom:9px;font-weight:500}
+.conf-bull{background:var(--green-l);border:1px solid var(--green-b);color:#14532d}
+.conf-bear{background:var(--red-l);border:1px solid var(--red-b);color:#7f1d1d}
+.conf-mix{background:var(--yellow-l);border:1px solid var(--yellow-b);color:#78350f}
+.alert-pill{background:var(--yellow-l);border:1px solid var(--yellow-b);border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:11px;color:var(--yellow)}
+.notif-bar{background:var(--yellow-l);border:1px solid var(--yellow-b);border-radius:var(--r2);padding:12px 15px;margin-bottom:16px}
+.notif-bar .ntitle{font-weight:500;color:var(--yellow);margin-bottom:7px}
+.rrw{display:flex;align-items:center;gap:6px}
+.rrb{height:4px;border-radius:2px;background:var(--brd2);width:42px;overflow:hidden}
+.rrf{height:100%;border-radius:2px}
+/* search + filter bar */
+.filter-bar{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--brd);flex-wrap:wrap;background:var(--surface2)}
+.filter-bar input,.filter-bar select{padding:5px 9px;border:1px solid var(--brd);border-radius:6px;font-size:12px;background:var(--surface);color:var(--text);outline:none}
+.filter-bar input:focus{border-color:var(--red)}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:11px;padding:16px}
+.fg{display:flex;flex-direction:column;gap:4px}
+.fg label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.fg input,.fg select{border:1px solid var(--brd);border-radius:var(--r);padding:7px 10px;font-size:13px;font-family:var(--sans);color:var(--text);background:var(--surface);outline:none;transition:border-color .15s}
+.fg input:focus,.fg select:focus{border-color:var(--red)}
+.btn{background:var(--red);color:#fff;border:none;border-radius:var(--r);padding:8px 20px;font-size:13px;font-family:var(--sans);font-weight:500;cursor:pointer;transition:opacity .15s}
+.btn:hover{opacity:.88}
+.btn-sm{font-size:11px;padding:3px 9px;border-radius:5px;border:none;cursor:pointer;font-family:var(--sans)}
+.btn-edit{background:var(--yellow-l);color:var(--yellow);border:1px solid var(--yellow-b)}
+.btn-del{background:var(--red-l);color:var(--red);border:1px solid var(--red-b)}
+.nota-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--r);padding:9px 13px;font-size:11px;color:#1e40af;line-height:1.7;margin:14px 16px 0}
+.mini-table{width:100%;border-collapse:collapse;font-size:12px}
+.mini-table th,.mini-table td{padding:7px 12px;border-bottom:1px solid var(--brd);text-align:right}
+.mini-table th{color:var(--muted);text-transform:uppercase;font-size:10px;font-weight:400;background:var(--surface2)}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:500;align-items:center;justify-content:center}
+.modal-bg.open{display:flex}
+.modal{background:var(--surface);border-radius:var(--r2);padding:22px 24px;width:440px;max-width:95vw}
+.modal h3{font-size:15px;font-weight:600;margin-bottom:16px}
+.modal-row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.modal-row .fg{flex:1;min-width:160px}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.filter-btn{background:var(--surface);border:1px solid var(--brd);border-radius:20px;padding:5px 13px;font-size:11px;cursor:pointer;font-family:var(--sans);color:var(--muted);transition:all .15s}
+.filter-btn.active,.filter-btn:hover{background:var(--red);color:#fff;border-color:var(--red)}
+
+/* Buscador */
+.b-input{border:1px solid var(--brd);border-radius:var(--r);padding:7px 10px;font-size:13px;font-family:var(--sans);color:var(--text);background:var(--surface);outline:none;width:160px;transition:border-color .15s}
+.b-input:focus{border-color:var(--red)}
+.ticker-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--brd);border-radius:20px;padding:4px 10px;font-size:12px}
+.ticker-chip button{border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;padding:0;line-height:1}
+footer{color:var(--hint);font-size:10px;text-align:center;padding:18px 0;border-top:1px solid var(--brd);line-height:2}
+@media(max-width:720px){thead th:nth-child(n+5){display:none}td:nth-child(n+5){display:none}}
+</style></head><body>
+
+<div class="topbar"><div class="topbar-inner">
+  <div class="logo">fin<em>bit</em> <span style="font-size:11px;color:var(--muted);font-weight:400">pro v3.2</span></div>
+  <div class="topbar-right">
+    <span class="tc-chip">USD/MXN <strong>$17.7440</strong></span>
+    <div class="cfg-row">
+      <span class="cfg-lbl">Capital</span>
+      <input id="cfg_capital" class="cfg-input" type="number" value="15000" min="100" style="width:90px">
+      <span class="cfg-lbl">Riesgo%</span>
+      <input id="cfg_riesgo" class="cfg-input" type="number" value="1" min="0.5" max="10" step="0.5" style="width:60px">
+      <span class="cfg-lbl">R:R mín</span>
+      <input id="cfg_rr" class="cfg-input" type="number" value="3.0" min="1" max="10" step="0.5" style="width:55px">
+      <button class="cfg-btn" onclick="saveConfig()">Guardar</button>
+    </div>
+    <span style="font-size:11px;color:var(--muted)">25/03/2026 01:50</span>
+  </div>
+</div></div>
+
+<div class="nav"><div class="nav-inner">
+  <button class="nb active" onclick="showTab('portafolio',this)">Mi portafolio</button>
+  <button class="nb" onclick="showTab('registrar',this)">Registrar operación</button>
+  <button class="nb" onclick="showTab('historial',this)">Historial</button>
+  <button class="nb" onclick="showTab('scanner',this)">Scanner</button>
+  <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
+  <button class="nb" onclick="showTab('buscador',this)">🔍 Buscador</button>
+</div></div>
+
+<div class="modal-bg" id="editModal">
+  <div class="modal">
+    <h3>Editar operación</h3>
+    <input type="hidden" id="edit_id">
+    <div class="modal-row">
+      <div class="fg"><label>Ticker</label><input type="text" id="edit_ticker"></div>
+      <div class="fg"><label>Tipo</label><select id="edit_tipo"><option value="COMPRA">Compra</option><option value="VENTA">Venta</option></select></div>
+    </div>
+    <div class="modal-row">
+      <div class="fg"><label>Títulos</label><input type="number" id="edit_titulos" step="0.01"></div>
+      <div class="fg"><label>Precio MXN</label><input type="number" id="edit_precio" step="0.01"></div>
+      <div class="fg"><label>Fecha</label><input type="date" id="edit_fecha"></div>
+    </div>
+    <div class="fg" style="margin-bottom:0"><label>Notas</label><input type="text" id="edit_notas"></div>
+    <div class="modal-btns">
+      <button class="btn" style="background:var(--muted);font-size:12px;padding:6px 16px" onclick="closeModal()">Cancelar</button>
+      <button class="btn" style="font-size:12px;padding:6px 16px" onclick="saveEdit()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ══ PORTAFOLIO ══ -->
+<div id="tab-portafolio" class="tab active">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Mi portafolio</h2>
+    <p class="hint">Capital $15,000 MXN · Riesgo 1% · R:R mín 1:3 · Las operaciones registradas se reflejan al instante</p>
+  </div>
+  <div class="nota-box" style="margin:0 0 14px">
+    💡 <strong>Precios:</strong> Costo prom. ya está en MXN (SIC/GBM). Precio actual viene en USD y se convierte con TC 17.7440 solo para P&amp;L.<br>
+    💡 <strong>Orden GBM:</strong> EMA9 = entrada ideal. Stop = límite de pérdida. Objetivo = meta de venta.
+  </div>
+  
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">Valor total</div><div class="val">$0.00</div></div>
+    <div class="kpi"><div class="lbl">Costo total</div><div class="val">$0.00</div></div>
+    <div class="kpi"><div class="lbl">P&L total</div><div class="val pos">$0.00</div></div>
+    <div class="kpi"><div class="lbl">Rendimiento</div><div class="val pos">+0.0%</div></div>
+    <div class="kpi"><div class="lbl">Posiciones</div><div class="val" id="kpi-pos">0</div></div>
+    <div class="kpi"><div class="lbl">Alertas</div><div class="val ">0</div></div>
+  </div>
+  <div class="tw">
+    <div class="tw-head">
+      <span>Posiciones actuales</span>
+      <div class="filter-bar" style="padding:0;border:none;background:transparent;gap:6px">
+        <input id="port_search" placeholder="🔍 Buscar ticker..." style="width:160px" oninput="filtrarPortafolio()">
+        <select id="port_origen" onchange="filtrarPortafolio()" style="font-size:11px">
+          <option value="">Todos los orígenes</option>
+          <option value="USA">USA (SIC)</option>
+          <option value="MX">México (BMV)</option>
+        </select>
+        <select id="port_senal" onchange="filtrarPortafolio()" style="font-size:11px">
+          <option value="">Todas las señales</option>
+          <option value="Comprar">Comprar</option>
+          <option value="Mantener">Mantener</option>
+          <option value="Vender">Vender</option>
+        </select>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Emisora</th><th>Títulos</th><th>Cto. prom MXN</th><th>Precio actual</th>
+        <th>Valor MXN</th><th>P&L MXN</th><th>% Var</th><th>Señal</th><th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+      <tbody id="port_tbody"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- ══ REGISTRAR ══ -->
+<div id="tab-registrar" class="tab">
+  <div style="padding:20px 0 14px"><h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Registrar operación</h2></div>
+  <div class="tw">
+    <div class="tw-head"><span>Nueva operación</span></div>
+    <div class="nota-box">💡 Precio en MXN tal como aparece en GBM/SIC. Al guardar actualiza automáticamente tu portafolio con costo promedio ponderado.</div>
+    <div class="form-grid">
+      <div class="fg"><label>Ticker</label><input type="text" id="f_ticker" placeholder="NVDA, SOXL..."></div>
+      <div class="fg"><label>Tipo</label><select id="f_tipo"><option value="COMPRA">Compra</option><option value="VENTA">Venta</option></select></div>
+      <div class="fg"><label>Fecha</label><input type="date" id="f_fecha" value="2026-03-25"></div>
+      <div class="fg"><label>Títulos (fracciones OK)</label><input type="number" id="f_titulos" step="0.01" min="0.01" placeholder="10 o 0.5"></div>
+      <div class="fg"><label>Precio por título MXN</label><input type="number" id="f_precio" step="0.01" placeholder="1500.00"></div>
+      <div class="fg"><label>Origen</label><select id="f_origen"><option value="USA">USA (SIC)</option><option value="MX">México (BMV)</option></select></div>
+      <div class="fg"><label>Mercado</label><select id="f_mercado"><option value="SIC">SIC</option><option value="BMV">BMV</option></select></div>
+      <div class="fg"><label>Notas</label><input type="text" id="f_notas" placeholder="Señal MACD+EMA..."></div>
+    </div>
+    <div style="padding:0 16px 16px">
+      <div id="f_preview" style="background:var(--surface2);border:1px solid var(--brd);border-radius:var(--r);padding:9px 12px;margin-bottom:11px;display:none;font-size:12px">
+        <span class="hint">Resumen: </span><span id="f_preview_txt"></span>
+      </div>
+      <button class="btn" onclick="registrarOp()">Guardar operación</button>
+      <span id="f_msg" style="margin-left:12px;font-size:12px"></span>
+    </div>
+  </div>
+  <div class="tw">
+    <div class="tw-head"><span>Editar posición directa</span><span class="hint">Sin pasar por historial</span></div>
+    <div class="form-grid">
+      <div class="fg"><label>Ticker</label><input type="text" id="p_ticker"></div>
+      <div class="fg"><label>Títulos totales</label><input type="number" id="p_titulos" step="0.01"></div>
+      <div class="fg"><label>Costo promedio MXN</label><input type="number" id="p_cto" step="0.01"></div>
+      <div class="fg"><label>Origen</label><select id="p_origen"><option value="USA">USA</option><option value="MX">México</option></select></div>
+      <div class="fg"><label>Mercado</label><select id="p_mercado"><option value="SIC">SIC</option><option value="BMV">BMV</option></select></div>
+    </div>
+    <div style="padding:0 16px 16px">
+      <button class="btn" onclick="guardarPosicion()">Guardar posición</button>
+      <span id="p_msg" style="margin-left:12px;font-size:12px"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ══ HISTORIAL ══ -->
+<div id="tab-historial" class="tab">
+  <div style="padding:20px 0 14px"><h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Historial de operaciones</h2></div>
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">Total invertido</div><div class="val">$0.00</div></div>
+    <div class="kpi"><div class="lbl">Total vendido</div><div class="val">$0.00</div></div>
+    <div class="kpi"><div class="lbl">P&L realizado</div><div class="val pos">$0.00</div></div>
+    <div class="kpi"><div class="lbl">Operaciones</div><div class="val">0</div></div>
+    <div class="kpi"><div class="lbl">Ops cerradas</div><div class="val">0</div></div>
+  </div>
+  <div class="tw" style="margin-bottom:18px">
+    <div class="tw-head"><span>📊 Estadísticas de trading</span><span class="hint">Basado en operaciones cerradas</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0;border-top:1px solid var(--brd)">
+      <div style="padding:16px 18px;border-right:1px solid var(--brd)">
+        <div class="hint" style="margin-bottom:10px;text-transform:uppercase;font-size:10px;letter-spacing:.06em">Tasa de aciertos</div>
+        <div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:10px">
+          <span style="font-size:36px;font-weight:600;font-family:var(--mono);color:var(--red)">0%</span>
+          <span class="hint" style="padding-bottom:6px">0G / 0P de 0 cerradas</span>
+        </div>
+        <div style="background:var(--brd);border-radius:4px;height:6px;overflow:hidden;margin-bottom:6px">
+          <div style="background:var(--red);height:100%;width:0%;border-radius:4px"></div>
+        </div>
+        <p class="hint" style="font-size:10px">Aún sin operaciones cerradas</p>
+      </div>
+      <div style="padding:16px 18px;border-right:1px solid var(--brd)">
+        <div class="hint" style="margin-bottom:10px;text-transform:uppercase;font-size:10px;letter-spacing:.06em">Ganancia / Pérdida promedio</div>
+        <div class="pl-row"><span>Ganancia promedio por op</span><span class="num pos">$0.00</span></div>
+        <div class="pl-row"><span>Pérdida promedio por op</span><span class="num neg">$0.00</span></div>
+        <div class="pl-row"><span>Mejor operación</span><span class="num pos">$0.00</span></div>
+        <div class="pl-row"><span>Peor operación</span><span class="num neg">$0.00</span></div>
+        <div class="pl-row" style="border-top:2px solid var(--brd);margin-top:4px;padding-top:8px">
+          <span style="font-weight:500">Expectativa por operación</span>
+          <span class="num pos" style="font-weight:600">$0.00</span>
+        </div>
+        <p class="hint" style="font-size:10px;margin-top:6px">Sin datos suficientes aún</p>
+      </div>
+      <div style="padding:16px 18px">
+        <div class="hint" style="margin-bottom:10px;text-transform:uppercase;font-size:10px;letter-spacing:.06em">P&L por ticker (ops cerradas)</div>
+        <p class="hint">Sin operaciones cerradas aún</p>
+      </div>
+    </div>
+    
+  </div>
+  <div class="tw">
+    <div class="tw-head">
+      <span>Operaciones</span>
+      <div style="display:flex;gap:7px;align-items:center">
+        <input type="text" id="fil_ticker" placeholder="Filtrar..." style="padding:4px 9px;border:1px solid var(--brd);border-radius:6px;font-size:12px;width:110px;background:var(--surface)" oninput="filtrar()">
+        <select id="fil_tipo" style="padding:4px 8px;border:1px solid var(--brd);border-radius:6px;font-size:12px;background:var(--surface)" onchange="filtrar()">
+          <option value="">Todos</option><option value="COMPRA">Compra</option><option value="VENTA">Venta</option>
+        </select>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Fecha</th><th>Ticker</th><th>Tipo</th><th>Títulos</th>
+        <th>Precio MXN</th><th>Total MXN</th><th>T/C</th><th>Origen</th><th>Notas</th><th>Acciones</th></tr></thead>
+      <tbody id="hist_body"><tr><td colspan="10" style="text-align:center;color:var(--muted);padding:28px;font-size:12px">Sin operaciones aún</td></tr></tbody>
+    </table></div>
+  </div>
+  <div class="tw"><div class="tw-head"><span>Resumen mensual</span></div>
+    <div style="padding:13px;overflow-x:auto"><p class='hint'>Sin datos</p></div>
+  </div>
+</div>
+
+<!-- ══ SCANNER ══ -->
+<div id="tab-scanner" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
+    <p class="hint">Muestra <strong>todas</strong> las acciones configuradas · base 1D · abre 1H+1W si score≥5 · TC $17.7440 · 25/03/2026 01:50</p>
+  </div>
+  <div class="tw">
+    <div class="tw-head">
+      <span>Todas las acciones (6)</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="scan_search" placeholder="🔍 Buscar..." style="padding:4px 9px;border:1px solid var(--brd);border-radius:6px;font-size:12px;width:120px;background:var(--surface)" oninput="filtrarScanner()">
+        <select id="scan_estado" onchange="filtrarScanner()" style="padding:4px 8px;border:1px solid var(--brd);border-radius:6px;font-size:12px;background:var(--surface)">
+          <option value="">Todos los estados</option>
+          <option value="Explosión">🚀 Explosión</option>
+          <option value="Compra">↑ Compra</option>
+          <option value="Vigilar">👁 Vigilar</option>
+          <option value="Esperar">Esperar</option>
+          <option value="Bajista">↓ Bajista</option>
+        </select>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table id="scan_table">
+      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
+        <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
+        <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th><th>Score</th></tr></thead>
+      <tbody id="scan_tbody"><tr class="datarow" onclick="toggle('sc_AAPL')"><td><strong>AAPL</strong></td><td><span class="badge b-none">Esperar</span></td><td class="num">$4,465.11<br><span class="hint">USD 251.64</span></td><td class="num" style="color:var(--green)">$4,479.04</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:34%;background:var(--yellow)"></div></div><span style="color:var(--yellow);font-family:var(--mono);font-size:11px">2.0x</span></div></td><td style="color:var(--yellow);font-weight:600;font-family:var(--mono)">41</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--green)>↑</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$4,479.04</span></div><div>🛑 <span style="color:var(--red)">$4,268.33</span></div><div>✅ <span style="color:var(--green)">$4,865.94</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--yellow);font-weight:600">4/8</span></td></tr><tr class="detail" id="sc_AAPL"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">252.43/256.50/260.58</span></div><div class="crit-reason">Precio 251.64 < EMA9 252.43</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--green)">249.61</span></div><div class="crit-reason">EMA200 en 249.61. Precio +0.8% encima.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-4.011</span></div><div class="crit-reason">MACD -4.011 vs señal -3.290. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-0.721</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--green)">41</span></div><div class="crit-reason">RSI 41: neutral.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--green)">1.1x</span></div><div class="crit-reason">Vol 45,111,500 vs media 41,560,155. Confirmado.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--red)">2.0x</span></div><div class="crit-reason">Stop 240.55 Obj 274.23. R:R 2.0x insuficiente.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--green)">247.99</span></div><div class="crit-reason">Soporte en 247.99. OK.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--yellow)">Mantener</div><div class="tf-sub" style="color:var(--yellow)">RSI 41</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--yellow)">4<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:50%;background:var(--yellow)"></div></div><div style="margin-top:8px"><span class="badge b-hold" style="font-size:12px;padding:4px 12px">Mantener</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$196.78</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$4,465.11</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">0.76 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$3,393.48</span></div><div class="sz-row"><span>% del capital</span><span class="num">22.6%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">0.76 tit x $4,465.11 = $3,393.48 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$4,465.11</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$4,479.04</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$4,268.33</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$4,865.94</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--yellow)">41</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--yellow)">2.0x</span></div></div></div></div></div></td></tr><tr class="datarow" onclick="toggle('sc_SOXL')"><td><strong>SOXL</strong></td><td><span class="badge b-none">Esperar</span></td><td class="num">$975.21<br><span class="hint">USD 54.96</span></td><td class="num" style="color:var(--green)">$955.69</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:33%;background:var(--red)"></div></div><span style="color:var(--red);font-family:var(--mono);font-size:11px">2.0x</span></div></td><td style="color:var(--yellow);font-weight:600;font-family:var(--mono)">48</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--green)>↑</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$955.69</span></div><div>🛑 <span style="color:var(--red)">$824.27</span></div><div>✅ <span style="color:var(--green)">$1,275.09</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">3/8</span></td></tr><tr class="detail" id="sc_SOXL"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">53.86/55.71/56.10</span></div><div class="crit-reason">Precio 54.96 < EMA9 53.86</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--green)">43.71</span></div><div class="crit-reason">EMA200 en 43.71. Precio +25.7% encima.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-1.943</span></div><div class="crit-reason">MACD -1.943 vs señal -1.927. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-0.016</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--green)">48</span></div><div class="crit-reason">RSI 48: neutral.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--red)">1.0x</span></div><div class="crit-reason">Vol 90,795,700 vs media 92,756,300. Sin conviccion.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--red)">2.0x</span></div><div class="crit-reason">Stop 46.45 Obj 71.86. R:R 2.0x insuficiente.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--green)">47.89</span></div><div class="crit-reason">Soporte en 47.89. OK.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--red)">Vender</div><div class="tf-sub" style="color:var(--yellow)">RSI 48</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--red)">3<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:38%;background:var(--red)"></div></div><div style="margin-top:8px"><span class="badge b-sell" style="font-size:12px;padding:4px 12px">Vender</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$150.94</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$975.21</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">0.99 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$965.46</span></div><div class="sz-row"><span>% del capital</span><span class="num">6.4%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">0.99 tit x $975.21 = $965.46 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$975.21</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$955.69</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$824.27</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$1,275.09</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--yellow)">48</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--red)">2.0x</span></div></div></div></div></div></td></tr><tr class="datarow" onclick="toggle('sc_TQQQ')"><td><strong>TQQQ</strong></td><td><span class="badge b-sell">↓ Bajista</span></td><td class="num">$773.99<br><span class="hint">USD 43.62</span></td><td class="num" style="color:var(--green)">$808.88</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:75%;background:var(--green)"></div></div><span style="color:var(--green);font-family:var(--mono);font-size:11px">4.5x</span></div></td><td style="color:var(--red);font-weight:600;font-family:var(--mono)">37</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--red)>↓</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$808.88</span></div><div>🛑 <span style="color:var(--red)">$741.48</span></div><div>✅ <span style="color:var(--green)">$920.38</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">2/8</span></td></tr><tr class="detail" id="sc_TQQQ"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">45.59/47.30/49.46</span></div><div class="crit-reason">Precio 43.62 < EMA9 45.59</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--red)">48.62</span></div><div class="crit-reason">EMA200 en 48.62. Precio -10.3% DEBAJO.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-1.693</span></div><div class="crit-reason">MACD -1.693 vs señal -1.314. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-0.379</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--red)">37</span></div><div class="crit-reason">RSI 37: debil.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--red)">0.9x</span></div><div class="crit-reason">Vol 104,474,900 vs media 115,756,965. Sin conviccion.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--green)">4.5x</span></div><div class="crit-reason">Stop 41.79 Obj 51.87. R:R 4.5x valido.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--green)">43.08</span></div><div class="crit-reason">Soporte en 43.08. OK.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--red)">Vender</div><div class="tf-sub" style="color:var(--red)">RSI 37</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--red)">2<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:25%;background:var(--red)"></div></div><div style="margin-top:8px"><span class="badge b-sell" style="font-size:12px;padding:4px 12px">Vender</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$32.51</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$773.99</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">4.61 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$3,568.11</span></div><div class="sz-row"><span>% del capital</span><span class="num">23.8%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">4.61 tit x $773.99 = $3,568.11 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$773.99</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$808.88</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$741.48</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$920.38</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--red)">37</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--green)">4.5x</span></div></div></div></div></div></td></tr><tr class="datarow" onclick="toggle('sc_META')"><td><strong>META</strong></td><td><span class="badge b-sell">↓ Bajista</span></td><td class="num">$10,520.78<br><span class="hint">USD 592.92</span></td><td class="num" style="color:var(--green)">$10,865.05</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:70%;background:var(--green)"></div></div><span style="color:var(--green);font-family:var(--mono);font-size:11px">4.2x</span></div></td><td style="color:var(--red);font-weight:600;font-family:var(--mono)">35</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--red)>↓</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$10,865.05</span></div><div>🛑 <span style="color:var(--red)">$10,205.16</span></div><div>✅ <span style="color:var(--green)">$11,848.21</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">1/8</span></td></tr><tr class="detail" id="sc_META"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">612.32/628.69/643.08</span></div><div class="crit-reason">Precio 592.92 < EMA9 612.32</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--red)">673.74</span></div><div class="crit-reason">EMA200 en 673.74. Precio -12.0% DEBAJO.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-14.869</span></div><div class="crit-reason">MACD -14.869 vs señal -9.958. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-4.911</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--red)">35</span></div><div class="crit-reason">RSI 35: debil.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--red)">0.8x</span></div><div class="crit-reason">Vol 10,700,300 vs media 12,798,720. Sin conviccion.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--green)">4.2x</span></div><div class="crit-reason">Stop 575.13 Obj 667.73. R:R 4.2x valido.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--red)">592.92</span></div><div class="crit-reason">Soporte en 592.92. Roto — señal bajista.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--red)">Vender</div><div class="tf-sub" style="color:var(--red)">RSI 35</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--red)">1<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:12%;background:var(--red)"></div></div><div style="margin-top:8px"><span class="badge b-sell" style="font-size:12px;padding:4px 12px">Vender</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$315.62</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$10,520.78</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">0.48 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$5,049.98</span></div><div class="sz-row"><span>% del capital</span><span class="num">33.7%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">0.48 tit x $10,520.78 = $5,049.98 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$10,520.78</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$10,865.05</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$10,205.16</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$11,848.21</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--red)">35</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--green)">4.2x</span></div></div></div></div></div></td></tr><tr class="datarow" onclick="toggle('sc_NVDA')"><td><strong>NVDA</strong></td><td><span class="badge b-sell">↓ Bajista</span></td><td class="num">$3,108.75<br><span class="hint">USD 175.20</span></td><td class="num" style="color:var(--green)">$3,162.24</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:44%;background:var(--yellow)"></div></div><span style="color:var(--yellow);font-family:var(--mono);font-size:11px">2.7x</span></div></td><td style="color:var(--yellow);font-weight:600;font-family:var(--mono)">42</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--red)>↓</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$3,162.24</span></div><div>🛑 <span style="color:var(--red)">$2,972.46</span></div><div>✅ <span style="color:var(--green)">$3,470.02</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">2/8</span></td></tr><tr class="detail" id="sc_NVDA"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">178.21/180.96/183.09</span></div><div class="crit-reason">Precio 175.20 < EMA9 178.21</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--red)">176.75</span></div><div class="crit-reason">EMA200 en 176.75. Precio -0.9% DEBAJO.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-2.466</span></div><div class="crit-reason">MACD -2.466 vs señal -1.605. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-0.861</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--green)">42</span></div><div class="crit-reason">RSI 42: neutral.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--red)">0.7x</span></div><div class="crit-reason">Vol 147,140,600 vs media 199,646,490. Sin conviccion.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--red)">2.7x</span></div><div class="crit-reason">Stop 167.52 Obj 195.56. R:R 2.7x insuficiente.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--green)">172.70</span></div><div class="crit-reason">Soporte en 172.70. OK.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--red)">Vender</div><div class="tf-sub" style="color:var(--yellow)">RSI 42</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--red)">2<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:25%;background:var(--red)"></div></div><div style="margin-top:8px"><span class="badge b-sell" style="font-size:12px;padding:4px 12px">Vender</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$136.29</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$3,108.75</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">1.1 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$3,419.63</span></div><div class="sz-row"><span>% del capital</span><span class="num">22.8%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">1.1 tit x $3,108.75 = $3,419.63 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$3,108.75</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$3,162.24</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$2,972.46</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$3,470.02</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--yellow)">42</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--yellow)">2.7x</span></div></div></div></div></div></td></tr><tr class="datarow" onclick="toggle('sc_TSLA')"><td><strong>TSLA</strong></td><td><span class="badge b-sell">↓ Bajista</span></td><td class="num">$6,796.49<br><span class="hint">USD 383.03</span></td><td class="num" style="color:var(--green)">$6,857.04</td><td><div class="rrw"><div class="rrb"><div class="rrf" style="width:22%;background:var(--red)"></div></div><span style="color:var(--red);font-family:var(--mono);font-size:11px">1.3x</span></div></td><td style="color:var(--yellow);font-weight:600;font-family:var(--mono)">42</td><td><span style=color:var(--red)>▼</span></td><td><span style=color:var(--red)>↓</span></td><td><div style="font-size:10px;line-height:1.8;font-family:var(--mono)"><div>🎯 <span style="color:var(--green)">$6,857.04</span></div><div>🛑 <span style="color:var(--red)">$6,333.22</span></div><div>✅ <span style="color:var(--green)">$7,406.35</span></div></div></td><td><span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">2/8</span></td></tr><tr class="detail" id="sc_TSLA"><td colspan="10" style="padding:0"><div class="detail-panel"><div class="conf-mix conf-banner"><span>⇅</span><span>Señales mixtas entre timeframes</span></div><div class="dp-grid"><div class="dp-sec"><div class="dp-sec-t">Desglose indicadores 1D</div><div class="crit-list"><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">EMAs 9>21>50</span><span class="crit-val" style="color:var(--red)">386.44/395.25/409.03</span></div><div class="crit-reason">Precio 383.03 < EMA9 386.44</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Precio > EMA200</span><span class="crit-val" style="color:var(--red)">395.30</span></div><div class="crit-reason">EMA200 en 395.30. Precio -3.1% DEBAJO.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">MACD alcista</span><span class="crit-val" style="color:var(--red)">-9.313</span></div><div class="crit-reason">MACD -9.313 vs señal -8.142. Sin momentum.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Histograma >0</span><span class="crit-val" style="color:var(--red)">-1.171</span></div><div class="crit-reason">Histograma negativo.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">RSI 40-72</span><span class="crit-val" style="color:var(--green)">42</span></div><div class="crit-reason">RSI 42: neutral.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">Volumen>media</span><span class="crit-val" style="color:var(--red)">1.0x</span></div><div class="crit-reason">Vol 59,818,700 vs media 60,577,640. Sin conviccion.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--red)"></span><span class="crit-label">R:R>=3x</span><span class="crit-val" style="color:var(--red)">1.3x</span></div><div class="crit-reason">Stop 356.92 Obj 417.40. R:R 1.3x insuficiente.</div></div><div class="crit-item"><div class="crit-row"><span class="crit-dot" style="background:var(--green)"></span><span class="crit-label">Sobre soporte</span><span class="crit-val" style="color:var(--green)">367.96</span></div><div class="crit-reason">Soporte en 367.96. OK.</div></div></div></div><div style="display:flex;flex-direction:column;gap:8px"><div class="dp-sec"><div class="dp-sec-t">Timeframes (1H/1W solo si score≥5)</div><div class="tf-row"><div class="tf-chip tf-na"><div class="tf-name">1H</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div><div class="tf-chip"><div class="tf-name">1D</div><div class="tf-sig" style="color:var(--red)">Vender</div><div class="tf-sub" style="color:var(--yellow)">RSI 42</div></div><div class="tf-chip tf-na"><div class="tf-name">1W</div><div class="tf-sig">—</div><div class="tf-sub">Solo 1D base</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Score técnico</div><div class="score-block"><div class="score-num" style="color:var(--red)">2<span class="score-denom">/8</span></div><div class="score-lbl">criterios cumplidos</div><div class="score-bar"><div class="score-fill" style="width:25%;background:var(--red)"></div></div><div style="margin-top:8px"><span class="badge b-sell" style="font-size:12px;padding:4px 12px">Vender</span></div></div></div><div class="dp-sec"><div class="dp-sec-t">Tamaño de posición sugerido</div><div class="sz-grid"><div class="sz-row"><span>Máx a arriesgar (1%)</span><span class="num">$150.00</span></div><div class="sz-row"><span>Distancia al stop MXN</span><span class="num">$463.28</span></div><div class="sz-row"><span>Precio por acción MXN</span><span class="num">$6,796.49</span></div><div class="sz-row"><span>Ya tienes en cartera</span><span class="num">0.0 tít.</span></div><div class="sz-row" style="border-top:2px solid var(--brd);padding-top:6px;margin-top:2px"><span style="font-weight:500">Títulos adicionales</span><span class="num" style="color:var(--green);font-size:16px;font-weight:600">0.32 <span class="frac-badge">fracción</span></span></div><div class="sz-row"><span>Capital a comprometer</span><span class="num" style="font-weight:600">$2,174.88</span></div><div class="sz-row"><span>% del capital</span><span class="num">14.5%</span></div><div class="sz-note" style="font-family:var(--mono);font-size:10px">0.32 tit x $6,796.49 = $2,174.88 MXN</div><div class="sz-note">💡 Fracción de acción — disponible en GBM y Bitso.</div></div></div></div><div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div><div class="sz-grid" style="font-size:12px"><div class="pl-row"><span>Precio actual</span><span class="num">$6,796.49</span></div><div class="pl-row"><span>Entrada EMA9</span><span class="num" style="color:var(--green)">$6,857.04</span></div><div class="pl-row"><span>Stop</span><span class="num" style="color:var(--red)">$6,333.22</span></div><div class="pl-row"><span>Objetivo</span><span class="num" style="color:var(--green)">$7,406.35</span></div><div class="pl-row"><span>RSI</span><span class="num" style="color:var(--yellow)">42</span></div><div class="pl-row"><span>R:R</span><span class="num" style="color:var(--red)">1.3x</span></div></div></div></div></div></td></tr></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- ══ RADAR ══ -->
+<div id="tab-radar" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Radar automático</h2>
+    <p class="hint">0 de 16 acciones analizadas · solo 1D · ideal pre-apertura · TC $17.7440 · 25/03/2026 01:50</p>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div style="flex:1">
+      <div style="font-weight:500;margin-bottom:3px">Análisis pre-apertura — 16 acciones</div>
+      <p class="hint">Analiza todo el universo en 1D. Ideal entre 8-9 AM antes de apertura. Muestra todas las acciones con su estado.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div class="kpi" style="padding:9px 13px"><div class="lbl">🚀 Explosión</div><div class="val" style="color:var(--purple);font-size:18px">0</div></div>
+      <div class="kpi" style="padding:9px 13px"><div class="lbl">↑ Compra</div><div class="val pos" style="font-size:18px">0</div></div>
+      <div class="kpi" style="padding:9px 13px"><div class="lbl">👁 Vigilar</div><div class="val warn" style="font-size:18px">0</div></div>
+      <div class="kpi" style="padding:9px 13px"><div class="lbl">↓ Bajistas</div><div class="val neg" style="font-size:18px">0</div></div>
+      <div class="kpi" style="padding:9px 13px"><div class="lbl">— Esperar</div><div class="val" style="font-size:18px;color:var(--muted)">0</div></div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <span class="hint">Filtrar:</span>
+    <button class="filter-btn active" onclick="filtrarRadar('ALL',this)">Todos</button>
+    <button class="filter-btn" onclick="filtrarRadar('alza',this)">↑ Alza</button>
+    <button class="filter-btn" onclick="filtrarRadar('baja',this)">↓ Bajistas</button>
+    <button class="filter-btn" onclick="filtrarRadar('10pct',this)">🔥 +10% potencial</button>
+    <button class="filter-btn" onclick="filtrarRadar('rocket',this)">🚀 Explosiones</button>
+    <button class="filter-btn" onclick="filtrarRadar('skip',this)">— Esperar</button>
+    <input type="text" id="radar_search" placeholder="Buscar ticker..."
+      style="padding:5px 10px;border:1px solid var(--brd);border-radius:6px;font-size:12px;background:var(--surface);margin-left:auto;width:130px"
+      oninput="buscarRadar()">
+  </div>
+  <div class="tw">
+    <div class="tw-head"><span id="radar_count">Mostrando 0 acciones</span><span class="hint">↓ Clic en fila para análisis completo</span></div>
+    <div style="overflow-x:auto"><table id="radar_table">
+      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
+        <th style="color:var(--green)">Entrada EMA9</th><th style="color:var(--green)">Potencial</th>
+        <th>R:R</th><th>RSI</th><th>MACD</th><th>EMA200</th><th>Score</th>
+        <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+      <tbody id="radar_body"><tr><td colspan="11" style="text-align:center;color:var(--muted);padding:28px;font-size:12px">Sin datos — activa el radar desde el botón de arriba</td></tr></tbody>
+    </table></div>
+  </div>
+  <p class="hint" style="margin-top:8px">💡 Potencial = distancia al objetivo dinámico (máx 20 velas). Solo fines educativos.</p>
+</div>
+
+
+<div id="tab-buscador" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Buscador de acciones</h2>
+    <p class="hint">Hasta 5 tickers a la vez. Se guardan y aparecen en el scanner en la proxima corrida.</p>
+  </div>
+  <div class="tw">
+    <div class="tw-head"><span>Agregar tickers al scanner</span><span class="hint">Simbolo exacto: NVDA, AAPL, SOXL, TLEVISACPO...</span></div>
+    <div class="nota-box">Los tickers guardados se analizan junto con los defaults. Descarga finbit_tickers.json y ponlo junto al script.</div>
+    <div style="padding:16px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <input type="text" id="b_t1" placeholder="Ticker 1 (NVDA)" class="b-input">
+        <input type="text" id="b_t2" placeholder="Ticker 2" class="b-input">
+        <input type="text" id="b_t3" placeholder="Ticker 3" class="b-input">
+        <input type="text" id="b_t4" placeholder="Ticker 4" class="b-input">
+        <input type="text" id="b_t5" placeholder="Ticker 5" class="b-input">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="b_exchange" style="padding:7px 10px;border:1px solid var(--brd);border-radius:var(--r);font-size:13px;background:var(--surface)">
+          <option value="">Exchange auto</option>
+          <option value="NASDAQ">NASDAQ</option>
+          <option value="NYSE">NYSE</option>
+          <option value="NYSEARCA">NYSE Arca (ETFs)</option>
+          <option value="BMV">BMV Mexico</option>
+        </select>
+        <button class="btn" onclick="guardarTickers()">Guardar al scanner</button>
+        <span id="b_msg" style="font-size:12px"></span>
+      </div>
+    </div>
+  </div>
+  <div class="tw">
+    <div class="tw-head"><span>Tickers en el scanner personalizado</span></div>
+    <div style="padding:14px">
+      <div id="b_saved_list" style="display:flex;flex-wrap:wrap;gap:8px;min-height:32px">
+        <span class="hint">Sin tickers guardados</span>
+      </div>
+      <p class="hint" style="margin-top:10px;font-size:11px">Despues de guardar, corre python finbit.py para analizarlos en el scanner.</p>
+    </div>
+  </div>
+</div>
+
+<footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
+TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
+</div>
+
+<script>
+const TC = 17.7440;
+const PORT_BASE = [];
+
+// ── Tabs ─────────────────────────────────────────────────
+function showTab(name,btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+function toggle(id){
+  const el=document.getElementById(id); if(!el)return;
+  const open=el.classList.contains('open');
+  document.querySelectorAll('.detail.open').forEach(d=>d.classList.remove('open'));
+  if(!open){el.classList.add('open');el.scrollIntoView({behavior:'smooth',block:'nearest'});}
+}
+
+// ── Portafolio live desde localStorage ───────────────────
+function recalcPortafolio(ops){
+  const map={};
+  // Partir de la base del script
+  PORT_BASE.forEach(p=>{
+    map[p.ticker]={titulos:p.titulos,costoTotal:p.cto_prom_mxn*p.titulos,
+      origen:p.origen,mercado:p.mercado,precio_actual_mxn:p.precio_actual_mxn,
+      pl_mxn:p.pl_mxn,pl_pct:p.pl_pct};
+  });
+  // Aplicar operaciones de localStorage encima
+  ops.forEach(op=>{
+    const t=op.ticker;
+    if(!map[t]) map[t]={titulos:0,costoTotal:0,origen:op.origen||'USA',mercado:op.mercado||'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0};
+    if(op.tipo==='COMPRA'){
+      map[t].costoTotal+=op.titulos*op.precio_mxn;
+      map[t].titulos+=op.titulos;
+    } else if(op.tipo==='VENTA'){
+      if(map[t].titulos>0){
+        const cto=map[t].costoTotal/map[t].titulos;
+        map[t].costoTotal-=op.titulos*cto;
+        map[t].titulos-=op.titulos;
+      }
+    }
+  });
+  return map;
+}
+
+function actualizarTablaPortafolio(){
+  const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+  const map=recalcPortafolio(ops);
+  const tbody=document.getElementById('port_tbody');
+  if(!tbody) return;
+
+  // Actualizar filas existentes
+  tbody.querySelectorAll('tr.datarow').forEach(row=>{
+    const tkEl=row.querySelector('td strong');
+    if(!tkEl) return;
+    const tk=tkEl.textContent.trim();
+    if(!map[tk]) return;
+    const d=map[tk];
+    if(d.titulos<=0) return;
+    const cto=d.titulos>0? d.costoTotal/d.titulos : 0;
+    const cells=row.querySelectorAll('td');
+    if(cells.length<7) return;
+    cells[1].textContent=parseFloat(d.titulos.toFixed(6));
+    cells[2].innerHTML='<span class="num">$'+cto.toLocaleString('es-MX',{minimumFractionDigits:2})+'</span>';
+    const costo=cto*d.titulos;
+    cells[4].innerHTML='<span class="num">$'+( (d.precio_actual_mxn||cto)*d.titulos ).toLocaleString('es-MX',{minimumFractionDigits:2})+'</span>';
+    if(d.precio_actual_mxn){
+      const pl=(d.precio_actual_mxn-cto)*d.titulos;
+      const plPct=(pl/costo*100);
+      const col=pl>=0?'var(--green)':'var(--red)';
+      cells[5].innerHTML='<span class="num" style="color:'+col+'">'+( pl<0?'-':'')+'$'+Math.abs(pl).toLocaleString('es-MX',{minimumFractionDigits:2})+'</span>';
+      cells[6].innerHTML='<span class="num" style="color:'+col+'">'+(plPct>=0?'+':'')+plPct.toFixed(1)+'%</span>';
+    }
+  });
+
+  // Agregar filas nuevas (posiciones que no estaban en el script)
+  Object.entries(map).forEach(([tk,d])=>{
+    if(d.titulos<=0) return;
+    const exists=[...tbody.querySelectorAll('tr.datarow')].some(r=>r.querySelector('td strong')?.textContent.trim()===tk);
+    if(exists) return;
+    const cto=d.costoTotal/d.titulos;
+    const rid='pr_'+tk.replace(/[ .]/g,'_');
+    const newRow=document.createElement('tr');
+    newRow.className='datarow';
+    newRow.setAttribute('onclick',`toggle('${rid}')`);
+    newRow.innerHTML=`<td><strong>${tk}</strong><br><span class="hint">${d.origen} · ${d.mercado}</span></td>`
+      +`<td class="num">${parseFloat(d.titulos.toFixed(6))}</td>`
+      +`<td class="num">$${cto.toLocaleString('es-MX',{minimumFractionDigits:2})}</td>`
+      +`<td class="num">—</td>`
+      +`<td class="num">$${(cto*d.titulos).toLocaleString('es-MX',{minimumFractionDigits:2})}</td>`
+      +`<td class="num">—</td><td class="num">—</td>`
+      +`<td><span class="badge b-none">Sin análisis</span></td><td>—</td>`;
+    tbody.appendChild(newRow);
+    const detRow=document.createElement('tr');
+    detRow.className='detail'; detRow.id=rid;
+    detRow.innerHTML='<td colspan="9" style="padding:0"><div class="detail-panel"><p class="hint">Análisis disponible al correr el script de nuevo.</p></div></td>';
+    tbody.appendChild(detRow);
+  });
+}
+
+// ── Filtro tabla portafolio ───────────────────────────────
+function filtrarPortafolio(){
+  const q=(document.getElementById('port_search').value||'').toUpperCase();
+  const origen=document.getElementById('port_origen').value;
+  const senal=document.getElementById('port_senal').value;
+  let visible=0;
+  document.querySelectorAll('#port_tbody tr.datarow').forEach(tr=>{
+    const tk=tr.querySelector('td strong')?.textContent||'';
+    const origCell=tr.querySelectorAll('td')[0]?.textContent||'';
+    const badgeTxt=tr.querySelector('.badge')?.textContent||'';
+    const mQ=!q||tk.includes(q);
+    const mO=!origen||origCell.includes(origen);
+    const mS=!senal||badgeTxt.includes(senal);
+    const show=mQ&&mO&&mS;
+    tr.style.display=show?'':'none';
+    const next=tr.nextElementSibling;
+    if(next&&next.classList.contains('detail'))next.style.display=show?'':'none';
+    if(show) visible++;
+  });
+}
+
+// ── Filtro scanner ────────────────────────────────────────
+function filtrarScanner(){
+  const q=(document.getElementById('scan_search').value||'').toUpperCase();
+  const estado=document.getElementById('scan_estado').value;
+  document.querySelectorAll('#scan_tbody tr.datarow').forEach(tr=>{
+    const tk=tr.querySelector('td strong')?.textContent||'';
+    const badge=tr.querySelector('.badge')?.textContent||'';
+    const mQ=!q||tk.includes(q);
+    const mE=!estado||badge.includes(estado);
+    const show=mQ&&mE;
+    tr.style.display=show?'':'none';
+    const next=tr.nextElementSibling;
+    if(next&&next.classList.contains('detail'))next.style.display=show?'':'none';
+  });
+}
+
+// ── Registrar operación ──────────────────────────────────
+['f_ticker','f_tipo','f_titulos','f_precio'].forEach(id=>{
+  const el=document.getElementById(id); if(el) el.addEventListener('input',updatePreview);
+});
+function updatePreview(){
+  const t=(document.getElementById('f_ticker').value||'').toUpperCase();
+  const tipo=document.getElementById('f_tipo').value;
+  const n=parseFloat(document.getElementById('f_titulos').value)||0;
+  const p=parseFloat(document.getElementById('f_precio').value)||0;
+  if(t&&n&&p){
+    const total=(n*p).toLocaleString('es-MX',{minimumFractionDigits:2});
+    const color=tipo==='COMPRA'?'#16a34a':'#dc2626';
+    document.getElementById('f_preview_txt').innerHTML='<strong style="color:'+color+'">'+tipo+'</strong> '+n+' tít de <strong>'+t+'</strong> a <strong>$'+p.toFixed(2)+' MXN</strong> = <strong>$'+total+' MXN</strong>';
+    document.getElementById('f_preview').style.display='block';
+  }
+}
+function registrarOp(){
+  const op={fecha:document.getElementById('f_fecha').value,
+    ticker:(document.getElementById('f_ticker').value||'').toUpperCase().trim(),
+    tipo:document.getElementById('f_tipo').value,
+    titulos:parseFloat(document.getElementById('f_titulos').value),
+    precio_mxn:parseFloat(document.getElementById('f_precio').value),
+    origen:document.getElementById('f_origen').value,
+    mercado:document.getElementById('f_mercado').value,
+    notas:document.getElementById('f_notas').value,
+    tc_dia:TC};
+  if(!op.ticker||!op.titulos||!op.precio_mxn||!op.fecha){
+    document.getElementById('f_msg').innerHTML='<span style="color:var(--red)">⚠ Completa todos los campos</span>';return;
+  }
+  op.total_mxn=op.titulos*op.precio_mxn;
+  let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+  ops.unshift(op);
+  localStorage.setItem('finbit_ops',JSON.stringify(ops));
+  renderOpsTable(ops);
+  actualizarTablaPortafolio();   // ← actualiza portafolio en tiempo real
+  document.getElementById('f_msg').innerHTML='<span style="color:var(--green)">✅ Guardado — portafolio actualizado</span>';
+  setTimeout(()=>document.getElementById('f_msg').innerHTML='',5000);
+  ['f_ticker','f_titulos','f_precio','f_notas'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('f_preview').style.display='none';
+}
+function guardarPosicion(){
+  const pos={ticker:(document.getElementById('p_ticker').value||'').toUpperCase().trim(),
+    titulos:parseFloat(document.getElementById('p_titulos').value),
+    cto_prom_mxn:parseFloat(document.getElementById('p_cto').value),
+    origen:document.getElementById('p_origen').value,
+    mercado:document.getElementById('p_mercado').value};
+  if(!pos.ticker||!pos.titulos||!pos.cto_prom_mxn){
+    document.getElementById('p_msg').innerHTML='<span style="color:var(--red)">⚠ Completa los campos</span>';return;
+  }
+  let port=JSON.parse(localStorage.getItem('finbit_port')||'[]');
+  const idx=port.findIndex(p=>p.ticker===pos.ticker);
+  if(idx>=0)port[idx]=pos;else port.push(pos);
+  localStorage.setItem('finbit_port',JSON.stringify(port));
+  actualizarTablaPortafolio();
+  document.getElementById('p_msg').innerHTML='<span style="color:var(--green)">✅ Guardado</span>';
+  setTimeout(()=>document.getElementById('p_msg').innerHTML='',5000);
+}
+
+// ── Historial ────────────────────────────────────────────
+function renderOpsTable(ops){
+  const body=document.getElementById('hist_body');
+  if(!ops.length){body.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">Sin operaciones</td></tr>';return;}
+  body.innerHTML=ops.map((op,i)=>{
+    const color=op.tipo==='COMPRA'?'#16a34a':'#dc2626';
+    const total=(op.total_mxn||0).toLocaleString('es-MX',{minimumFractionDigits:2});
+    const precio=(op.precio_mxn||0).toLocaleString('es-MX',{minimumFractionDigits:2});
+    return '<tr><td>'+(op.fecha||'').slice(0,10)+'</td><td><strong>'+(op.ticker||'')+'</strong></td>'
+      +'<td style="color:'+color+';font-weight:600">'+(op.tipo||'')+'</td><td class="num">'+(op.titulos||0)+'</td>'
+      +'<td class="num">$'+precio+'</td><td class="num">$'+total+'</td>'
+      +'<td style="font-family:monospace;font-size:11px">'+(op.tc_dia||'—')+'</td>'
+      +'<td>'+(op.origen||'—')+'</td><td style="color:var(--muted);font-size:11px">'+(op.notas||'—')+'</td>'
+      +'<td><button class="btn-sm btn-edit" onclick="editOpLS('+i+')">Editar</button> '
+      +'<button class="btn-sm btn-del" onclick="delOpLS('+i+')">Borrar</button></td></tr>';
+  }).join('');
+}
+function editOpLS(idx){
+  let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');const op=ops[idx];if(!op)return;
+  document.getElementById('edit_id').value='ls_'+idx;
+  document.getElementById('edit_ticker').value=op.ticker;
+  document.getElementById('edit_tipo').value=op.tipo;
+  document.getElementById('edit_titulos').value=op.titulos;
+  document.getElementById('edit_precio').value=op.precio_mxn;
+  document.getElementById('edit_fecha').value=(op.fecha||'').slice(0,10);
+  document.getElementById('edit_notas').value=op.notas||'';
+  document.getElementById('editModal').classList.add('open');
+}
+function delOpLS(idx){
+  if(!confirm('¿Borrar esta operación?'))return;
+  let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+  ops.splice(idx,1);localStorage.setItem('finbit_ops',JSON.stringify(ops));renderOpsTable(ops);
+  actualizarTablaPortafolio();
+}
+function saveEdit(){
+  const idVal=document.getElementById('edit_id').value;
+  if(idVal.startsWith('ls_')){
+    const idx=parseInt(idVal.replace('ls_',''));
+    let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+    if(ops[idx]){
+      ops[idx].ticker=(document.getElementById('edit_ticker').value||'').toUpperCase().trim();
+      ops[idx].tipo=document.getElementById('edit_tipo').value;
+      ops[idx].titulos=parseFloat(document.getElementById('edit_titulos').value);
+      ops[idx].precio_mxn=parseFloat(document.getElementById('edit_precio').value);
+      ops[idx].total_mxn=ops[idx].titulos*ops[idx].precio_mxn;
+      ops[idx].fecha=document.getElementById('edit_fecha').value;
+      ops[idx].notas=document.getElementById('edit_notas').value;
+      localStorage.setItem('finbit_ops',JSON.stringify(ops));renderOpsTable(ops);actualizarTablaPortafolio();
+    }
+  }
+  closeModal();
+}
+function editOp(id,ticker,tipo,titulos,precio,fecha,notas){
+  document.getElementById('edit_id').value=id;
+  document.getElementById('edit_ticker').value=ticker;
+  document.getElementById('edit_tipo').value=tipo;
+  document.getElementById('edit_titulos').value=titulos;
+  document.getElementById('edit_precio').value=precio;
+  document.getElementById('edit_fecha').value=fecha;
+  document.getElementById('edit_notas').value=notas;
+  document.getElementById('editModal').classList.add('open');
+}
+function delOp(id,ticker){
+  if(!confirm('¿Borrar operación #'+id+' de '+ticker+'?'))return;
+  let del=JSON.parse(localStorage.getItem('finbit_del_ids')||'[]');del.push(id);
+  localStorage.setItem('finbit_del_ids',JSON.stringify(del));
+  alert('Marcada para borrar. Al correr el script se eliminará de la DB.');
+}
+function closeModal(){document.getElementById('editModal').classList.remove('open');}
+document.getElementById('editModal').addEventListener('click',function(e){if(e.target===this)closeModal();});
+
+function filtrar(){
+  const t=(document.getElementById('fil_ticker').value||'').toUpperCase();
+  const tipo=document.getElementById('fil_tipo').value;
+  document.querySelectorAll('#hist_body tr').forEach(tr=>{
+    const cells=tr.querySelectorAll('td');if(!cells.length)return;
+    const mT=!t||cells[1]?.textContent.includes(t);
+    const mTp=!tipo||cells[2]?.textContent.trim()===tipo;
+    tr.style.display=(mT&&mTp)?'':'none';
+  });
+}
+
+// ── Config ───────────────────────────────────────────────
+function saveConfig(){
+  const cap=parseFloat(document.getElementById('cfg_capital').value);
+  const rie=parseFloat(document.getElementById('cfg_riesgo').value)/100;
+  const rr=parseFloat(document.getElementById('cfg_rr').value);
+  if(!cap||!rie||!rr)return;
+  localStorage.setItem('cfg_capital',cap);localStorage.setItem('cfg_riesgo',rie);localStorage.setItem('cfg_rr',rr);
+  const blob=new Blob([JSON.stringify({capital:cap,riesgo:rie,rr_min:rr})],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='finbit_config.json';a.click();
+  URL.revokeObjectURL(a.href);
+  alert('Config guardada. Descargó finbit_config.json — ponlo junto al script y vuelve a correr.');
+}
+
+// ── Radar ────────────────────────────────────────────────
+function filtrarRadar(tipo,btn){
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  let count=0;
+  document.querySelectorAll('#radar_body tr.datarow').forEach(tr=>{
+    const estado=tr.querySelector('.badge')?.textContent?.trim()||'';
+    const potEl=tr.querySelectorAll('td')[4]?.textContent?.trim()||'0';
+    const pot=parseFloat(potEl.replace('%','').replace('+',''))||0;
+    let show=true;
+    if(tipo==='alza') show=estado.includes('↑')||estado.includes('🚀')||estado.includes('👁');
+    if(tipo==='baja') show=estado.includes('↓');
+    if(tipo==='10pct') show=pot>=10;
+    if(tipo==='rocket') show=estado.includes('🚀');
+    if(tipo==='skip') show=estado.includes('Esperar');
+    tr.style.display=show?'':'none';
+    const next=tr.nextElementSibling;
+    if(next&&next.classList.contains('detail'))next.style.display=show?'':'none';
+    if(show) count++;
+  });
+  const el=document.getElementById('radar_count');
+  if(el) el.textContent='Mostrando '+count+' acciones';
+}
+function buscarRadar(){
+  const q=(document.getElementById('radar_search').value||'').toUpperCase();
+  let count=0;
+  document.querySelectorAll('#radar_body tr.datarow').forEach(tr=>{
+    const ticker=tr.querySelector('strong')?.textContent?.toUpperCase()||'';
+    const show=!q||ticker.includes(q);tr.style.display=show?'':'none';
+    const next=tr.nextElementSibling;
+    if(next&&next.classList.contains('detail'))next.style.display=show?'':'none';
+    if(show) count++;
+  });
+  const el=document.getElementById('radar_count');
+  if(el) el.textContent='Mostrando '+count+' acciones';
+}
+
+
+// ── Buscador de tickers ───────────────────────────────────
+function getTickers() {
+  const ids = ['b_t1','b_t2','b_t3','b_t4','b_t5'];
+  return ids.map(id => document.getElementById(id).value.toUpperCase().trim()).filter(Boolean);
+}
+
+function buscarTickers() {
+  const tickers = getTickers();
+  if (!tickers.length) {
+    document.getElementById('b_msg').innerHTML = '<span style="color:var(--red)">Escribe al menos un ticker</span>';
+    return;
+  }
+  const exchange = document.getElementById('b_exchange').value;
+  document.getElementById('b_loading').style.display = 'block';
+  document.getElementById('b_results').innerHTML = '';
+  document.getElementById('b_msg').innerHTML = '';
+
+  // Guardar para que el script los lea en la próxima corrida
+  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
+  tickers.forEach(t => { saved[t] = exchange; });
+  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
+
+  // Mostrar resultado visual inmediato (el análisis real ocurre al correr el script)
+  setTimeout(() => {
+    document.getElementById('b_loading').style.display = 'none';
+    let html = '<div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:var(--r);padding:13px 16px;font-size:12px;color:#14532d">';
+    html += '<strong>✅ Tickers registrados:</strong> ' + tickers.join(', ') + '<br>';
+    html += 'Se analizarán en la próxima corrida del script. ';
+    html += 'Para ver el análisis ahora mismo, cierra el browser y corre <code>python finbit.py</code>';
+    html += '</div>';
+    document.getElementById('b_results').innerHTML = html;
+    actualizarListaGuardados();
+  }, 500);
+}
+
+function guardarTickers() {
+  const tickers = getTickers();
+  if (!tickers.length) return;
+  const exchange = document.getElementById('b_exchange').value;
+  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
+  tickers.forEach(t => { saved[t] = exchange; });
+  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
+
+  // También exportar como JSON para que el script lo lea
+  const blob = new Blob([JSON.stringify(saved, null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'finbit_tickers.json'; a.click(); URL.revokeObjectURL(a.href);
+
+  document.getElementById('b_msg').innerHTML = '<span style="color:var(--green)">✅ Guardado. Descargó finbit_tickers.json — ponlo junto al script y vuelve a correr</span>';
+  actualizarListaGuardados();
+}
+
+function actualizarListaGuardados() {
+  const saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
+  const el = document.getElementById('b_saved_list');
+  if (!Object.keys(saved).length) {
+    el.innerHTML = '<span class="hint">Sin tickers guardados aún</span>';
+    return;
+  }
+  el.innerHTML = Object.entries(saved).map(([t, ex]) =>
+    `<span class="ticker-chip"><strong>${t}</strong><span class="hint">${ex||'auto'}</span>`+
+    `<button onclick="quitarTicker('${t}')">×</button></span>`
+  ).join('');
+}
+
+function quitarTicker(ticker) {
+  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
+  delete saved[ticker];
+  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
+  actualizarListaGuardados();
+}
+// ── Init ─────────────────────────────────────────────────
+window.addEventListener('load',()=>{
+  const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+  if(ops.length) renderOpsTable(ops);
+  actualizarTablaPortafolio();
+  actualizarListaGuardados();
+  const cap=localStorage.getItem('cfg_capital');
+  const rie=localStorage.getItem('cfg_riesgo');
+  const rr=localStorage.getItem('cfg_rr');
+  if(cap) document.getElementById('cfg_capital').value=cap;
+  if(rie) document.getElementById('cfg_riesgo').value=(parseFloat(rie)*100).toFixed(0);
+  if(rr) document.getElementById('cfg_rr').value=rr;
+});
+</script></body></html>
