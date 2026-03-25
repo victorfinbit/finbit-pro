@@ -24,7 +24,6 @@ def should_update():
 
     return False
 
-
 def run_finbit():
 
     print("Running Finbit update...")
@@ -35,14 +34,15 @@ def run_finbit():
         f.write(str(time.time()))
 
     print("Finbit updated")
-    @app.route("/")
+
+
+@app.route("/")
 def dashboard():
 
     if should_update():
         run_finbit()
 
     return send_file("dashboard.html")
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
