@@ -6,7 +6,7 @@ import subprocess
 app = Flask(__name__)
 
 LAST_UPDATE_FILE = "last_update.txt"
-UPDATE_INTERVAL = 10  # prueba corta
+UPDATE_INTERVAL = 10
 
 
 def should_update():
@@ -29,7 +29,6 @@ def run_finbit():
 
     print("Running Finbit update...")
 
-    # Ejecutar en background para que Render no reinicie el server
     subprocess.Popen(["python3", "finbit.py"])
 
     with open(LAST_UPDATE_FILE, "w") as f:
@@ -41,10 +40,16 @@ def run_finbit():
 @app.route("/")
 def dashboard():
 
+    return send_file("dashboard.html")
+
+
+@app.route("/update")
+def update():
+
     if should_update():
         run_finbit()
 
-    return send_file("dashboard.html")
+    return "ok"
 
 
 if __name__ == "__main__":
