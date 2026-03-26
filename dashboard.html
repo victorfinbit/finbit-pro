@@ -863,3 +863,33 @@ window.addEventListener('load',()=>{
   if(rr) document.getElementById('cfg_rr').value=rr;
 });
 </script></body></html>
+
+<button onclick="actualizar()">Actualizar datos</button>
+
+<script>
+function actualizar() {
+    fetch("/update")
+        .then(res => res.text())
+        .then(txt => {
+            alert("Actualización iniciada");
+            location.reload();
+        });
+}
+</script>
+
+<select id="timeframe">
+    <option value="intra">Intradía</option>
+    <option value="swing">Swing</option>
+    <option value="largo">Largo plazo</option>
+</select>
+
+<script>
+
+document.getElementById("timeframe").addEventListener("change", function() {
+
+    let tf = this.value;
+
+    fetch("/set_tf/" + tf)
+})
+
+</script>
