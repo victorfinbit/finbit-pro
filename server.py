@@ -33,3 +33,17 @@ def update():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+current_tf = "swing"
+
+
+@app.route("/set_tf/<tf>")
+def set_tf(tf):
+
+    global current_tf
+
+    current_tf = tf
+
+    print("Timeframe:", current_tf)
+
+    return "ok"
