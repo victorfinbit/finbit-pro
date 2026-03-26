@@ -814,23 +814,38 @@ function buscarTickers() {
   }, 500);
 }
 
-function guardarTickers() {
+async function guardarTickers() {
+
   const tickers = getTickers();
   if (!tickers.length) return;
-  const exchange = document.getElementById('b_exchange').value;
-  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
-  tickers.forEach(t => { saved[t] = exchange; });
-  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
 
-  // También exportar como JSON para que el script lo lea
-  const blob = new Blob([JSON.stringify(saved, null, 2)], {type:'application/json'});
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = 'finbit_tickers.json'; a.click(); URL.revokeObjectURL(a.href);
+  const exchange = document.getElementById('b_exchange').value || "";
 
-  document.getElementById('b_msg').innerHTML = '<span style="color:var(--green)">✅ Guardado. Descargó finbit_tickers.json — ponlo junto al script y vuelve a correr</span>';
-  actualizarListaGuardados();
+  for (const t of tickers) {
+
+    try {
+
+      await fetch("/api/tickers/add", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ticker: t,
+          exchange: exchange
+        })
+      });
+
+    } catch (e) {
+      console.error("Error guardando", t, e);
+    }
+
+  }
+
+  document.getElementById("b_msg").innerHTML =
+    "<span style='color:lime'>✔ Guardado en base de datos</span>";
+
 }
-
 function actualizarListaGuardados() {
   const saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{}');
   const el = document.getElementById('b_saved_list');
