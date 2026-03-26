@@ -464,13 +464,18 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
 def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None = None):
     """
-    Scanner: analiza SCANNER_TICKERS + tickers de la DB + hasta 5 tickers extra.
-    tickers_extra: dict {nombre: (symbol, exchange)} pasado desde la UI
+    Scanner: analiza TODOS los tickers — SCANNER_TICKERS + DB + extra.
+    Sin excepciones, sin filtros. Todo aparece.
     """
     port_map = {p["ticker"]:p["titulos"] for p in get_portafolio()}
-    # Combinar: defaults + DB + extra (máx 5 del extra para no gastar créditos)
-    combinados = dict(SCANNER_TICKERS)
+    # Combinar TODO: defaults del código + tickers guardados en DB + extra pasados
+    tickers_db = get_tickers_db()
+    combinados = dict(SCANNER_TICKERS)          # base del código
+    combinados.update(tickers_db)               # agrega los de la DB (persisten)
+    if tickers_extra:
+        combinados.update(tickers_extra)        # agrega los extra de esta corrida
     resultados = []
+    print(f"  Scanner: analizando {len(combinados)} tickers ({len(SCANNER_TICKERS)} base + {len(tickers_db)} DB + {len(tickers_extra or {})} extra)")
     for nombre,(symbol,exchange) in combinados.items():
         tit = port_map.get(nombre, 0.0)
         an  = analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
@@ -989,7 +994,12 @@ def render_por_mes(por_mes: dict) -> str:
 
 # ── HTML PRINCIPAL ─────────────────────────────────────────
 def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct, rr_min):
-    ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
+    try:
+        import pytz
+        tz_mx = pytz.timezone("America/Mexico_City")
+        ts = datetime.now(tz_mx).strftime("%d/%m/%Y %H:%M CDT")
+    except Exception:
+        ts = datetime.now().strftime("%d/%m/%Y %H:%M") + " (UTC)" 
     res = resumen_hist(ops)
 
     total_valor = sum(p.get("valor_mxn",0) for p in port_data)
@@ -1396,6 +1406,46 @@ footer{{color:var(--hint);font-size:10px;text-align:center;padding:18px 0;border
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
     <p class="hint">Muestra <strong>todas</strong> las acciones configuradas · base 1D · abre 1H+1W si score≥5 · TC ${tc:.4f} · {ts}</p>
   </div>
+
+  <!-- Leyenda de score -->
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center">
+    <span style="font-size:11px;color:var(--muted);font-weight:500">Guía de score:</span>
+    <span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600">
+      ≤3 🚫 Prohibido comprar
+    </span>
+    <span style="background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600">
+      4–5 👁 Solo vigilar
+    </span>
+    <span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600">
+      6 ✅ Posible entrada
+    </span>
+    <span style="background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600">
+      ≥7 🚀 Entrada fuerte
+    </span>
+  </div>
+
+  <!-- Agregar ticker desde la UI -->
+  <div class="tw" style="margin-bottom:14px">
+    <div class="tw-head"><span>➕ Agregar ticker al scanner</span><span class="hint">Se guarda en la base de datos — persiste en cada actualización</span></div>
+    <div style="padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="add_ticker_input" placeholder="Ej: AMZN, COIN, MARA..." 
+        style="border:1px solid var(--brd);border-radius:var(--r);padding:7px 10px;font-size:13px;width:180px;background:var(--surface);color:var(--text);outline:none"
+        onkeydown="if(event.key==='Enter')agregarTickerScanner()">
+      <select id="add_exchange_input" style="border:1px solid var(--brd);border-radius:var(--r);padding:7px 10px;font-size:13px;background:var(--surface);color:var(--text)">
+        <option value="">Exchange auto</option>
+        <option value="NASDAQ">NASDAQ</option>
+        <option value="NYSE">NYSE</option>
+        <option value="NYSEARCA">NYSE Arca (ETFs)</option>
+        <option value="BMV">BMV México</option>
+      </select>
+      <button class="btn" onclick="agregarTickerScanner()">Agregar</button>
+      <span id="add_ticker_msg" style="font-size:12px"></span>
+    </div>
+    <div style="padding:0 16px 12px" id="custom_tickers_list">
+      <span class="hint" style="font-size:11px">Tickers personalizados guardados: cargando...</span>
+    </div>
+  </div>
+
   <div class="tw">
     <div class="tw-head">
       <span>Todas las acciones ({len(scan_data)})</span>
@@ -1836,6 +1886,90 @@ function buscarRadar(){{
 }}
 
 
+// ── Agregar ticker al scanner (persiste en DB) ──────────────
+function agregarTickerScanner() {{
+  const ticker = (document.getElementById('add_ticker_input').value || '').toUpperCase().trim();
+  const exchange = document.getElementById('add_exchange_input').value;
+  const msg = document.getElementById('add_ticker_msg');
+
+  if (!ticker) {{
+    msg.innerHTML = '<span style="color:var(--red)">Escribe un ticker</span>';
+    return;
+  }}
+
+  msg.innerHTML = '<span style="color:var(--muted)">Guardando...</span>';
+
+  fetch('/api/tickers/add', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{ticker, exchange}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if (d.status === 'ok') {{
+      msg.innerHTML = '<span style="color:var(--green)">✅ ' + ticker + ' guardado. Haz clic en Actualizar para verlo analizado.</span>';
+      document.getElementById('add_ticker_input').value = '';
+      cargarTickersPersonalizados();
+    }} else {{
+      msg.innerHTML = '<span style="color:var(--red)">Error: ' + (d.error||'desconocido') + '</span>';
+    }}
+  }})
+  .catch(e => {{
+    // Fallback: si no hay Flask, guardar en localStorage
+    let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
+    saved[ticker] = exchange;
+    localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
+    msg.innerHTML = '<span style="color:var(--yellow)">⚠️ Guardado localmente. Expórtalo desde la pestaña Buscador.</span>';
+    cargarTickersPersonalizados();
+  }});
+}}
+
+function quitarTickerScanner(ticker) {{
+  fetch('/api/tickers/remove', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{ticker}})
+  }})
+  .then(r => r.json())
+  .then(d => {{ cargarTickersPersonalizados(); }})
+  .catch(() => {{
+    let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
+    delete saved[ticker];
+    localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
+    cargarTickersPersonalizados();
+  }});
+}}
+
+function cargarTickersPersonalizados() {{
+  fetch('/api/tickers')
+    .then(r => r.json())
+    .then(d => {{
+      const el = document.getElementById('custom_tickers_list');
+      if (!el) return;
+      const custom = d.custom || [];
+      if (!custom.length) {{
+        el.innerHTML = '<span class="hint" style="font-size:11px">Sin tickers personalizados aún</span>';
+        return;
+      }}
+      el.innerHTML = '<span class="hint" style="font-size:11px;margin-right:8px">Personalizados:</span>' +
+        custom.map(t =>
+          `<span class="ticker-chip"><strong>${{t}}</strong>` +
+          `<button onclick="quitarTickerScanner('${{t}}')" style="border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;padding:0 0 0 4px">×</button></span>`
+        ).join('');
+    }})
+    .catch(() => {{
+      // Fallback localStorage
+      const saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
+      const el = document.getElementById('custom_tickers_list');
+      if (!el) return;
+      const keys = Object.keys(saved);
+      el.innerHTML = keys.length
+        ? '<span class="hint" style="font-size:11px;margin-right:8px">Local:</span>' +
+          keys.map(t => `<span class="ticker-chip"><strong>${{t}}</strong></span>`).join('')
+        : '<span class="hint" style="font-size:11px">Sin tickers personalizados</span>';
+    }});
+}}
+
 // ── Buscador de tickers ───────────────────────────────────
 function getTickers() {{
   const ids = ['b_t1','b_t2','b_t3','b_t4','b_t5'];
@@ -1909,6 +2043,7 @@ function quitarTicker(ticker) {{
 }}
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load',()=>{{
+  cargarTickersPersonalizados();
   const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
   if(ops.length) renderOpsTable(ops);
   actualizarTablaPortafolio();
