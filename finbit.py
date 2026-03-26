@@ -469,11 +469,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     """
     port_map = {p["ticker"]:p["titulos"] for p in get_portafolio()}
     # Combinar: defaults + DB + extra (máx 5 del extra para no gastar créditos)
-    tickers_db = get_tickers_db()
-    combinados = {**SCANNER_TICKERS, **tickers_db}
-    if tickers_extra:
-        for k,v in list(tickers_extra.items())[:5]:
-            combinados[k] = v
+    combinados = dict(SCANNER_TICKERS)
     resultados = []
     for nombre,(symbol,exchange) in combinados.items():
         tit = port_map.get(nombre, 0.0)
