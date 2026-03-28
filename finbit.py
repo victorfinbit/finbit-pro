@@ -13,10 +13,11 @@ API KEY GRATIS (800 calls/día):
     3. Pégala abajo en API_KEY
 """
 
-import sqlite3, requests, json, os, webbrowser, time
+import sqlite3, requests, json, os, webbrowser, time, threading
 import pandas as pd
 from datetime import datetime, date
 from collections import defaultdict
+from flask import Flask, Response, request as flask_req, jsonify
 
 # ═══════════════════════════════════════════════════════════
 #   ⚙️  CONFIGURACIÓN
@@ -2236,35 +2237,21 @@ def cargar_config() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════
-#   MAIN
+#   CONSTRUCCIÓN DEL DASHBOARD (reutilizable)
 # ═══════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    print("\n" + "="*56)
-    print("   FINBIT PRO  v3.2")
-    print("="*56)
+def construir_dashboard() -> str:
+    """Genera dashboard.html con datos frescos. Devuelve HTML como string."""
+    cfg = cargar_config()
+    capital = cfg["capital"]; riesgo_pct = cfg["riesgo"]; rr_min = cfg["rr_min"]
 
-    print("\n[1/6] Cargando configuración...")
-    cfg=cargar_config()
-    capital=cfg["capital"]; riesgo_pct=cfg["riesgo"]; rr_min=cfg["rr_min"]
-    print(f"      Capital: ${capital:,.0f} MXN · Riesgo: {riesgo_pct*100:.1f}% · R:R mín: {rr_min}")
-
-    print("[2/6] Base de datos..."); init_db()
-
-    print("[3/6] Tipo de cambio...")
-    tc=get_tipo_cambio(API_KEY)
-    print(f"      USD/MXN = ${tc:.4f}")
-
+    init_db()
+    tc = get_tipo_cambio(API_KEY)
     seed_portafolio(tc)
 
     if os.path.exists("finbit_ops.json"):
-        print("[4/6] Importando operaciones y actualizando portafolio...")
-        importar_ops_json("finbit_ops.json",tc)
-    else:
-        print("[4/6] (finbit_ops.json no encontrado)")
-
+        importar_ops_json("finbit_ops.json", tc)
     procesar_borrados()
 
-    # Cargar tickers personalizados del buscador
     tickers_extra = {}
     if os.path.exists("finbit_tickers.json"):
         try:
@@ -2272,47 +2259,213 @@ if __name__ == "__main__":
                 raw = json.load(f)
             for t, ex in raw.items():
                 tickers_extra[t.upper()] = (t.upper(), ex or "")
-            print(f"[4b] Tickers personalizados cargados: {list(tickers_extra.keys())}")
+            print(f"  Tickers extra cargados: {list(tickers_extra.keys())}")
         except Exception as e:
             print(f"  finbit_tickers.json error: {e}")
 
     if API_KEY not in ("TU_KEY_AQUI", ""):
-        all_t = get_all_scanner_tickers()
-        td_l  = [t for t in all_t if t not in SERPAPI_TICKERS]
-        sp_l  = [t for t in all_t if t in SERPAPI_TICKERS]
-        print("[5/6] Analizando portafolio...")
-        port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
-        print(f"[6/6] Scanner — {len(all_t)} tickers  |  TwelveData: {td_l}  |  SerpApi: {sp_l}")
-        scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra)
-        print(f"[7/7] Radar — reutiliza cache del scanner (0 calls API extra)")
+        port_data  = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
+        scan_data  = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra)
         radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results=scan_data)
     else:
-        print("[5/6] Sin API key — sin análisis técnico")
-        print("      Regístrate gratis en twelvedata.com")
-        port_data=[]
+        port_data = []
         for p in get_portafolio():
-            port_data.append({**p,"analisis":None,"precio_actual_usd":None,"precio_actual_mxn":None,
-                "valor_mxn":p["cto_prom_mxn"]*p["titulos"],"costo_total":p["cto_prom_mxn"]*p["titulos"],
-                "pl_mxn":0,"pl_pct":0,"alertas":[],"entrada_mxn":None,"stop_mxn":None,"obj_mxn":None})
-        scan_data=[]; radar_data=[]
+            port_data.append({**p, "analisis": None, "precio_actual_usd": None,
+                "precio_actual_mxn": None,
+                "valor_mxn": p["cto_prom_mxn"] * p["titulos"],
+                "costo_total": p["cto_prom_mxn"] * p["titulos"],
+                "pl_mxn": 0, "pl_pct": 0, "alertas": [],
+                "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None})
+        scan_data = []; radar_data = []
 
-    ops=get_operaciones()
-    html=generar_html(port_data,scan_data,radar_data,ops,tc,capital,riesgo_pct,rr_min)
-    with open(OUTPUT_FILE,"w",encoding="utf-8") as f: f.write(html)
+    ops  = get_operaciones()
+    html = generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct, rr_min)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"  Dashboard listo — {len(port_data)} pos · {len(scan_data)} scan · {len(radar_data)} radar · TC={tc:.4f}")
+    return html
 
-    print(f"\n{'='*56}")
-    print(f"  Dashboard:    {OUTPUT_FILE}")
-    print(f"  Base datos:   {DB_FILE}")
-    print(f"  TC:           ${tc:.4f}")
-    print(f"  Posiciones:   {len(port_data)}")
-    print(f"  Scanner:      {len(scan_data)} acciones")
-    print(f"  Radar:        {len(radar_data)} señales relevantes")
-    print(f"  Operaciones:  {len(ops)}")
-    print(f"{'='*56}\n")
-    print("  TIPS:")
-    print("  · Exportar ops del browser → F12 → copy(localStorage.getItem('finbit_ops'))")
-    print("    → pega en finbit_ops.json → corre el script")
-    print("  · Scanner y radar muestran TODAS las acciones, filtra desde la UI")
-    print("  · Ideal correr entre 8-9 AM antes de apertura\n")
 
-    # webbrowser.open("file://" + os.path.abspath(OUTPUT_FILE))
+# ═══════════════════════════════════════════════════════════
+#   SERVIDOR FLASK
+# ═══════════════════════════════════════════════════════════
+app = Flask(__name__)
+_dash_html: str = ""
+_dash_lock  = threading.Lock()
+_refresh_in_progress = False
+
+
+def _get_html() -> str:
+    global _dash_html
+    if not _dash_html:
+        with _dash_lock:
+            if not _dash_html:
+                print("[server] Primera generación del dashboard...")
+                _dash_html = construir_dashboard()
+    return _dash_html
+
+
+# ── Página principal ──────────────────────────────────────
+@app.route("/")
+def index():
+    try:
+        return Response(_get_html(), mimetype="text/html")
+    except Exception as e:
+        return Response(f"<pre>Error: {e}</pre>", mimetype="text/html", status=500)
+
+
+# ── Actualizar dashboard (botón en el HTML) ───────────────
+@app.route("/update")
+@app.route("/refresh", methods=["GET", "POST"])
+def refresh():
+    global _dash_html, _refresh_in_progress
+    if _refresh_in_progress:
+        return jsonify({"status": "busy", "msg": "Ya hay una actualización en curso"}), 202
+    def _do_refresh():
+        global _dash_html, _refresh_in_progress
+        _refresh_in_progress = True
+        try:
+            html = construir_dashboard()
+            with _dash_lock:
+                _dash_html = html
+            print("[server] Dashboard actualizado ✓")
+        except Exception as e:
+            print(f"[server] Error actualizando: {e}")
+        finally:
+            _refresh_in_progress = False
+    threading.Thread(target=_do_refresh, daemon=True).start()
+    return jsonify({"status": "ok", "msg": "Actualización iniciada en segundo plano"})
+
+
+# ── Timeframe (selector en el HTML — guardado en config) ──
+@app.route("/set_tf/<tf>")
+def set_tf(tf: str):
+    """El HTML manda /set_tf/intra|swing|largo — lo guardamos y regeneramos."""
+    tf_map = {"intra": "1h", "swing": "1day", "largo": "1week"}
+    tf_code = tf_map.get(tf, "1day")
+    try:
+        cfg = cargar_config()
+        cfg["timeframe"] = tf_code
+        with open("finbit_config.json", "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        print(f"[server] set_tf error: {e}")
+    return jsonify({"status": "ok", "tf": tf_code})
+
+
+# ── API: tickers del scanner ──────────────────────────────
+@app.route("/api/tickers")
+def api_tickers():
+    try:
+        defaults = list(SCANNER_TICKERS.keys())
+        custom   = [t for t in get_tickers_db() if t not in SCANNER_TICKERS]
+        return jsonify({"defaults": defaults, "custom": custom,
+                        "total": len(defaults) + len(custom)})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/api/tickers/add", methods=["POST"])
+def api_tickers_add():
+    global _dash_html
+    try:
+        data     = flask_req.get_json(force=True) or {}
+        ticker   = (data.get("ticker") or "").upper().strip()
+        exchange = (data.get("exchange") or "").upper().strip()
+        origen   = data.get("origen", "USA")
+        if not ticker:
+            return jsonify({"status": "error", "error": "ticker vacío"}), 400
+        add_ticker_db(ticker, exchange, origen)
+        _dash_html = ""  # invalidar cache
+        source = "serpapi" if ticker in SERPAPI_TICKERS else "twelvedata"
+        return jsonify({"status": "ok", "ticker": ticker, "source": source})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/api/tickers/remove", methods=["POST"])
+def api_tickers_remove():
+    global _dash_html
+    try:
+        data   = flask_req.get_json(force=True) or {}
+        ticker = (data.get("ticker") or "").upper().strip()
+        if not ticker:
+            return jsonify({"status": "error", "error": "ticker vacío"}), 400
+        remove_ticker_db(ticker)
+        _dash_html = ""
+        return jsonify({"status": "ok", "ticker": ticker})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── API: operaciones ──────────────────────────────────────
+@app.route("/api/operaciones")
+def api_operaciones():
+    try:
+        return jsonify(get_operaciones())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/operaciones/import", methods=["POST"])
+def api_ops_import():
+    global _dash_html
+    try:
+        ops  = flask_req.get_json(force=True) or []
+        tc   = get_tipo_cambio(API_KEY)
+        path = "_tmp_ops_import.json"
+        with open(path, "w") as f:
+            json.dump(ops, f)
+        importar_ops_json(path, tc)
+        os.remove(path)
+        _dash_html = ""
+        return jsonify({"status": "ok", "importadas": len(ops)})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── API: config ───────────────────────────────────────────
+@app.route("/api/config", methods=["POST"])
+def api_config():
+    global _dash_html
+    try:
+        data = flask_req.get_json(force=True) or {}
+        with open("finbit_config.json", "w") as f:
+            json.dump(data, f, indent=2)
+        _dash_html = ""
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── Health check (Render lo necesita) ────────────────────
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "version": "3.2"})
+
+
+# ═══════════════════════════════════════════════════════════
+#   MAIN
+# ═══════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("\n" + "="*56)
+    print("   FINBIT PRO  v3.2  — servidor web")
+    print("="*56)
+
+    init_db()
+
+    # Pre-generar el dashboard en segundo plano para arrancar rápido
+    def _prebuild():
+        global _dash_html
+        try:
+            _dash_html = construir_dashboard()
+            print("[server] Dashboard pre-generado ✓")
+        except Exception as e:
+            print(f"[server] Error en pre-generación: {e}")
+
+    threading.Thread(target=_prebuild, daemon=True).start()
+
+    port = int(os.environ.get("PORT", 5000))
+    print(f"[server] Puerto: {port}  |  http://localhost:{port}")
+    print(f"[server] Render: OK  |  /health para ping\n")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
