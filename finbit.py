@@ -2903,31 +2903,280 @@ def construir_dashboard() -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-#   SERVIDOR FLASK
+#   SERVIDOR FLASK  — arquitectura non-blocking
+#   El dashboard se construye en un hilo separado.
+#   Mientras no está listo, / devuelve una pantalla de
+#   loading elegante que hace polling cada 3 s a /status.
+#   Nunca se bloquea el worker de Flask/Gunicorn.
 # ═══════════════════════════════════════════════════════════
 app = Flask(__name__)
 _dash_html: str = ""
 _dash_lock  = threading.Lock()
 _refresh_in_progress = False
+_build_start_time: float = 0.0   # para mostrar tiempo transcurrido
+_build_error: str = ""           # captura último error de build
+
+
+# ── Pantalla de loading profesional ──────────────────────
+_LOADING_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>finbit pro — cargando</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--red:#dc2626;--green:#16a34a;--bg:#f5f5f3;--surface:#fff;--brd:#e5e5e3;--text:#111;--muted:#666}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}
+  .card{background:var(--surface);border:1px solid var(--brd);border-radius:16px;padding:40px 48px;text-align:center;max-width:480px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.06)}
+  .logo{font-size:22px;font-weight:600;letter-spacing:-.4px;margin-bottom:32px}
+  .logo em{color:var(--red);font-style:normal}
+  .spinner-wrap{margin:0 auto 28px;width:52px;height:52px;position:relative}
+  .spinner{width:52px;height:52px;border-radius:50%;border:3px solid var(--brd);border-top-color:var(--red);animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .status-msg{font-size:15px;font-weight:500;color:var(--text);margin-bottom:8px}
+  .status-sub{font-size:12px;color:var(--muted);margin-bottom:24px;line-height:1.6}
+  .steps{text-align:left;font-size:12px;color:var(--muted);border-top:1px solid var(--brd);padding-top:18px;display:flex;flex-direction:column;gap:6px}
+  .step{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .step-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .dot-done{background:var(--green)}
+  .dot-active{background:var(--red);animation:pulse .8s ease-in-out infinite}
+  .dot-pending{background:var(--brd)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .time-chip{font-size:11px;color:var(--red);font-family:'DM Mono',monospace;margin-top:16px;border:1px solid #fecaca;background:#fef2f2;border-radius:20px;padding:3px 10px;display:inline-block}
+  .reload-btn{margin-top:22px;padding:8px 22px;background:var(--red);color:#fff;border:none;border-radius:8px;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;display:none}
+  .reload-btn:hover{opacity:.88}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">fin<em>bit</em> <span style="font-size:12px;color:var(--muted);font-weight:400">pro</span></div>
+  <div class="spinner-wrap"><div class="spinner"></div></div>
+  <div class="status-msg" id="smsg">Analizando mercados...</div>
+  <div class="status-sub" id="ssub">Obteniendo datos históricos, calculando indicadores<br>y construyendo el dashboard. Un momento.</div>
+  <div class="steps">
+    <div class="step"><div class="step-dot dot-done"></div><span>Servidor iniciado</span></div>
+    <div class="step"><div class="step-dot dot-done"></div><span>Base de datos lista</span></div>
+    <div class="step" id="step-tc"><div class="step-dot dot-active"></div><span>Tipo de cambio USD/MXN</span></div>
+    <div class="step" id="step-macro"><div class="step-dot dot-pending"></div><span>Macro: VIX + SPY EMA200</span></div>
+    <div class="step" id="step-port"><div class="step-dot dot-pending"></div><span>Análisis de portafolio</span></div>
+    <div class="step" id="step-scan"><div class="step-dot dot-pending"></div><span>Scanner técnico</span></div>
+    <div class="step" id="step-radar"><div class="step-dot dot-pending"></div><span>Radar automático</span></div>
+    <div class="step" id="step-html"><div class="step-dot dot-pending"></div><span>Generando dashboard HTML</span></div>
+  </div>
+  <div class="time-chip" id="tchip">0s transcurridos</div>
+  <button class="reload-btn" id="rbtn" onclick="window.location.reload()">Ver dashboard →</button>
+</div>
+<script>
+  let elapsed = 0;
+  const startTs = Date.now();
+  const chip = document.getElementById('tchip');
+  const rbtn = document.getElementById('rbtn');
+  const smsg = document.getElementById('smsg');
+  const ssub = document.getElementById('ssub');
+
+  function markStep(id){
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.querySelector('.step-dot').className = 'step-dot dot-done';
+    // Avanzar el spinner al siguiente
+    const all = ['step-tc','step-macro','step-port','step-scan','step-radar','step-html'];
+    const idx = all.indexOf(id);
+    if(idx >= 0 && idx < all.length-1){
+      const nxt = document.getElementById(all[idx+1]);
+      if(nxt) nxt.querySelector('.step-dot').className = 'step-dot dot-active';
+    }
+  }
+
+  function poll(){
+    fetch('/status')
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.ready){
+          smsg.textContent = '¡Dashboard listo!';
+          ssub.textContent = 'Cargando en un momento...';
+          chip.textContent = 'Listo en ' + d.elapsed + 's';
+          rbtn.style.display = 'inline-block';
+          // Redirigir automáticamente
+          window.location.reload();
+        } else {
+          // Marcar pasos según etapa reportada
+          const stage = d.stage || '';
+          if(stage === 'tc_ok') markStep('step-tc');
+          if(stage === 'macro_ok'){ markStep('step-tc'); markStep('step-macro'); }
+          if(stage === 'port_ok'){ markStep('step-tc'); markStep('step-macro'); markStep('step-port'); }
+          if(stage === 'scan_ok'){ markStep('step-tc'); markStep('step-macro'); markStep('step-port'); markStep('step-scan'); }
+          if(stage === 'radar_ok'){ markStep('step-tc'); markStep('step-macro'); markStep('step-port'); markStep('step-scan'); markStep('step-radar'); }
+          elapsed = d.elapsed || 0;
+          chip.textContent = elapsed + 's transcurridos';
+          smsg.textContent = d.msg || 'Analizando mercados...';
+          setTimeout(poll, 2500);
+        }
+      })
+      .catch(()=>setTimeout(poll, 3000));
+  }
+
+  // Actualizar el chip de tiempo localmente también
+  setInterval(()=>{
+    const s = Math.round((Date.now()-startTs)/1000);
+    chip.textContent = s + 's transcurridos';
+  }, 1000);
+
+  // Primer poll en 1.5s
+  setTimeout(poll, 1500);
+</script>
+</body></html>"""
+
+# Estado del build en progreso (para reportar al /status)
+_build_stage: str = ""
+_build_elapsed: float = 0.0
 
 
 def _get_html() -> str:
+    """Retorna el dashboard si ya está listo, o "" si todavía está construyéndose."""
     global _dash_html
-    if not _dash_html:
-        with _dash_lock:
-            if not _dash_html:
-                print("[server] Primera generación del dashboard...")
-                _dash_html = construir_dashboard()
     return _dash_html
 
 
-# ── Página principal ──────────────────────────────────────
+# ── Página principal — NUNCA bloquea ─────────────────────
 @app.route("/")
 def index():
+    html = _get_html()
+    if html:
+        return Response(html, mimetype="text/html")
+    # Dashboard aún no listo → devolver loading screen instantáneamente
+    return Response(_LOADING_HTML, mimetype="text/html")
+
+
+# ── Status endpoint (polling desde la loading screen) ────
+@app.route("/status")
+def status():
+    global _dash_html, _build_stage, _build_start_time, _build_error
+    ready = bool(_dash_html)
+    elapsed = round(time.time() - _build_start_time, 1) if _build_start_time else 0
+
+    stage_msg = {
+        "":          "Iniciando análisis...",
+        "tc_ok":     "Tipo de cambio obtenido. Cargando macro...",
+        "macro_ok":  "VIX y SPY listos. Analizando portafolio...",
+        "port_ok":   "Portafolio analizado. Corriendo scanner...",
+        "scan_ok":   "Scanner completo. Ejecutando radar...",
+        "radar_ok":  "Radar listo. Generando HTML...",
+        "html_ok":   "¡Dashboard generado!",
+        "error":     f"Error: {_build_error[:80]}" if _build_error else "Error desconocido",
+    }.get(_build_stage, "Procesando...")
+
+    return jsonify({
+        "ready":   ready,
+        "stage":   _build_stage,
+        "msg":     stage_msg,
+        "elapsed": elapsed,
+        "error":   _build_error if _build_stage == "error" else "",
+    })
+
+
+# ── Función de build con reporte de etapas ───────────────
+def _construir_con_etapas():
+    """Wrapper de construir_dashboard() que va reportando el stage."""
+    global _dash_html, _build_stage, _build_start_time, _build_error, _refresh_in_progress
+    global _MACRO_CACHE, _TD_CACHE
+
+    _refresh_in_progress = True
+    _build_start_time    = time.time()
+    _build_stage         = ""
+    _build_error         = ""
+    _MACRO_CACHE         = {}
+    _TD_CACHE            = {}
+
     try:
-        return Response(_get_html(), mimetype="text/html")
+        cfg        = cargar_config()
+        capital    = cfg["capital"]
+        riesgo_pct = cfg["riesgo"]
+        rr_min     = cfg["rr_min"]
+
+        init_db()
+        init_score_history()
+
+        tc = get_tipo_cambio(API_KEY)
+        seed_portafolio(tc)
+        _build_stage = "tc_ok"
+
+        if os.path.exists("finbit_ops.json"):
+            importar_ops_json("finbit_ops.json", tc)
+        procesar_borrados()
+
+        tickers_extra = {}
+        if os.path.exists("finbit_tickers.json"):
+            try:
+                with open("finbit_tickers.json") as f:
+                    raw = json.load(f)
+                for t, ex in raw.items():
+                    tickers_extra[t.upper()] = (t.upper(), ex or "")
+            except Exception as e:
+                print(f"  finbit_tickers.json error: {e}")
+
+        if API_KEY not in ("TU_KEY_AQUI", ""):
+            print("[build] Obteniendo VIX y SPY...")
+            vix  = get_vix()
+            spy  = get_spy_macro()
+            regimen = regimen_mercado(vix, spy)
+            _build_stage = "macro_ok"
+
+            port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
+            _build_stage = "port_ok"
+
+            scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
+                                       vix=vix, spy=spy)
+            _build_stage = "scan_ok"
+
+            radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
+                                      scan_results=scan_data, vix=vix, spy=spy)
+            _build_stage = "radar_ok"
+        else:
+            vix     = 20.0
+            spy     = {"sobre_ema200": True, "precio": None, "ema200": None}
+            regimen = regimen_mercado(vix, spy)
+            _build_stage = "macro_ok"
+            port_data = []
+            for p in get_portafolio():
+                port_data.append({**p, "analisis": None, "precio_actual_usd": None,
+                    "precio_actual_mxn": None,
+                    "valor_mxn": p["cto_prom_mxn"] * p["titulos"],
+                    "costo_total": p["cto_prom_mxn"] * p["titulos"],
+                    "pl_mxn": 0, "pl_pct": 0, "alertas": [],
+                    "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None})
+            _build_stage = "port_ok"
+            scan_data  = []
+            _build_stage = "scan_ok"
+            radar_data = []
+            _build_stage = "radar_ok"
+
+        ops  = get_operaciones()
+        html = generar_html(port_data, scan_data, radar_data, ops, tc, capital,
+                            riesgo_pct, rr_min, vix=vix, spy=spy, regimen=regimen)
+        _build_stage = "html_ok"
+
+        # Escribir al disco también (por si se reinicia)
+        try:
+            with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            pass
+
+        with _dash_lock:
+            _dash_html = html
+
+        elapsed = round(time.time() - _build_start_time, 1)
+        print(f"[build] Dashboard listo en {elapsed}s — {len(port_data)} pos · {len(scan_data)} scan · {len(radar_data)} radar")
+
     except Exception as e:
-        return Response(f"<pre>Error: {e}</pre>", mimetype="text/html", status=500)
+        _build_stage = "error"
+        _build_error = str(e)
+        print(f"[build] ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        _refresh_in_progress = False
 
 
 # ── Actualizar dashboard (botón en el HTML) ───────────────
@@ -2937,20 +3186,11 @@ def refresh():
     global _dash_html, _refresh_in_progress
     if _refresh_in_progress:
         return jsonify({"status": "busy", "msg": "Ya hay una actualización en curso"}), 202
-    def _do_refresh():
-        global _dash_html, _refresh_in_progress
-        _refresh_in_progress = True
-        try:
-            html = construir_dashboard()
-            with _dash_lock:
-                _dash_html = html
-            print("[server] Dashboard actualizado ✓")
-        except Exception as e:
-            print(f"[server] Error actualizando: {e}")
-        finally:
-            _refresh_in_progress = False
-    threading.Thread(target=_do_refresh, daemon=True).start()
-    return jsonify({"status": "ok", "msg": "Actualización iniciada en segundo plano"})
+    # Invalidar cache para que / muestre loading screen mientras reconstruye
+    with _dash_lock:
+        _dash_html = ""
+    threading.Thread(target=_construir_con_etapas, daemon=True).start()
+    return jsonify({"status": "ok", "msg": "Actualización iniciada"})
 
 
 # ── Timeframe (selector en el HTML — guardado en config) ──
@@ -3065,23 +3305,17 @@ def health():
 # ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "="*56)
-    print("   FINBIT PRO  v3.2  — servidor web")
+    print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
     print("="*56)
 
     init_db()
 
-    # Pre-generar el dashboard en segundo plano para arrancar rápido
-    def _prebuild():
-        global _dash_html
-        try:
-            _dash_html = construir_dashboard()
-            print("[server] Dashboard pre-generado ✓")
-        except Exception as e:
-            print(f"[server] Error en pre-generación: {e}")
-
-    threading.Thread(target=_prebuild, daemon=True).start()
+    # Lanzar build en segundo plano — Flask responde de inmediato
+    # con la loading screen mientras se construye el dashboard
+    threading.Thread(target=_construir_con_etapas, daemon=True).start()
 
     port = int(os.environ.get("PORT", 5000))
     print(f"[server] Puerto: {port}  |  http://localhost:{port}")
-    print(f"[server] Render: OK  |  /health para ping\n")
+    print(f"[server] Loading screen sirve instantaneamente")
+    print(f"[server] Dashboard aparece cuando el analisis termina\n")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
