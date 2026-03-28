@@ -260,7 +260,7 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
               "apikey":API_KEY,"order":"ASC"}
     if exchange: params["exchange"] = exchange
     try:
-        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=20)
+        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=8)
         d = r.json()
         if d.get("status") == "error" or "values" not in d:
             print(f"    API error ({symbol} {interval}): {d.get('message','')}")
@@ -317,7 +317,7 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
         "api_key":  SERPAPI_KEY,
     }
     try:
-        r = requests.get(SERPAPI_BASE, params=params, timeout=20)
+        r = requests.get(SERPAPI_BASE, params=params, timeout=8)
         d = r.json()
         if "error" in d:
             print(f"    SerpApi error ({symbol}): {d['error'][:60]}")
@@ -882,12 +882,14 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
     key = f"{symbol}:{interval}"
     if key not in _TD_CACHE:
         _TD_CACHE[key] = get_timeseries(symbol, interval, 200, exchange)
-        time.sleep(0.2)
+        # Sin sleep — el rate limit de TwelveData se maneja a nivel de plan,
+        # no con sleeps que suman minutos de espera innecesaria en Render.
     return _TD_CACHE[key]
 
 
 def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
-                        titulos_en_cartera=0.0, tc=17.5, origen="USA") -> dict:
+                        titulos_en_cartera=0.0, tc=17.5, origen="USA",
+                        skip_mtf=False) -> dict:
     print(f"  {nombre}...", end=" ", flush=True)
 
     values_1d = _get_cached(symbol, "1day", exchange)
@@ -910,21 +912,26 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
     score_1d = tf_1d.get("score", 0)
     tfs = {"1D": tf_1d, "1H": {"tf":"1H","valido":False}, "1W": {"tf":"1W","valido":False}}
 
-    if score_1d >= 5:
-        vals_1h = _get_cached(symbol, "1h", exchange)
-        if vals_1h:
-            h1h = [float(x.get("high", x["close"])) for x in vals_1h]
-            l1h = [float(x.get("low",  x["close"])) for x in vals_1h]
-            tfs["1H"] = analizar_tf(ohlcv_to_close(vals_1h), ohlcv_to_volume(vals_1h), "1H",
-                                     capital, riesgo_pct, rr_min, titulos_en_cartera,
-                                     tc=tc, origen=origen, highs=h1h, lows=l1h)
-        vals_1w = _get_cached(symbol, "1week", exchange)
-        if vals_1w:
-            h1w = [float(x.get("high", x["close"])) for x in vals_1w]
-            l1w = [float(x.get("low",  x["close"])) for x in vals_1w]
-            tfs["1W"] = analizar_tf(ohlcv_to_close(vals_1w), ohlcv_to_volume(vals_1w), "1W",
-                                     capital, riesgo_pct, rr_min, titulos_en_cartera,
-                                     tc=tc, origen=origen, highs=h1w, lows=l1w)
+    # Solo pedir 1H y 1W si el score 1D es prometedor Y no estamos en modo rápido
+    if score_1d >= 5 and not skip_mtf:
+        try:
+            vals_1h = _get_cached(symbol, "1h", exchange)
+            if vals_1h:
+                h1h = [float(x.get("high", x["close"])) for x in vals_1h]
+                l1h = [float(x.get("low",  x["close"])) for x in vals_1h]
+                tfs["1H"] = analizar_tf(ohlcv_to_close(vals_1h), ohlcv_to_volume(vals_1h), "1H",
+                                         capital, riesgo_pct, rr_min, titulos_en_cartera,
+                                         tc=tc, origen=origen, highs=h1h, lows=l1h)
+        except Exception: pass
+        try:
+            vals_1w = _get_cached(symbol, "1week", exchange)
+            if vals_1w:
+                h1w = [float(x.get("high", x["close"])) for x in vals_1w]
+                l1w = [float(x.get("low",  x["close"])) for x in vals_1w]
+                tfs["1W"] = analizar_tf(ohlcv_to_close(vals_1w), ohlcv_to_volume(vals_1w), "1W",
+                                         capital, riesgo_pct, rr_min, titulos_en_cartera,
+                                         tc=tc, origen=origen, highs=h1w, lows=l1w)
+        except Exception: pass
 
     senales = [tfs[t]["senal"] for t in ["1W","1D","1H"] if tfs[t].get("valido")]
     if not senales:                         senal_final = "SIN DATOS"
@@ -1098,8 +1105,17 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
     total      = len(universo_completo)
     print(f"  Radar: analizando {total} acciones en 1D (VIX={vix:.1f})...")
 
+    # Límite de tiempo para que el radar no cuelgue indefinidamente
+    _radar_start = time.time()
+    _RADAR_TIMEOUT = 120  # segundos máx para todo el radar
+
     for i,(nombre,(symbol,exchange)) in enumerate(universo_completo.items()):
-        if i%10==0: print(f"  [{i}/{total}]...", end="\r", flush=True)
+        # Abort si llevamos más de 2 minutos en el radar
+        if time.time() - _radar_start > _RADAR_TIMEOUT:
+            print(f"  [Radar] Timeout — procesados {i}/{total}")
+            break
+
+        if i%5==0: print(f"  [{i}/{total}]...", end="\r", flush=True)
         values = _get_cached(symbol, "1day", exchange)
         if not values or len(values)<30: continue
 
@@ -3077,6 +3093,8 @@ def status():
 
 
 # ── Función de build con reporte de etapas ───────────────
+_BUILD_TIMEOUT = 280   # segundos — Render free tier mata workers a los ~300s
+
 def _construir_con_etapas():
     """Wrapper de construir_dashboard() que va reportando el stage."""
     global _dash_html, _build_stage, _build_start_time, _build_error, _refresh_in_progress
@@ -3088,6 +3106,9 @@ def _construir_con_etapas():
     _build_error         = ""
     _MACRO_CACHE         = {}
     _TD_CACHE            = {}
+
+    def _timeout_exceeded():
+        return (time.time() - _build_start_time) > _BUILD_TIMEOUT
 
     try:
         cfg        = cargar_config()
@@ -3116,29 +3137,50 @@ def _construir_con_etapas():
             except Exception as e:
                 print(f"  finbit_tickers.json error: {e}")
 
+        vix     = 20.0
+        spy     = {"sobre_ema200": True, "precio": None, "ema200": None}
+        port_data  = []
+        scan_data  = []
+        radar_data = []
+
         if API_KEY not in ("TU_KEY_AQUI", ""):
             print("[build] Obteniendo VIX y SPY...")
-            vix  = get_vix()
-            spy  = get_spy_macro()
+            try:
+                vix = get_vix()
+                spy = get_spy_macro()
+            except Exception as e:
+                print(f"[build] Macro error (continuando): {e}")
             regimen = regimen_mercado(vix, spy)
             _build_stage = "macro_ok"
 
-            port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
+            if not _timeout_exceeded():
+                try:
+                    port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
+                except Exception as e:
+                    print(f"[build] Portafolio error (continuando): {e}")
+                    port_data = []
             _build_stage = "port_ok"
 
-            scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
-                                       vix=vix, spy=spy)
+            if not _timeout_exceeded():
+                try:
+                    scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
+                                               vix=vix, spy=spy)
+                except Exception as e:
+                    print(f"[build] Scanner error (continuando): {e}")
+                    scan_data = []
             _build_stage = "scan_ok"
 
-            radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
-                                      scan_results=scan_data, vix=vix, spy=spy)
+            if not _timeout_exceeded():
+                try:
+                    radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
+                                              scan_results=scan_data, vix=vix, spy=spy)
+                except Exception as e:
+                    print(f"[build] Radar error (continuando): {e}")
+                    radar_data = []
             _build_stage = "radar_ok"
         else:
-            vix     = 20.0
-            spy     = {"sobre_ema200": True, "precio": None, "ema200": None}
             regimen = regimen_mercado(vix, spy)
             _build_stage = "macro_ok"
-            port_data = []
             for p in get_portafolio():
                 port_data.append({**p, "analisis": None, "precio_actual_usd": None,
                     "precio_actual_mxn": None,
@@ -3147,9 +3189,7 @@ def _construir_con_etapas():
                     "pl_mxn": 0, "pl_pct": 0, "alertas": [],
                     "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None})
             _build_stage = "port_ok"
-            scan_data  = []
             _build_stage = "scan_ok"
-            radar_data = []
             _build_stage = "radar_ok"
 
         ops  = get_operaciones()
@@ -3175,6 +3215,25 @@ def _construir_con_etapas():
         _build_error = str(e)
         print(f"[build] ERROR: {e}")
         import traceback; traceback.print_exc()
+        # Intentar servir un dashboard mínimo con lo que tengamos
+        try:
+            tc_fallback = 17.5
+            ops = get_operaciones()
+            port_fallback = []
+            for p in get_portafolio():
+                port_fallback.append({**p, "analisis": None, "precio_actual_usd": None,
+                    "precio_actual_mxn": None,
+                    "valor_mxn": p["cto_prom_mxn"] * p["titulos"],
+                    "costo_total": p["cto_prom_mxn"] * p["titulos"],
+                    "pl_mxn": 0, "pl_pct": 0, "alertas": [],
+                    "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None})
+            html_fallback = generar_html(port_fallback, [], [], ops, tc_fallback, 15000,
+                                         0.01, 3.0)
+            with _dash_lock:
+                _dash_html = html_fallback
+            print("[build] Dashboard fallback servido (sin datos API)")
+        except Exception as e2:
+            print(f"[build] Fallback también falló: {e2}")
     finally:
         _refresh_in_progress = False
 
