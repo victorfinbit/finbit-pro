@@ -2079,15 +2079,17 @@ def render_port_rows(posiciones, tc):
 
 def render_scan_rows(scanner, tc):
     h=""
-    for r in scanner:
-    hist_html = ""
-    score_val = r.get("score", None)
 
-if score_val is not None:
-    hist_html = render_score_history(
-        r.get("nombre",""),
-        score_val
-    )
+    for r in scanner:
+        hist_html = ""
+
+        score_val = r.get("score")
+
+        if score_val is not None:
+            hist_html = render_score_history(
+                r.get("nombre",""),
+                score_val
+            )
         
         rid=f"sc_{r['nombre']}"
         rr_col=("var(--green)" if r["rr"]>=3 else "var(--yellow)" if r["rr"]>=2 else "var(--red)")
