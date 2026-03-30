@@ -54,8 +54,8 @@ PORTAFOLIO_INICIAL = [
 SCANNER_TICKERS = {
     "SOXL":("SOXL",""),  "TQQQ":("TQQQ",""),
     "NVDA":("NVDA",""),  "TSLA":("TSLA",""),
-    "AAPL":("AAPL",""),  "META":("META",""),
-    "PLTR":("PLTR",""),  "PYPL":("PYPL",""),
+    "META":("META",""),
+    "PYPL":("PYPL",""),
     "NFLX":("NFLX",""),  "NKE":("NKE",""),
 }
 
@@ -70,7 +70,7 @@ _UNIVERSO_EXTRA = {
     "MSFT":("MSFT",""), "GOOGL":("GOOGL",""),
     "AMZN":("AMZN",""), "SPXL":("SPXL",""),
     "UBER":("UBER",""), "ABNB":("ABNB",""),
-    "DIS":("DIS",""),
+    
 }
 UNIVERSO = {**SCANNER_TICKERS, **_UNIVERSO_EXTRA}
 
