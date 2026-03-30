@@ -256,37 +256,32 @@ API_BASE = "https://api.twelvedata.com"
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
     if API_KEY in ("TU_KEY_AQUI", ""): return None
-    params = {"symbol":symbol,"interval":interval,"outputsize":outputsize,
+    out = min(outputsize, 100)
+    params = {"symbol":symbol,"interval":interval,"outputsize":out,
               "apikey":API_KEY,"order":"ASC"}
     if exchange: params["exchange"] = exchange
-    # Reintentos: hasta 3 veces con pausa incremental (maneja rate-limit 429)
     for intento in range(3):
         try:
-            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=12)
-            # Rate limit: esperar y reintentar
+            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
             if r.status_code == 429:
-                wait = (intento + 1) * 5
+                wait = (intento + 1) * 8
                 print(f"    ⏳ Rate limit 429 ({symbol} {interval}) — esperando {wait}s...")
                 time.sleep(wait)
                 continue
             d = r.json()
-            if d.get("status") == "error" or "values" not in d:
-                msg = d.get('message', d.get('code', str(d)))
-                print(f"    ❌ API error ({symbol} {interval}): {msg}")
-                # Si el error es de plan/límite, no reintentar
-                if any(x in str(msg).lower() for x in ("limit", "plan", "exceed", "quota")):
-                    print(f"    ⚠️  Límite de plan detectado para {symbol} — saltando")
-                    return None
-                return None
-            vals = d["values"]
-            print(f"    ✅ TwelveData OK ({symbol} {interval}): {len(vals)} velas")
-            return vals
+            if "values" in d and d["values"]:
+                print(f"    ✅ TD OK ({symbol} {interval}): {len(d['values'])} velas")
+                time.sleep(0.5)
+                return d["values"]
+            # Error: loguear respuesta completa para diagnóstico
+            print(f"    ❌ TD sin valores ({symbol} {interval}) HTTP={r.status_code}: {str(d)[:200]}")
+            return None
         except requests.exceptions.Timeout:
-            print(f"    ⏱️  Timeout ({symbol} {interval}) intento {intento+1}/3")
-            if intento < 2: time.sleep(2)
+            print(f"    ⏱️  TD Timeout ({symbol} {interval}) intento {intento+1}/3")
+            if intento < 2: time.sleep(3)
         except Exception as e:
-            print(f"    ❌ API exception ({symbol}): {e}")
-            if intento < 2: time.sleep(2)
+            print(f"    ❌ TD exception ({symbol}): {e}")
+            if intento < 2: time.sleep(3)
     return None
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
@@ -313,9 +308,9 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
     # Exchange dinámico: DB → mapa conocido → NASDAQ como fallback
     _exchange_map = {
         "META":"NASDAQ","PLTR":"NYSE","PYPL":"NASDAQ",
-        "NFLX":"NASDAQ","NKE":"NYSE","SOXL":"NYSE",
-        "TQQQ":"NASDAQ","NVDA":"NASDAQ","TSLA":"NASDAQ","AAPL":"NASDAQ",
-        "MSFT":"NASDAQ","GOOGL":"NASDAQ","AMZN":"NASDAQ","TSLA":"NASDAQ",
+        "NFLX":"NASDAQ","NKE":"NYSE","SOXL":"NYSEARCA",
+        "TQQQ":"NYSEARCA","NVDA":"NASDAQ","TSLA":"NASDAQ","AAPL":"NASDAQ",
+        "MSFT":"NASDAQ","GOOGL":"NASDAQ","AMZN":"NASDAQ",
         "UBER":"NYSE","ABNB":"NASDAQ","DIS":"NYSE","SPXL":"NYSEARCA",
     }
     # Intentar obtener exchange de la DB primero
@@ -346,12 +341,27 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
         if not graph:
             print(f"    ⚠️  SerpApi: sin datos 'graph' para {symbol} ({query})")
             return None
-        # Convertir al formato que espera ohlcv_to_close: [{"close": price, "volume": 0}]
-        result = [{"close": str(pt["price"]), "volume": "0"}
-                  for pt in graph if pt.get("price") is not None]
-        if len(result) < 20:
-            print(f"    ⚠️  SerpApi: muy pocos puntos ({len(result)}) para {symbol}")
+        # Convertir al formato OHLCV completo.
+        # SerpApi solo da precio de cierre → simulamos high/low con ±0.5% del close
+        # para que ADX, ATR y S/R funcionen. Es una aproximación, pero mucho mejor que cero.
+        prices = [pt["price"] for pt in graph if pt.get("price") is not None]
+        if len(prices) < 20:
+            print(f"    ⚠️  SerpApi: muy pocos puntos ({len(prices)}) para {symbol}")
             return None
+        result = []
+        for i, pt in enumerate(graph):
+            if pt.get("price") is None:
+                continue
+            p = pt["price"]
+            # Rango estimado: 0.8% del precio (aproxima la vela diaria típica)
+            rng = p * 0.008
+            result.append({
+                "close":  str(p),
+                "open":   str(p),
+                "high":   str(round(p + rng, 4)),
+                "low":    str(round(p - rng, 4)),
+                "volume": "0",
+            })
         print(f"    ✅ SerpApi OK ({symbol}): {len(result)} puntos")
         return result
     except Exception as e:
@@ -362,30 +372,22 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
 def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
     """
-    Fuente unificada de datos: 
-    1. Si el ticker está en SERPAPI_TICKERS → SerpApi directo
-    2. Si no → TwelveData, con fallback a SerpApi si falla
-    Sin duplicar llamadas.
+    Fuente unificada de datos:
+    1. TwelveData SIEMPRE primero (tiene OHLCV completo — necesario para ADX, ATR, S/R)
+    2. SerpApi como fallback si TwelveData falla (datos parciales sin high/low real)
     """
-    use_serpapi_first = symbol.upper() in SERPAPI_TICKERS
+    # 1. TwelveData primero para TODOS
+    result = api_timeseries(symbol, interval, outputsize, exchange)
+    if result:
+        return result
 
-    if not use_serpapi_first:
-        # Intentar TwelveData primero
-        result = api_timeseries(symbol, interval, outputsize, exchange)
-        if result:
-            return result
-        print(f"    TwelveData falló para {symbol} → intentando SerpApi...")
-
-    # SerpApi (primario para SERPAPI_TICKERS, fallback para los demás)
+    # 2. SerpApi fallback
+    print(f"    TwelveData falló para {symbol} → intentando SerpApi fallback...")
     result = serpapi_timeseries(symbol, interval)
     if result:
         return result
 
-    # Si era SerpApi primario y falló, intentar TwelveData como último recurso
-    if use_serpapi_first:
-        print(f"    SerpApi falló para {symbol} → intentando TwelveData...")
-        return api_timeseries(symbol, interval, outputsize, exchange)
-
+    print(f"    Sin datos disponibles para {symbol} {interval}")
     return None
 
 
@@ -4027,42 +4029,85 @@ def health():
 # ── API Debug — diagnóstico rápido desde el browser ──────
 @app.route("/api/debug")
 def api_debug():
-    """Prueba la conexión a TwelveData y SerpApi en tiempo real."""
+    """Prueba TwelveData y SerpApi y muestra respuesta cruda."""
     resultado = {
-        "api_key_configurada": API_KEY not in ("TU_KEY_AQUI", ""),
-        "api_key_preview": f"{API_KEY[:6]}...{API_KEY[-4:]}" if len(API_KEY) > 10 else "—",
-        "serpapi_configurada": bool(SERPAPI_KEY and SERPAPI_KEY != "TU_SERPAPI_KEY"),
+        "api_key":    f"{API_KEY[:6]}...{API_KEY[-4:]}" if len(API_KEY)>10 else "NO CONFIGURADA",
+        "serpapi_key": f"{SERPAPI_KEY[:6]}...{SERPAPI_KEY[-4:]}" if len(SERPAPI_KEY)>10 else "NO CONFIGURADA",
+        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "twelvedata": {},
-        "serpapi": {},
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "serpapi":    {},
     }
-    # Test TwelveData
+    # Test TwelveData — respuesta RAW completa
     try:
         r = requests.get(f"{API_BASE}/time_series",
-            params={"symbol":"AAPL","interval":"1day","outputsize":"3","apikey":API_KEY},
-            timeout=10)
+            params={"symbol":"AAPL","interval":"1day","outputsize":"5","apikey":API_KEY},
+            timeout=12)
         d = r.json()
-        if "values" in d:
-            resultado["twelvedata"] = {"ok": True, "velas": len(d["values"]),
-                                        "ultimo_precio": d["values"][-1]["close"]}
+        if "values" in d and d["values"]:
+            resultado["twelvedata"] = {
+                "ok": True, "http": r.status_code,
+                "velas": len(d["values"]),
+                "ultimo": d["values"][-1],
+            }
         else:
-            resultado["twelvedata"] = {"ok": False, "error": d.get("message", str(d)[:200]),
-                                        "http_status": r.status_code}
+            resultado["twelvedata"] = {
+                "ok": False, "http": r.status_code,
+                "respuesta_completa": d,
+            }
     except Exception as e:
-        resultado["twelvedata"] = {"ok": False, "error": str(e)}
-    # Test SerpApi
+        resultado["twelvedata"] = {"ok": False, "excepcion": str(e)}
+
+    # Test SerpApi — respuesta RAW
     try:
         r2 = requests.get(SERPAPI_BASE, params={
             "engine":"google_finance","q":"AAPL:NASDAQ","window":"1M",
-            "hl":"en","api_key":SERPAPI_KEY}, timeout=10)
+            "hl":"en","api_key":SERPAPI_KEY}, timeout=12)
         d2 = r2.json()
         if "graph" in d2:
-            resultado["serpapi"] = {"ok": True, "puntos": len(d2["graph"])}
+            resultado["serpapi"] = {
+                "ok": True, "http": r2.status_code,
+                "puntos": len(d2["graph"]),
+                "primer_punto": d2["graph"][0] if d2["graph"] else None,
+            }
         else:
-            resultado["serpapi"] = {"ok": False, "error": d2.get("error", str(d2)[:200])}
+            resultado["serpapi"] = {
+                "ok": False, "http": r2.status_code,
+                "respuesta_completa": d2,
+            }
     except Exception as e2:
-        resultado["serpapi"] = {"ok": False, "error": str(e2)}
+        resultado["serpapi"] = {"ok": False, "excepcion": str(e2)}
+
     return jsonify(resultado)
+
+
+# ── API Test — prueba todos los tickers del scanner ──────
+@app.route("/api/test")
+def api_test():
+    """Prueba TwelveData para cada ticker del scanner y reporta cuáles funcionan."""
+    tickers = list(get_all_scanner_tickers().keys())
+    resultados = {}
+    for sym in tickers:
+        try:
+            r = requests.get(f"{API_BASE}/time_series",
+                params={"symbol":sym,"interval":"1day","outputsize":"5","apikey":API_KEY},
+                timeout=10)
+            d = r.json()
+            if "values" in d and d["values"]:
+                resultados[sym] = {"ok": True, "velas": len(d["values"]),
+                                   "precio": d["values"][-1]["close"]}
+            else:
+                resultados[sym] = {"ok": False, "http": r.status_code,
+                                   "error": str(d)[:300]}
+        except Exception as e:
+            resultados[sym] = {"ok": False, "error": str(e)}
+        time.sleep(0.3)  # no saturar
+    ok  = sum(1 for v in resultados.values() if v["ok"])
+    return jsonify({
+        "resumen": f"{ok}/{len(tickers)} tickers OK",
+        "tickers": resultados,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
 
 
 # ═══════════════════════════════════════════════════════════
