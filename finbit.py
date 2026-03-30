@@ -1024,25 +1024,15 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
 
     # ── ADVERTENCIAS (no bloquean pero reducen confianza) ─────────────────
 
-    # R7: MULTI-TIMEFRAME DURO — cada TF que venda bloquea individualmente
-    tf_1h = tfs.get("1H", {})
+    # R7: MULTI-TIMEFRAME — solo 1W bloquea (1H eliminado, no disponible en plan free)
     tf_1w = tfs.get("1W", {})
-    h1_senal = tf_1h.get("senal") if tf_1h.get("valido") else None
     w1_senal = tf_1w.get("senal") if tf_1w.get("valido") else None
-    h1_score = tf_1h.get("score", 0) if tf_1h.get("valido") else None
     w1_score = tf_1w.get("score", 0) if tf_1w.get("valido") else None
 
-    # 1H vendiendo = bloqueo duro (el timeframe más inmediato contradice el trade)
-    if h1_senal == "VENDER":
-        bloqueadores.append(f"1H en VENDER (score {h1_score}/10) — timeframe de entrada en contra, NO entrar")
-        pasa_filtros = False
     # 1W vendiendo = bloqueo duro (operar contra tendencia semanal es suicidio)
     if w1_senal == "VENDER":
         bloqueadores.append(f"1W en VENDER (score {w1_score}/10) — tendencia semanal bajista, NO entrar")
         pasa_filtros = False
-    # Advertencia: 1H MANTENER (no ideal, pero no bloquea si 1D y 1W alineados)
-    if h1_senal == "MANTENER" and w1_senal != "VENDER":
-        advertencias.append("1H en MANTENER — momentum de corto plazo no confirmado aún")
 
     # R8: SCORE DROP — usa historial real de BD
     score_drop = analizar_score_drop(nombre, score)
@@ -1432,17 +1422,8 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
     score_1d = tf_1d.get("score", 0)
     tfs = {"1D": tf_1d, "1H": {"tf":"1H","valido":False}, "1W": {"tf":"1W","valido":False}}
 
-    # Solo pedir 1H y 1W si el score 1D es prometedor Y no estamos en modo rápido
+    # Solo pedir 1W si el score 1D es prometedor (1H eliminado — no disponible en plan free)
     if score_1d >= 5 and not skip_mtf:
-        try:
-            vals_1h = _get_cached(symbol, "1h", exchange)
-            if vals_1h:
-                h1h = [float(x.get("high", x["close"])) for x in vals_1h]
-                l1h = [float(x.get("low",  x["close"])) for x in vals_1h]
-                tfs["1H"] = analizar_tf(ohlcv_to_close(vals_1h), ohlcv_to_volume(vals_1h), "1H",
-                                         capital, riesgo_pct, rr_min, titulos_en_cartera,
-                                         tc=tc, origen=origen, highs=h1h, lows=l1h)
-        except Exception: pass
         try:
             vals_1w = _get_cached(symbol, "1week", exchange)
             if vals_1w:
