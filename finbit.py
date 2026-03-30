@@ -259,15 +259,35 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     params = {"symbol":symbol,"interval":interval,"outputsize":outputsize,
               "apikey":API_KEY,"order":"ASC"}
     if exchange: params["exchange"] = exchange
-    try:
-        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=8)
-        d = r.json()
-        if d.get("status") == "error" or "values" not in d:
-            print(f"    API error ({symbol} {interval}): {d.get('message','')}")
-            return None
-        return d["values"]
-    except Exception as e:
-        print(f"    API exception ({symbol}): {e}"); return None
+    # Reintentos: hasta 3 veces con pausa incremental (maneja rate-limit 429)
+    for intento in range(3):
+        try:
+            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=12)
+            # Rate limit: esperar y reintentar
+            if r.status_code == 429:
+                wait = (intento + 1) * 5
+                print(f"    ⏳ Rate limit 429 ({symbol} {interval}) — esperando {wait}s...")
+                time.sleep(wait)
+                continue
+            d = r.json()
+            if d.get("status") == "error" or "values" not in d:
+                msg = d.get('message', d.get('code', str(d)))
+                print(f"    ❌ API error ({symbol} {interval}): {msg}")
+                # Si el error es de plan/límite, no reintentar
+                if any(x in str(msg).lower() for x in ("limit", "plan", "exceed", "quota")):
+                    print(f"    ⚠️  Límite de plan detectado para {symbol} — saltando")
+                    return None
+                return None
+            vals = d["values"]
+            print(f"    ✅ TwelveData OK ({symbol} {interval}): {len(vals)} velas")
+            return vals
+        except requests.exceptions.Timeout:
+            print(f"    ⏱️  Timeout ({symbol} {interval}) intento {intento+1}/3")
+            if intento < 2: time.sleep(2)
+        except Exception as e:
+            print(f"    ❌ API exception ({symbol}): {e}")
+            if intento < 2: time.sleep(2)
+    return None
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
 def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
@@ -320,15 +340,20 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
         r = requests.get(SERPAPI_BASE, params=params, timeout=8)
         d = r.json()
         if "error" in d:
-            print(f"    SerpApi error ({symbol}): {d['error'][:60]}")
+            print(f"    ❌ SerpApi error ({symbol}): {d['error'][:80]}")
             return None
         graph = d.get("graph", [])
         if not graph:
+            print(f"    ⚠️  SerpApi: sin datos 'graph' para {symbol} ({query})")
             return None
         # Convertir al formato que espera ohlcv_to_close: [{"close": price, "volume": 0}]
         result = [{"close": str(pt["price"]), "volume": "0"}
                   for pt in graph if pt.get("price") is not None]
-        return result if len(result) >= 20 else None
+        if len(result) < 20:
+            print(f"    ⚠️  SerpApi: muy pocos puntos ({len(result)}) para {symbol}")
+            return None
+        print(f"    ✅ SerpApi OK ({symbol}): {len(result)} puntos")
+        return result
     except Exception as e:
         print(f"    SerpApi exception ({symbol}): {e}")
         return None
@@ -1252,6 +1277,10 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
 
     vol_now = float(v.iloc[-1])
     vol_avg = float(v.rolling(min(20,n)).mean().iloc[-1])
+    # Si todos los volúmenes son 0 (fuente SerpApi / Google Finance no los reporta),
+    # marcamos vol_ok como True para no bloquear artificialmente el análisis.
+    _sin_volumen = (vol_avg < 1.0)
+    vol_ok   = _sin_volumen or (vol_now >= vol_avg * 1.5)
 
     precio   = float(c.iloc[-1])
     soporte  = float(c.rolling(min(20,n)).min().iloc[-1])
@@ -1288,7 +1317,7 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     macd_ok  = ml_v>ms_v
     macdh_ok = mh_v>0
     rsi_ok   = 40<=rv<=72
-    vol_ok   = vol_now >= vol_avg * 1.5
+    vol_ok   = _sin_volumen or (vol_now >= vol_avg * 1.5)
     rr_ok    = rr_val>=rr_min
     sop_ok   = precio>soporte
     adx_ok   = adx_val >= 20
@@ -1305,8 +1334,9 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
                    "razon":f"Histograma {'positivo.' if macdh_ok else 'negativo.'}"},
         "rsi":    {"ok":rsi_ok,   "label":"RSI 40-72",      "val":f"{rv:.0f}",
                    "razon":("Sobrecomprado >75." if rv>=75 else f"RSI {rv:.0f}: {'alcista.' if rv>=55 else 'neutral.' if rv>=40 else 'debil.'}")},
-        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med","val":f"{vol_now/vol_avg:.1f}x" if vol_avg else "—",
-                   "razon":f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x).' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}"},
+        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med","val":f"{vol_now/vol_avg:.1f}x" if vol_avg and not _sin_volumen else "N/D",
+                   "razon":("Sin datos de volumen (fuente alternativa — criterio omitido)." if _sin_volumen
+                            else f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x).' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}")},
         "rr":     {"ok":rr_ok,    "label":f"R:R>={rr_min:.0f}x", "val":f"{rr_val:.1f}x",
                    "razon":f"Stop ATR {stop:.2f} Obj {objetivo:.2f}. R:R {rr_val:.1f}x {'valido.' if rr_ok else 'insuficiente.'}"},
         "soporte":{"ok":sop_ok,   "label":"Sobre soporte",  "val":f"{soporte:.2f}",
@@ -2836,7 +2866,7 @@ td strong{{font-size:13px;font-weight:500}}
         <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
         <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
         <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th>Score</th></tr></thead>
-      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — agrega tu API key</td></tr>'}</tbody>
+      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
 </div>
@@ -3761,6 +3791,24 @@ def _construir_con_etapas():
         radar_data = []
 
         if API_KEY not in ("TU_KEY_AQUI", ""):
+            # ── DIAGNÓSTICO DE API ANTES DE CONSTRUIR ───────────────────────
+            print("[build] 🔍 Verificando conexión a TwelveData...")
+            try:
+                _test_r = requests.get(f"{API_BASE}/time_series",
+                    params={"symbol":"AAPL","interval":"1day","outputsize":"5","apikey":API_KEY},
+                    timeout=10)
+                _test_d = _test_r.json()
+                if "values" in _test_d:
+                    print(f"[build] ✅ TwelveData OK — {len(_test_d['values'])} velas de prueba")
+                elif _test_r.status_code == 429:
+                    print("[build] ⚠️  TwelveData: RATE LIMIT 429 — esperando 15s antes de continuar...")
+                    time.sleep(15)
+                else:
+                    _msg = _test_d.get("message", _test_d.get("code", str(_test_d)[:120]))
+                    print(f"[build] ❌ TwelveData error: {_msg}")
+                    print(f"[build]    status HTTP: {_test_r.status_code}")
+            except Exception as _e:
+                print(f"[build] ❌ TwelveData sin conexión: {_e}")
             print("[build] Obteniendo VIX y SPY...")
             try:
                 vix = get_vix()
@@ -3974,6 +4022,47 @@ def api_config():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "version": "3.2"})
+
+
+# ── API Debug — diagnóstico rápido desde el browser ──────
+@app.route("/api/debug")
+def api_debug():
+    """Prueba la conexión a TwelveData y SerpApi en tiempo real."""
+    resultado = {
+        "api_key_configurada": API_KEY not in ("TU_KEY_AQUI", ""),
+        "api_key_preview": f"{API_KEY[:6]}...{API_KEY[-4:]}" if len(API_KEY) > 10 else "—",
+        "serpapi_configurada": bool(SERPAPI_KEY and SERPAPI_KEY != "TU_SERPAPI_KEY"),
+        "twelvedata": {},
+        "serpapi": {},
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    # Test TwelveData
+    try:
+        r = requests.get(f"{API_BASE}/time_series",
+            params={"symbol":"AAPL","interval":"1day","outputsize":"3","apikey":API_KEY},
+            timeout=10)
+        d = r.json()
+        if "values" in d:
+            resultado["twelvedata"] = {"ok": True, "velas": len(d["values"]),
+                                        "ultimo_precio": d["values"][-1]["close"]}
+        else:
+            resultado["twelvedata"] = {"ok": False, "error": d.get("message", str(d)[:200]),
+                                        "http_status": r.status_code}
+    except Exception as e:
+        resultado["twelvedata"] = {"ok": False, "error": str(e)}
+    # Test SerpApi
+    try:
+        r2 = requests.get(SERPAPI_BASE, params={
+            "engine":"google_finance","q":"AAPL:NASDAQ","window":"1M",
+            "hl":"en","api_key":SERPAPI_KEY}, timeout=10)
+        d2 = r2.json()
+        if "graph" in d2:
+            resultado["serpapi"] = {"ok": True, "puntos": len(d2["graph"])}
+        else:
+            resultado["serpapi"] = {"ok": False, "error": d2.get("error", str(d2)[:200])}
+    except Exception as e2:
+        resultado["serpapi"] = {"ok": False, "error": str(e2)}
+    return jsonify(resultado)
 
 
 # ═══════════════════════════════════════════════════════════
