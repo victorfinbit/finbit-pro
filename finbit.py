@@ -62,7 +62,7 @@ SCANNER_TICKERS = {
 # Tickers que usan SerpApi como fuente primaria (más confiable para ellos)
 # Al agregar nuevos tickers que fallen con TwelveData, agrégalos aquí también
 SERPAPI_TICKERS = {"META", "PLTR", "PYPL", "NFLX", "NKE"}
-SERPAPI_KEY  = os.environ.get("SERPAPI_KEY", "09db3a8c6606e53102351a54657ab7f7f8dcccfa9530306485e42a4c4c7c51f2")
+SERPAPI_KEY  = os.environ.get("SERPAPI_KEY", "5de17d268c052112cbf06d0ce4b63f34d15e7544f3037880ec39dbdf316243f2")
 SERPAPI_BASE = "https://serpapi.com/search"
 
 # Universo para el radar (deduplicado automáticamente con SCANNER_TICKERS)
@@ -313,7 +313,7 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
     # Exchange dinámico: DB → mapa conocido → NASDAQ como fallback
     _exchange_map = {
         "META":"NASDAQ","PLTR":"NYSE","PYPL":"NASDAQ",
-        "NFLX":"NASDAQ","NKE":"NYSE","SOXL":"NYSEARCA",
+        "NFLX":"NASDAQ","NKE":"NYSE","SOXL":"NYSE",
         "TQQQ":"NASDAQ","NVDA":"NASDAQ","TSLA":"NASDAQ","AAPL":"NASDAQ",
         "MSFT":"NASDAQ","GOOGL":"NASDAQ","AMZN":"NASDAQ","TSLA":"NASDAQ",
         "UBER":"NYSE","ABNB":"NASDAQ","DIS":"NYSE","SPXL":"NYSEARCA",
