@@ -24,7 +24,7 @@ from flask import Flask, Response, request as flask_req, jsonify
 # ═══════════════════════════════════════════════════════════
 # API keys: se leen de variables de entorno si existen (recomendado en Render)
 # Si no existen, usa el valor hardcodeado (para desarrollo local)
-API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c864e4")
+API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "3c4971fd74eb4363bcbf877edb1616b4")
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
