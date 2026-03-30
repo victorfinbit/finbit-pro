@@ -52,10 +52,7 @@ PORTAFOLIO_INICIAL = [
 
 # ── Exchanges vacíos "" = auto-detect TwelveData (más estable) ──
 SCANNER_TICKERS = {
-    "SOXL":("SOXL",""),  "TQQQ":("TQQQ",""),
-    "NVDA":("NVDA",""),  "TSLA":("TSLA",""),
-    "AAPL":("AAPL",""),  "META":("META",""),
-    "PLTR":("PLTR",""),  "PYPL":("PYPL",""),
+    "SOXL":("SOXL",""),
     "NFLX":("NFLX",""),  "NKE":("NKE",""),
 }
 
@@ -68,9 +65,7 @@ SERPAPI_BASE = "https://serpapi.com/search"
 # Universo para el radar (deduplicado automáticamente con SCANNER_TICKERS)
 _UNIVERSO_EXTRA = {
     "MSFT":("MSFT",""), "GOOGL":("GOOGL",""),
-    "AMZN":("AMZN",""), "SPXL":("SPXL",""),
-    "UBER":("UBER",""), "ABNB":("ABNB",""),
-    "DIS":("DIS",""),
+    "AMZN":("AMZN",""),
 }
 UNIVERSO = {**SCANNER_TICKERS, **_UNIVERSO_EXTRA}
 
