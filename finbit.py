@@ -62,7 +62,7 @@ SCANNER_TICKERS = {
 # Tickers que usan SerpApi como fuente primaria (más confiable para ellos)
 # Al agregar nuevos tickers que fallen con TwelveData, agrégalos aquí también
 SERPAPI_TICKERS = {"META", "PLTR", "PYPL", "NFLX", "NKE"}
-SERPAPI_KEY  = os.environ.get("SERPAPI_KEY", "09db3a8c6606e53102351a54657ab7f7f8dcccfa9530306485e42a4c4c7c51f2")
+SERPAPI_KEY  = os.environ.get("SERPAPI_KEY", "5de17d268c052112cbf06d0ce4b63f34d15e7544f3037880ec39dbdf316243f2")
 SERPAPI_BASE = "https://serpapi.com/search"
 
 # Universo para el radar (deduplicado automáticamente con SCANNER_TICKERS)
@@ -255,19 +255,77 @@ API_BASE = "https://api.twelvedata.com"
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
+    """Petición individual a TwelveData. 8 calls/min en plan Basic."""
     if API_KEY in ("TU_KEY_AQUI", ""): return None
-    params = {"symbol":symbol,"interval":interval,"outputsize":outputsize,
-              "apikey":API_KEY,"order":"ASC"}
+    out = min(outputsize, 100)
+    params = {"symbol": symbol, "interval": interval, "outputsize": out,
+              "apikey": API_KEY, "order": "ASC"}
     if exchange: params["exchange"] = exchange
-    try:
-        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=8)
-        d = r.json()
-        if d.get("status") == "error" or "values" not in d:
-            print(f"    API error ({symbol} {interval}): {d.get('message','')}")
+    for intento in range(3):
+        try:
+            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
+            if r.status_code == 429:
+                print(f"    ⏳ Rate limit 429 ({symbol}) — esperando 60s...")
+                time.sleep(60)
+                continue
+            d = r.json()
+            if "values" in d and d["values"]:
+                print(f"    ✅ TD ({symbol} {interval}): {len(d['values'])} velas")
+                time.sleep(7.5)  # Plan Basic: 8 calls/min → 7.5s entre calls
+                return d["values"]
+            print(f"    ❌ TD sin valores ({symbol} {interval}) HTTP={r.status_code}: {str(d)[:200]}")
             return None
-        return d["values"]
+        except requests.exceptions.Timeout:
+            print(f"    ⏱️  TD Timeout ({symbol}) intento {intento+1}/3")
+            if intento < 2: time.sleep(5)
+        except Exception as e:
+            print(f"    ❌ TD exception ({symbol}): {e}")
+            if intento < 2: time.sleep(5)
+    return None
+
+
+def api_timeseries_batch(symbols: list, interval: str, outputsize: int = 100) -> dict:
+    """
+    Llama TwelveData con TODOS los símbolos en UNA sola request.
+    Devuelve dict {SYMBOL: [valores]}. Usa solo 1 call en lugar de N.
+    SOLUCIÓN al rate limit del plan Basic (8 calls/min).
+    """
+    if API_KEY in ("TU_KEY_AQUI", "") or not symbols:
+        return {}
+    out     = min(outputsize, 100)
+    sym_str = ",".join(s.upper() for s in symbols)
+    params  = {"symbol": sym_str, "interval": interval, "outputsize": out,
+               "apikey": API_KEY, "order": "ASC"}
+    try:
+        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
+        if r.status_code == 429:
+            print(f"    ⏳ Rate limit batch — esperando 60s...")
+            time.sleep(60)
+            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
+        d = r.json()
+        resultado = {}
+        if len(symbols) == 1:
+            sym = symbols[0].upper()
+            if "values" in d and d["values"]:
+                resultado[sym] = d["values"]
+                print(f"    ✅ TD batch ({sym} {interval}): {len(d['values'])} velas")
+            else:
+                print(f"    ❌ TD batch ({sym} {interval}): {str(d)[:150]}")
+        else:
+            for sym in symbols:
+                sym_up = sym.upper()
+                entry  = d.get(sym_up, {})
+                vals   = entry.get("values", []) if isinstance(entry, dict) else []
+                if vals:
+                    resultado[sym_up] = vals
+                    print(f"    ✅ TD batch ({sym_up} {interval}): {len(vals)} velas")
+                else:
+                    err = entry.get("message", "") if isinstance(entry, dict) else str(entry)[:80]
+                    print(f"    ❌ TD batch ({sym_up} {interval}): {err or 'sin valores'}")
+        return resultado
     except Exception as e:
-        print(f"    API exception ({symbol}): {e}"); return None
+        print(f"    ❌ TD batch exception ({interval}): {e}")
+        return {}
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
 def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
@@ -294,8 +352,8 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
     _exchange_map = {
         "META":"NASDAQ","PLTR":"NYSE","PYPL":"NASDAQ",
         "NFLX":"NASDAQ","NKE":"NYSE","SOXL":"NYSEARCA",
-        "TQQQ":"NASDAQ","NVDA":"NASDAQ","TSLA":"NASDAQ","AAPL":"NASDAQ",
-        "MSFT":"NASDAQ","GOOGL":"NASDAQ","AMZN":"NASDAQ","TSLA":"NASDAQ",
+        "TQQQ":"NYSEARCA","NVDA":"NASDAQ","TSLA":"NASDAQ","AAPL":"NASDAQ",
+        "MSFT":"NASDAQ","GOOGL":"NASDAQ","AMZN":"NASDAQ",
         "UBER":"NYSE","ABNB":"NASDAQ","DIS":"NYSE","SPXL":"NYSEARCA",
     }
     # Intentar obtener exchange de la DB primero
@@ -320,15 +378,35 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
         r = requests.get(SERPAPI_BASE, params=params, timeout=8)
         d = r.json()
         if "error" in d:
-            print(f"    SerpApi error ({symbol}): {d['error'][:60]}")
+            print(f"    ❌ SerpApi error ({symbol}): {d['error'][:80]}")
             return None
         graph = d.get("graph", [])
         if not graph:
+            print(f"    ⚠️  SerpApi: sin datos 'graph' para {symbol} ({query})")
             return None
-        # Convertir al formato que espera ohlcv_to_close: [{"close": price, "volume": 0}]
-        result = [{"close": str(pt["price"]), "volume": "0"}
-                  for pt in graph if pt.get("price") is not None]
-        return result if len(result) >= 20 else None
+        # Convertir al formato OHLCV completo.
+        # SerpApi solo da precio de cierre → simulamos high/low con ±0.5% del close
+        # para que ADX, ATR y S/R funcionen. Es una aproximación, pero mucho mejor que cero.
+        prices = [pt["price"] for pt in graph if pt.get("price") is not None]
+        if len(prices) < 20:
+            print(f"    ⚠️  SerpApi: muy pocos puntos ({len(prices)}) para {symbol}")
+            return None
+        result = []
+        for i, pt in enumerate(graph):
+            if pt.get("price") is None:
+                continue
+            p = pt["price"]
+            # Rango estimado: 0.8% del precio (aproxima la vela diaria típica)
+            rng = p * 0.008
+            result.append({
+                "close":  str(p),
+                "open":   str(p),
+                "high":   str(round(p + rng, 4)),
+                "low":    str(round(p - rng, 4)),
+                "volume": "0",
+            })
+        print(f"    ✅ SerpApi OK ({symbol}): {len(result)} puntos")
+        return result
     except Exception as e:
         print(f"    SerpApi exception ({symbol}): {e}")
         return None
@@ -337,30 +415,22 @@ def serpapi_timeseries(symbol: str, interval: str) -> list | None:
 def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
     """
-    Fuente unificada de datos: 
-    1. Si el ticker está en SERPAPI_TICKERS → SerpApi directo
-    2. Si no → TwelveData, con fallback a SerpApi si falla
-    Sin duplicar llamadas.
+    Fuente unificada de datos:
+    1. TwelveData SIEMPRE primero (tiene OHLCV completo — necesario para ADX, ATR, S/R)
+    2. SerpApi como fallback si TwelveData falla (datos parciales sin high/low real)
     """
-    use_serpapi_first = symbol.upper() in SERPAPI_TICKERS
+    # 1. TwelveData primero para TODOS
+    result = api_timeseries(symbol, interval, outputsize, exchange)
+    if result:
+        return result
 
-    if not use_serpapi_first:
-        # Intentar TwelveData primero
-        result = api_timeseries(symbol, interval, outputsize, exchange)
-        if result:
-            return result
-        print(f"    TwelveData falló para {symbol} → intentando SerpApi...")
-
-    # SerpApi (primario para SERPAPI_TICKERS, fallback para los demás)
+    # 2. SerpApi fallback
+    print(f"    TwelveData falló para {symbol} → intentando SerpApi fallback...")
     result = serpapi_timeseries(symbol, interval)
     if result:
         return result
 
-    # Si era SerpApi primario y falló, intentar TwelveData como último recurso
-    if use_serpapi_first:
-        print(f"    SerpApi falló para {symbol} → intentando TwelveData...")
-        return api_timeseries(symbol, interval, outputsize, exchange)
-
+    print(f"    Sin datos disponibles para {symbol} {interval}")
     return None
 
 
@@ -517,6 +587,354 @@ def get_score_previo(ticker: str) -> dict | None:
     return None
 
 
+def analizar_score_drop(ticker: str, score_actual: int) -> dict:
+    """
+    SCORE DROP con historial real de las ultimas 5 sesiones.
+    Detecta:
+      Caida puntual  : score bajo 2+ pts en la ultima sesion
+      Caida sostenida: score bajando 3+ sesiones consecutivas
+      Pico y declive : llego a maximo y cayo 3+ pts desde el
+    Retorna severidad (none|warning|alert|critical) y descripcion.
+    """
+    con = sqlite3.connect(DB_FILE); con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT score, fecha FROM score_history WHERE ticker=? ORDER BY id DESC LIMIT 6",
+        (ticker.upper(),)
+    ).fetchall()
+    con.close()
+
+    if len(rows) < 2:
+        return {"severidad": "none", "desc": "", "caida_pts": 0, "sesiones_baja": 0}
+
+    scores  = [r["score"] for r in rows]   # [mas_reciente ... mas_antiguo]
+    hist    = [score_actual] + scores      # insertamos el actual al frente
+
+    caida_puntual    = hist[0] - hist[1]
+    pico_reciente    = max(hist[1:])
+    caida_desde_pico = pico_reciente - hist[0]
+
+    sesiones_baja = 0
+    for i in range(len(hist) - 1):
+        if hist[i] < hist[i+1]:
+            sesiones_baja += 1
+        else:
+            break
+
+    if caida_puntual >= 3 or (caida_desde_pico >= 4 and sesiones_baja >= 3):
+        severidad = "critical"
+        desc = (f"Score cayo {caida_puntual} pts en ultima sesion" if caida_puntual >= 3
+                else f"Declive sostenido: -{caida_desde_pico} pts en {sesiones_baja} sesiones")
+    elif caida_puntual >= 2 or (caida_desde_pico >= 3 and sesiones_baja >= 2):
+        severidad = "alert"
+        desc = (f"Score cayo {caida_puntual} pts vs sesion anterior" if caida_puntual >= 2
+                else f"Score bajando {sesiones_baja} sesiones consecutivas ({pico_reciente}->{hist[0]})")
+    elif sesiones_baja >= 2 or caida_desde_pico >= 2:
+        severidad = "warning"
+        desc = f"Score en tendencia bajista ({sesiones_baja} sesiones, -{caida_desde_pico} pts desde pico)"
+    else:
+        severidad = "none"
+        desc = ""
+
+    return {
+        "severidad":     severidad,
+        "desc":          desc,
+        "caida_pts":     caida_puntual,
+        "caida_pico":    caida_desde_pico,
+        "sesiones_baja": sesiones_baja,
+        "pico_reciente": pico_reciente,
+        "hist_scores":   hist[:5],
+    }
+
+
+
+# ══════════════════════════════════════════════════════════
+#   MÓDULO DE ZONAS DE SOPORTE / RESISTENCIA
+#   Detecta automáticamente zonas clave usando:
+#     · Pivotes de precio (máximos/mínimos locales)
+#     · Clustering de zonas cercanas (tolerancia 1.5%)
+#     · Clasificación por fuerza (toques × volumen)
+#     · Relación precio actual → SOPORTE / RESISTENCIA / EN ZONA
+# ══════════════════════════════════════════════════════════
+
+def detectar_pivotes(highs: list, lows: list, closes: list,
+                     volumes: list, orden: int = 3) -> dict:
+    """
+    Detecta pivotes de precio locales con ventana `orden`.
+    Un pivote alto = máximo local rodeado de `orden` velas menores.
+    Un pivote bajo = mínimo local rodeado de `orden` velas mayores.
+    Retorna listas de pivotes con precio, índice y volumen promedio.
+    """
+    n = len(closes)
+    if n < orden * 2 + 1:
+        return {"altos": [], "bajos": []}
+
+    altos, bajos = [], []
+
+    for i in range(orden, n - orden):
+        ventana_h = highs[i - orden: i + orden + 1]
+        ventana_l = lows [i - orden: i + orden + 1]
+        vol_zona  = float(pd.Series(volumes[i - orden: i + orden + 1]).mean())
+
+        if highs[i] == max(ventana_h):
+            altos.append({"precio": highs[i], "idx": i, "vol": vol_zona})
+        if lows[i] == min(ventana_l):
+            bajos.append({"precio": lows[i],  "idx": i, "vol": vol_zona})
+
+    return {"altos": altos, "bajos": bajos}
+
+
+def agrupar_zonas(pivotes: list, precio_ref: float,
+                  tolerancia_pct: float = 0.015) -> list:
+    """
+    Agrupa pivotes cercanos (dentro de tolerancia_pct) en una zona.
+    Cada zona tiene: precio_centro, fuerza (nº toques), vol_medio,
+    distancia_pct al precio actual.
+    """
+    if not pivotes:
+        return []
+
+    pivotes_ord = sorted(pivotes, key=lambda x: x["precio"])
+    zonas = []
+    grupo = [pivotes_ord[0]]
+
+    for p in pivotes_ord[1:]:
+        ref = grupo[-1]["precio"]
+        if abs(p["precio"] - ref) / ref <= tolerancia_pct:
+            grupo.append(p)
+        else:
+            zonas.append(grupo)
+            grupo = [p]
+    zonas.append(grupo)
+
+    resultado = []
+    for g in zonas:
+        centro = float(pd.Series([x["precio"] for x in g]).mean())
+        vol_m  = float(pd.Series([x["vol"]    for x in g]).mean())
+        dist   = (centro - precio_ref) / precio_ref * 100
+        resultado.append({
+            "precio":       round(centro, 4),
+            "fuerza":       len(g),           # número de toques
+            "vol_medio":    round(vol_m, 0),
+            "distancia_pct": round(dist, 2),  # % desde precio actual
+        })
+
+    return sorted(resultado, key=lambda x: abs(x["distancia_pct"]))
+
+
+def calcular_zonas_sr(highs: list, lows: list, closes: list,
+                       volumes: list, tc: float = 1.0,
+                       origen: str = "USA") -> dict:
+    """
+    Función principal del módulo S/R.
+    Devuelve:
+      soportes   : zonas BAJO el precio actual (ordenadas por cercanía)
+      resistencias: zonas SOBRE el precio actual
+      en_zona    : True si el precio está dentro de una zona clave (±1%)
+      zona_actual: descripción de la zona si en_zona=True
+      objetivo_sr: primer nivel de resistencia (meta de ganancia)
+      stop_sr    : primer nivel de soporte (stop natural del mercado)
+      contexto   : texto explicativo para el dashboard
+    """
+    if not highs or len(highs) < 20:
+        return {"soportes": [], "resistencias": [], "en_zona": False,
+                "zona_actual": "", "objetivo_sr": None, "stop_sr": None,
+                "contexto": "Sin datos suficientes"}
+
+    mult   = tc if origen == "USA" else 1.0
+    precio = closes[-1]
+
+    pivotes = detectar_pivotes(highs, lows, closes, volumes, orden=3)
+    zonas_a = agrupar_zonas(pivotes["altos"], precio)
+    zonas_b = agrupar_zonas(pivotes["bajos"],  precio)
+
+    # Clasificar: soportes = zonas BAJO el precio, resistencias = zonas SOBRE
+    soportes     = [z for z in zonas_b if z["distancia_pct"] <= 0]
+    resistencias = [z for z in zonas_a if z["distancia_pct"] >= 0]
+
+    # Ordenar: soportes de más cercano a más lejano (menos negativo primero)
+    soportes     = sorted(soportes,     key=lambda x: -x["distancia_pct"])
+    resistencias = sorted(resistencias, key=lambda x:  x["distancia_pct"])
+
+    # Zona actual: ¿está el precio dentro de ±1% de una zona clave?
+    en_zona, zona_actual = False, ""
+    todas = zonas_a + zonas_b
+    for z in todas:
+        if abs(z["distancia_pct"]) <= 1.0 and z["fuerza"] >= 2:
+            en_zona = True
+            tipo    = "resistencia" if z["distancia_pct"] >= 0 else "soporte"
+            zona_actual = (f"Precio en zona de {tipo} "
+                           f"(${z['precio']*mult:,.2f} MXN, {z['fuerza']} toques)")
+            break
+
+    objetivo_sr = resistencias[0]["precio"] * mult if resistencias else None
+    stop_sr     = soportes[0]["precio"]     * mult if soportes     else None
+
+    # Contexto narrativo
+    n_sop  = len(soportes)
+    n_res  = len(resistencias)
+    if en_zona:
+        contexto = f"⚡ {zona_actual}. Posible rebote o ruptura inminente."
+    elif n_sop == 0:
+        contexto = "⚠️ Sin soporte visible por debajo — riesgo de caída libre."
+    elif n_res == 0:
+        contexto = "🚀 Sin resistencia visible — espacio libre al alza."
+    else:
+        s1 = soportes[0]["precio"] * mult
+        r1 = resistencias[0]["precio"] * mult
+        contexto = (f"Soporte próximo ${s1:,.2f} MXN ({soportes[0]['distancia_pct']:.1f}%) · "
+                    f"Resistencia próxima ${r1:,.2f} MXN (+{resistencias[0]['distancia_pct']:.1f}%)")
+
+    return {
+        "soportes":     soportes[:5],          # top 5 más cercanos
+        "resistencias": resistencias[:5],
+        "en_zona":      en_zona,
+        "zona_actual":  zona_actual,
+        "objetivo_sr":  round(objetivo_sr, 2) if objetivo_sr else None,
+        "stop_sr":      round(stop_sr,     2) if stop_sr     else None,
+        "contexto":     contexto,
+        "mult":         mult,
+    }
+
+
+def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
+    """
+    Renderiza el panel de zonas S/R para insertar en el detail-panel
+    del scanner y radar.
+    """
+    if not sr or not (sr.get("soportes") or sr.get("resistencias")):
+        return '<p class="hint">Sin zonas identificadas</p>'
+
+    mult       = sr.get("mult", tc)
+    soportes   = sr.get("soportes",   [])
+    resistencias= sr.get("resistencias", [])
+    en_zona    = sr.get("en_zona", False)
+    contexto   = sr.get("contexto", "")
+
+    # Cabecera de contexto
+    ctx_color = "#0958d9" if en_zona else "var(--muted)"
+    ctx_bg    = "#e6f4ff" if en_zona else "var(--surface2)"
+    h = (f'<div style="background:{ctx_bg};border-radius:5px;padding:7px 10px;'
+         f'margin-bottom:8px;font-size:11px;color:{ctx_color}">{contexto}</div>')
+
+    # Tabla unificada: resistencias arriba, precio en el medio, soportes abajo
+    h += '<div style="font-size:11px">'
+
+    # Resistencias (de más lejana a más cercana = orden descendente de precio)
+    for z in reversed(resistencias[:4]):
+        p_mxn  = z["precio"] * mult
+        dist   = z["distancia_pct"]
+        fuerza = z["fuerza"]
+        bar_w  = min(fuerza * 20, 100)
+        cerca  = abs(dist) <= 3
+        h += (f'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'
+              f'border-bottom:1px solid var(--brd);'
+              f'{"background:#fff7e6;" if cerca else ""}">'
+              f'<span style="width:20px;font-size:10px;color:var(--red)">R</span>'
+              f'<span style="flex:1;font-family:var(--mono);color:var(--red);font-weight:{"600" if cerca else "400"}">'
+              f'${p_mxn:,.2f}</span>'
+              f'<span style="color:var(--muted);font-size:10px">+{dist:.1f}%</span>'
+              f'<div style="width:40px;height:4px;background:var(--brd2);border-radius:2px">'
+              f'<div style="width:{bar_w}%;height:100%;background:var(--red);border-radius:2px"></div></div>'
+              f'<span style="font-size:9px;color:var(--muted)">{fuerza}×</span></div>')
+
+    # Precio actual
+    h += (f'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;'
+          f'border-bottom:1px solid var(--brd);border-top:2px solid var(--text)">'
+          f'<span style="width:20px;font-size:10px;color:var(--text)">◆</span>'
+          f'<span style="flex:1;font-family:var(--mono);font-weight:600">'
+          f'${precio_actual_mxn:,.2f} <span style="font-size:10px;font-weight:400;color:var(--muted)">precio actual</span></span>'
+          f'</div>')
+
+    # Soportes (de más cercano a más lejano = orden descendente de precio)
+    for z in soportes[:4]:
+        p_mxn  = z["precio"] * mult
+        dist   = z["distancia_pct"]
+        fuerza = z["fuerza"]
+        bar_w  = min(fuerza * 20, 100)
+        cerca  = abs(dist) <= 3
+        h += (f'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'
+              f'border-bottom:1px solid var(--brd);'
+              f'{"background:#f6ffed;" if cerca else ""}">'
+              f'<span style="width:20px;font-size:10px;color:var(--green)">S</span>'
+              f'<span style="flex:1;font-family:var(--mono);color:var(--green);font-weight:{"600" if cerca else "400"}">'
+              f'${p_mxn:,.2f}</span>'
+              f'<span style="color:var(--muted);font-size:10px">{dist:.1f}%</span>'
+              f'<div style="width:40px;height:4px;background:var(--brd2);border-radius:2px">'
+              f'<div style="width:{bar_w}%;height:100%;background:var(--green);border-radius:2px"></div></div>'
+              f'<span style="font-size:9px;color:var(--muted)">{fuerza}×</span></div>')
+
+    h += '</div>'
+    h += '<p style="font-size:9px;color:var(--hint);margin-top:5px">R=resistencia · S=soporte · ×=toques históricos</p>'
+    return h
+
+
+def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -> str:
+    """
+    Renderiza el mini-historial de scores de las últimas 6 sesiones.
+    Muestra: sparkline visual + tabla compacta + badge de tendencia.
+    """
+    con = sqlite3.connect(DB_FILE); con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT score, fecha, estado, precio FROM score_history "
+        "WHERE ticker=? ORDER BY id DESC LIMIT 6",
+        (ticker.upper(),)
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        return '<p class="hint" style="font-size:10px">Sin historial aún — se acumulará con cada actualización</p>'
+
+    hist = [{"score": r["score"], "fecha": r["fecha"][:10],
+             "estado": r["estado"], "precio": r["precio"]} for r in rows]
+    hist_scores = [h["score"] for h in hist]
+
+    # Tendencia
+    if len(hist_scores) >= 2:
+        delta = hist_scores[0] - hist_scores[1]
+        if delta > 0:   tend_icon, tend_col, tend_txt = "↑", "var(--green)", f"+{delta} pts"
+        elif delta < 0: tend_icon, tend_col, tend_txt = "↓", "var(--red)",   f"{delta} pts"
+        else:           tend_icon, tend_col, tend_txt = "→", "var(--muted)", "sin cambio"
+    else:
+        tend_icon, tend_col, tend_txt = "—", "var(--muted)", "primera sesión"
+
+    # Sparkline SVG (mini gráfico de línea)
+    total_c = 10   # máximo teórico
+    max_s   = max(hist_scores + [1])
+    pts     = hist_scores[::-1]   # cronológico: más antiguo → más reciente
+    n_pts   = len(pts)
+    w, h_svg= 80, 24
+    xs = [int(i / max(n_pts - 1, 1) * w) for i in range(n_pts)]
+    ys = [int((1 - p / total_c) * h_svg) for p in pts]
+    pts_str   = " ".join(f"{x},{y}" for x,y in zip(xs,ys))
+    dot_x, dot_y = xs[-1], ys[-1]
+    sparkline = (f'<svg width="{w}" height="{h_svg}" style="vertical-align:middle;margin-right:6px">'
+                 f'<polyline points="{pts_str}" '
+                 f'fill="none" stroke="var(--text)" stroke-width="1.5" stroke-linejoin="round"/>'
+                 f'<circle cx="{dot_x}" cy="{dot_y}" r="2" fill="var(--red)"/>'
+                 f'</svg>')
+
+    # Tabla compacta
+    rows_html = ""
+    for i, h_row in enumerate(hist):
+        s    = h_row["score"]
+        col  = "#52c41a" if s >= 7 else "#faad14" if s >= 5 else "#ff4d4f"
+        est  = h_row["estado"] or "—"
+        fecha= h_row["fecha"]
+        bold = "font-weight:600;" if i == 0 else ""
+        rows_html += (f'<div style="display:flex;gap:6px;align-items:center;'
+                      f'padding:2px 0;font-size:10px;{bold}">'
+                      f'<span style="color:var(--hint);width:55px">{fecha}</span>'
+                      f'<span style="font-family:var(--mono);color:{col};width:28px">{s}/10</span>'
+                      f'<span style="color:var(--muted);flex:1">{est}</span>'
+                      f'</div>')
+
+    return (f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+            f'{sparkline}'
+            f'<span style="font-size:12px;font-weight:600;color:{tend_col}">'
+            f'{tend_icon} {tend_txt}</span></div>'
+            f'{rows_html}')
+
+
 # ── DETECCIÓN DE EXIT ──────────────────────────────────────
 def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
     """
@@ -551,22 +969,21 @@ def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
     if not criterios.get("macd", {}).get("ok", True):
         razones.append("MACD bajista — vendedores en control")
 
-    # Criterio 4: caída de score vs sesión anterior
-    previo = get_score_previo(ticker)
-    caida_score = 0
-    if previo:
-        caida_score = previo["score"] - score_actual
-        if caida_score >= 2:
-            razones.append(f"Score cayó {caida_score} pts ({previo['score']}→{score_actual}) desde {previo['fecha'][:10]}")
-            nivel = "exit"
+    # Criterio 4: Score Drop usando historial real
+    score_drop = analizar_score_drop(ticker, score_actual)
+    caida_score = score_drop["caida_pts"]
+    if score_drop["severidad"] in ("alert", "critical"):
+        razones.append(f"Score Drop {score_drop['severidad'].upper()}: {score_drop['desc']}")
+        nivel = "exit" if score_drop["severidad"] == "critical" else "warning"
 
-    # EXIT definitivo: ≥3 razones O caída ≥3 puntos O precio+RSI ambos malos
+    # EXIT definitivo: ≥3 razones O score drop critico O precio+RSI ambos malos
     precio_bajo = precio < ema9
     rsi_bajo    = rsi_val < 50
-    if len(razones) >= 3 or caida_score >= 3 or (precio_bajo and rsi_bajo):
+    if len(razones) >= 3 or score_drop["severidad"] == "critical" or (precio_bajo and rsi_bajo):
         nivel = "exit"
 
-    return {"exit": nivel == "exit", "nivel": nivel, "razones": razones}
+    return {"exit": nivel == "exit", "nivel": nivel, "razones": razones,
+            "score_drop": score_drop}
 
 # ══════════════════════════════════════════════════════════
 #   MOTOR DE DECISIÓN — evaluar_setup()
@@ -650,25 +1067,37 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
 
     # ── ADVERTENCIAS (no bloquean pero reducen confianza) ─────────────────
 
-    # R7: Conflicto entre timeframes
-    tf_1h = tfs.get("1H", {})
+    # R7: MULTI-TIMEFRAME — solo 1W bloquea (1H eliminado, no disponible en plan free)
     tf_1w = tfs.get("1W", {})
-    h1_senal = tf_1h.get("senal") if tf_1h.get("valido") else None
     w1_senal = tf_1w.get("senal") if tf_1w.get("valido") else None
+    w1_score = tf_1w.get("score", 0) if tf_1w.get("valido") else None
 
-    if h1_senal == "VENDER":
-        advertencias.append("1H en VENDER — conflicto con 1D alcista, esperar alineación")
+    # 1W vendiendo = bloqueo duro (operar contra tendencia semanal es suicidio)
     if w1_senal == "VENDER":
-        advertencias.append("1W en VENDER — tendencia semanal bajista, operar con cautela")
-    if h1_senal == "VENDER" and w1_senal == "VENDER":
-        bloqueadores.append("1H y 1W ambos en VENDER — alineación bajista multi-timeframe, NO entrar")
+        bloqueadores.append(f"1W en VENDER (score {w1_score}/10) — tendencia semanal bajista, NO entrar")
         pasa_filtros = False
 
-    # R8: RSI sobrecomprado
+    # R8: SCORE DROP — usa historial real de BD
+    score_drop = analizar_score_drop(nombre, score)
+    if score_drop["severidad"] == "critical":
+        bloqueadores.append(f"SCORE DROP CRITICO: {score_drop['desc']}")
+        pasa_filtros = False
+    elif score_drop["severidad"] == "alert":
+        advertencias.append(f"Score Drop ALERTA: {score_drop['desc']}")
+    elif score_drop["severidad"] == "warning":
+        advertencias.append(f"Score Drop: {score_drop['desc']}")
+
+    # R9: ESTRUCTURA HH/HL bajista = bloqueo duro
+    estructura_1d = tf_1d.get("estructura", {})
+    if estructura_1d.get("estructura") == "bajista":
+        bloqueadores.append(f"Estructura LH+LL en 1D — price action bajista confirmado, NO entrar")
+        pasa_filtros = False
+
+    # R10: RSI sobrecomprado (advertencia)
     if rsi_v > 72:
         advertencias.append(f"RSI {rsi_v:.0f} > 72 — sobrecomprado, riesgo de pullback inmediato")
 
-    # R9: R:R insuficiente
+    # R11: R:R insuficiente (advertencia)
     if rr_v < 3:
         advertencias.append(f"R:R {rr_v:.1f}x < 3x — recompensa insuficiente para el riesgo")
 
@@ -684,11 +1113,11 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
             "decision_final": "⚠️ SALIR AHORA. Múltiples señales de deterioro activas. Respetar stop.",
             "confianza": 0,
             "pasa_filtros": False,
+            "score_drop": score_drop,
         }
 
     # Estado por bloqueadores
     if not pasa_filtros:
-        # Clasificar tipo de bloqueo
         if adx_v < 20:
             estado_base = "LATERAL"
         elif not c.get("soporte", True):
@@ -704,6 +1133,7 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
             "decision_final": f"🚫 NO ENTRAR: {razon_principal}",
             "confianza": 0,
             "pasa_filtros": False,
+            "score_drop": score_drop,
         }
 
     # ── CLASIFICAR SETUP (solo si pasó todos los filtros) ────────────────
@@ -761,6 +1191,90 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
         "score_ajustado": score_ajustado,
         "pasa_filtros":   True,
         "setup_nota":     setup_nota if pasa_filtros else "",
+        "score_drop":     score_drop,
+    }
+
+
+def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dict:
+    """
+    ESTRUCTURA HH/HL (Higher High / Higher Low) — Wyckoff/price action puro.
+    Analiza los ultimos n_pivotes maximos y minimos locales para determinar
+    si el activo esta en estructura alcista (HH+HL), bajista (LH+LL) o lateral.
+
+    Un pivote maximo local = vela cuyo high supera los 2 vecinos de cada lado.
+    Un pivote minimo local = vela cuyo low es inferior a los 2 vecinos de cada lado.
+
+    Retorna:
+      estructura : "alcista" | "bajista" | "lateral" | "indefinida"
+      hh         : bool — hay Higher Highs consecutivos
+      hl         : bool — hay Higher Lows consecutivos
+      lh         : bool — hay Lower Highs consecutivos
+      ll         : bool — hay Lower Lows consecutivos
+      desc       : descripcion legible
+      score_extra: +1 si alcista confirmada, -1 si bajista, 0 si lateral
+    """
+    if not highs or not lows or len(highs) < 10:
+        return {"estructura":"indefinida","hh":False,"hl":False,
+                "lh":False,"ll":False,"desc":"Datos insuficientes","score_extra":0}
+
+    h = highs
+    l = lows
+    n = len(h)
+
+    # Detectar pivotes locales (ventana de 2 velas)
+    pivot_highs = []
+    pivot_lows  = []
+    for i in range(2, n - 2):
+        if h[i] > h[i-1] and h[i] > h[i-2] and h[i] > h[i+1] and h[i] > h[i+2]:
+            pivot_highs.append(h[i])
+        if l[i] < l[i-1] and l[i] < l[i-2] and l[i] < l[i+1] and l[i] < l[i+2]:
+            pivot_lows.append(l[i])
+
+    # Tomar los ultimos n_pivotes
+    ph = pivot_highs[-n_pivotes:] if len(pivot_highs) >= 2 else []
+    pl = pivot_lows[-n_pivotes:]  if len(pivot_lows)  >= 2 else []
+
+    if len(ph) < 2 or len(pl) < 2:
+        return {"estructura":"indefinida","hh":False,"hl":False,
+                "lh":False,"ll":False,"desc":"Pocos pivotes detectados","score_extra":0}
+
+    # Contar secuencias
+    hh = all(ph[i] > ph[i-1] for i in range(1, len(ph)))   # cada maximo mayor al anterior
+    hl = all(pl[i] > pl[i-1] for i in range(1, len(pl)))   # cada minimo mayor al anterior
+    lh = all(ph[i] < ph[i-1] for i in range(1, len(ph)))   # cada maximo menor al anterior
+    ll = all(pl[i] < pl[i-1] for i in range(1, len(pl)))   # cada minimo menor al anterior
+
+    # Condiciones relajadas (mayoria, no todos)
+    hh_pct = sum(ph[i] > ph[i-1] for i in range(1, len(ph))) / max(len(ph)-1, 1)
+    hl_pct = sum(pl[i] > pl[i-1] for i in range(1, len(pl))) / max(len(pl)-1, 1)
+    lh_pct = sum(ph[i] < ph[i-1] for i in range(1, len(ph))) / max(len(ph)-1, 1)
+    ll_pct = sum(pl[i] < pl[i-1] for i in range(1, len(pl))) / max(len(pl)-1, 1)
+
+    if hh_pct >= 0.67 and hl_pct >= 0.67:
+        estructura  = "alcista"
+        desc        = f"Estructura HH+HL confirmada ({len(ph)} maximos, {len(pl)} minimos)"
+        score_extra = 1
+    elif lh_pct >= 0.67 and ll_pct >= 0.67:
+        estructura  = "bajista"
+        desc        = f"Estructura LH+LL confirmada — tendencia bajista de precio"
+        score_extra = -1
+    elif hh_pct >= 0.5 and hl_pct >= 0.5:
+        estructura  = "alcista"
+        desc        = f"Estructura parcialmente alcista (HH {hh_pct:.0%}, HL {hl_pct:.0%})"
+        score_extra = 0
+    else:
+        estructura  = "lateral"
+        desc        = "Sin estructura clara — precio en rango"
+        score_extra = 0
+
+    return {
+        "estructura":  estructura,
+        "hh": hh, "hl": hl, "lh": lh, "ll": ll,
+        "hh_pct": round(hh_pct, 2), "hl_pct": round(hl_pct, 2),
+        "desc":        desc,
+        "score_extra": score_extra,
+        "n_ph":        len(ph),
+        "n_pl":        len(pl),
     }
 
 
@@ -783,34 +1297,66 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     ml_v=float(ml.iloc[-1]); ms_v=float(ms.iloc[-1]); mh_v=float(mh.iloc[-1])
     rv = float(rsi(c).iloc[-1])
 
-    # ADX — fuerza de tendencia (nuevo)
+    # ADX — fuerza de tendencia
     adx_val = 0.0
     if highs and lows and len(highs) == len(closes):
         try: adx_val = adx(highs, lows, closes)
         except Exception: adx_val = 0.0
 
+    # ESTRUCTURA HH/HL — price action puro
+    estructura_info = {"estructura":"indefinida","hh":False,"hl":False,
+                       "lh":False,"ll":False,"desc":"","score_extra":0}
+    if highs and lows and len(highs) == len(closes):
+        try: estructura_info = detectar_estructura_hhhl(highs, lows, n_pivotes=5)
+        except Exception: pass
+
     vol_now = float(v.iloc[-1])
     vol_avg = float(v.rolling(min(20,n)).mean().iloc[-1])
+    # Si todos los volúmenes son 0 (fuente SerpApi / Google Finance no los reporta),
+    # marcamos vol_ok como True para no bloquear artificialmente el análisis.
+    _sin_volumen = (vol_avg < 1.0)
+    vol_ok   = _sin_volumen or (vol_now >= vol_avg * 1.5)
 
     precio   = float(c.iloc[-1])
     soporte  = float(c.rolling(min(20,n)).min().iloc[-1])
     objetivo = float(c.rolling(min(20,n)).max().iloc[-1])
 
-    # Stop dinámico: mínimo de últimas 5 velas * 0.97 (más preciso que soporte fijo)
-    stop_dinamico = float(c.rolling(min(5,n)).min().iloc[-1]) * 0.97
-    stop     = stop_dinamico
+    # ── TRAILING STOP ATR ─────────────────────────────────────────────────
+    # ATR = volatilidad real promedio de las ultimas 14 velas
+    # Trailing stop = precio_maximo_reciente - 2.5 * ATR
+    # Es dinamico: sube con el precio, nunca baja.
+    if highs and lows and len(highs) == len(closes):
+        h_s = pd.Series(highs, dtype=float)
+        l_s = pd.Series(lows,  dtype=float)
+        tr_s = pd.concat([
+            h_s - l_s,
+            (h_s - c.shift()).abs(),
+            (l_s - c.shift()).abs()
+        ], axis=1).max(axis=1)
+        atr_val = float(tr_s.ewm(span=14, adjust=False).mean().iloc[-1])
+        # Precio maximo de las ultimas 10 velas (ventana de trailing)
+        precio_max_trail = float(h_s.rolling(min(10, n)).max().iloc[-1])
+        trailing_stop = precio_max_trail - 2.5 * atr_val
+        # El trailing stop nunca puede ser mayor que el precio actual
+        trailing_stop = min(trailing_stop, precio * 0.97)
+    else:
+        atr_val       = 0.0
+        trailing_stop = float(c.rolling(min(5,n)).min().iloc[-1]) * 0.97
+
+    stop       = max(trailing_stop, float(c.rolling(min(5,n)).min().iloc[-1]) * 0.97)
     riesgo_acc = precio - stop
-    rr_val = (objetivo-precio)/riesgo_acc if riesgo_acc>0 else 0
+    rr_val     = (objetivo - precio) / riesgo_acc if riesgo_acc > 0 else 0
 
     emas_ok  = precio>e9>e21>e50
     e200_ok  = precio>e200
     macd_ok  = ml_v>ms_v
     macdh_ok = mh_v>0
     rsi_ok   = 40<=rv<=72
-    vol_ok   = vol_now >= vol_avg * 1.5   # subido de 1.0x a 1.5x — evita falsos
+    vol_ok   = _sin_volumen or (vol_now >= vol_avg * 1.5)
     rr_ok    = rr_val>=rr_min
     sop_ok   = precio>soporte
-    adx_ok   = adx_val >= 20              # tendencia real (nuevo criterio)
+    adx_ok   = adx_val >= 20
+    hhhl_ok  = estructura_info["estructura"] == "alcista"   # HH+HL confirmado
 
     criterios = {
         "emas":   {"ok":emas_ok,  "label":"EMAs 9>21>50",   "val":f"{e9:.2f}/{e21:.2f}/{e50:.2f}",
@@ -823,18 +1369,21 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
                    "razon":f"Histograma {'positivo.' if macdh_ok else 'negativo.'}"},
         "rsi":    {"ok":rsi_ok,   "label":"RSI 40-72",      "val":f"{rv:.0f}",
                    "razon":("Sobrecomprado >75." if rv>=75 else f"RSI {rv:.0f}: {'alcista.' if rv>=55 else 'neutral.' if rv>=40 else 'debil.'}")},
-        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med","val":f"{vol_now/vol_avg:.1f}x" if vol_avg else "—",
-                   "razon":f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x).' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}"},
+        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med","val":f"{vol_now/vol_avg:.1f}x" if vol_avg and not _sin_volumen else "N/D",
+                   "razon":("Sin datos de volumen (fuente alternativa — criterio omitido)." if _sin_volumen
+                            else f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x).' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}")},
         "rr":     {"ok":rr_ok,    "label":f"R:R>={rr_min:.0f}x", "val":f"{rr_val:.1f}x",
-                   "razon":f"Stop dinámico {stop:.2f} Obj {objetivo:.2f}. R:R {rr_val:.1f}x {'valido.' if rr_ok else 'insuficiente.'}"},
+                   "razon":f"Stop ATR {stop:.2f} Obj {objetivo:.2f}. R:R {rr_val:.1f}x {'valido.' if rr_ok else 'insuficiente.'}"},
         "soporte":{"ok":sop_ok,   "label":"Sobre soporte",  "val":f"{soporte:.2f}",
                    "razon":f"Soporte en {soporte:.2f}. {'OK.' if sop_ok else 'Roto — señal bajista.'}"},
         "adx":    {"ok":adx_ok,   "label":"ADX≥20 tendencia","val":f"{adx_val:.0f}",
-                   "razon":f"ADX {adx_val:.0f}: {'✅ Tendencia real.' if adx_val>=25 else '⚠️ Tendencia débil — puede ser ruido lateral.' if adx_val>=20 else '❌ Sin tendencia — evitar entrada.'}"},
+                   "razon":f"ADX {adx_val:.0f}: {'✅ Tendencia real.' if adx_val>=25 else '⚠️ Tendencia débil.' if adx_val>=20 else '❌ Sin tendencia.'}"},
+        "hhhl":   {"ok":hhhl_ok,  "label":"Estructura HH+HL","val":estructura_info["estructura"],
+                   "razon":estructura_info["desc"] or f"Estructura: {estructura_info['estructura']}"},
     }
     score = sum(1 for x in criterios.values() if x["ok"])
-    total_criterios = len(criterios)   # ahora 9
-    explosion = emas_ok and e200_ok and macd_ok and macdh_ok and 55<=rv<=72 and vol_ok and rr_val>=4.0 and adx_val>=25
+    total_criterios = len(criterios)   # ahora 10
+    explosion = emas_ok and e200_ok and macd_ok and macdh_ok and 55<=rv<=72 and vol_ok and rr_val>=4.0 and adx_val>=25 and hhhl_ok
 
     if score>=7 and emas_ok and e200_ok: senal="COMPRAR"
     elif score>=5:                        senal="MANTENER"
@@ -856,7 +1405,8 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         "tf":tf_label,"valido":True,
         "precio":precio,"ema9":e9,"ema21":e21,"ema50":e50,"ema200":e200,
         "rsi":rv,"macd_alcista":macd_ok,"ml":ml_v,"ms":ms_v,"mh":mh_v,
-        "adx":adx_val,
+        "adx":adx_val,"atr":round(atr_val,4),"trailing_stop":round(stop,4),
+        "estructura":estructura_info,
         "rr":rr_val,"stop":stop,"objetivo":objetivo,"soporte":soporte,"vol_ok":vol_ok,
         "score":score,"total_criterios":total_criterios,"senal":senal,"explosion":explosion,
         "criterios":criterios,
@@ -872,19 +1422,44 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     }
 
 
-# Cache de series históricas para evitar doble llamada al mismo ticker
-# Se limpia en cada corrida del script (vive en memoria)
-_TD_CACHE: dict[str, list | None] = {}
+# Cache de series históricas — se llena con batch al inicio de cada corrida
+_TD_CACHE: dict = {}
 
 def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
-    """Obtiene datos con cache — evita llamadas duplicadas al mismo ticker."""
+    """Devuelve datos del cache. Si no están, hace petición individual."""
     global _TD_CACHE
-    key = f"{symbol}:{interval}"
+    key = f"{symbol.upper()}:{interval}"
     if key not in _TD_CACHE:
-        _TD_CACHE[key] = get_timeseries(symbol, interval, 200, exchange)
-        # Sin sleep — el rate limit de TwelveData se maneja a nivel de plan,
-        # no con sleeps que suman minutos de espera innecesaria en Render.
+        # No estaba en el batch (ej. ticker personalizado agregado después)
+        print(f"    [cache miss] {symbol} {interval} — petición individual")
+        _TD_CACHE[key] = api_timeseries(symbol, interval, 100, exchange)
     return _TD_CACHE[key]
+
+
+def _precargar_cache_batch(symbols: list, intervals: list = None):
+    """
+    Precarga el cache con UNA call batch por intervalo.
+    Esto usa solo 2 calls de API (1D + 1W) en lugar de N×M calls.
+    Llama esto ANTES de analizar tickers.
+    """
+    global _TD_CACHE
+    if intervals is None:
+        intervals = ["1day", "1week"]
+    syms = [s.upper() for s in symbols if s]
+    print(f"  [batch] Precargando {len(syms)} tickers × {len(intervals)} intervalos...")
+    for interval in intervals:
+        print(f"  [batch] Pidiendo {interval} para: {', '.join(syms)}")
+        batch = api_timeseries_batch(syms, interval, outputsize=100)
+        for sym, vals in batch.items():
+            _TD_CACHE[f"{sym}:{interval}"] = vals
+        # Marcar como None los que no llegaron para no reintentar
+        for sym in syms:
+            key = f"{sym}:{interval}"
+            if key not in _TD_CACHE:
+                _TD_CACHE[key] = None
+        # Pausa entre intervalos para respetar rate limit
+        time.sleep(8)
+    print(f"  [batch] Cache listo: {sum(1 for v in _TD_CACHE.values() if v)} de {len(_TD_CACHE)} con datos")
 
 
 def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
@@ -909,20 +1484,14 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
                          titulos_en_cartera, tc=tc, origen=origen,
                          highs=highs_1d, lows=lows_1d)
 
+    # ── ZONAS DE SOPORTE / RESISTENCIA ────────────────────────────────────
+    sr = calcular_zonas_sr(highs_1d, lows_1d, closes_1d, volumes_1d, tc=tc, origen=origen)
+
     score_1d = tf_1d.get("score", 0)
     tfs = {"1D": tf_1d, "1H": {"tf":"1H","valido":False}, "1W": {"tf":"1W","valido":False}}
 
-    # Solo pedir 1H y 1W si el score 1D es prometedor Y no estamos en modo rápido
+    # Solo pedir 1W si el score 1D es prometedor (1H eliminado — no disponible en plan free)
     if score_1d >= 5 and not skip_mtf:
-        try:
-            vals_1h = _get_cached(symbol, "1h", exchange)
-            if vals_1h:
-                h1h = [float(x.get("high", x["close"])) for x in vals_1h]
-                l1h = [float(x.get("low",  x["close"])) for x in vals_1h]
-                tfs["1H"] = analizar_tf(ohlcv_to_close(vals_1h), ohlcv_to_volume(vals_1h), "1H",
-                                         capital, riesgo_pct, rr_min, titulos_en_cartera,
-                                         tc=tc, origen=origen, highs=h1h, lows=l1h)
-        except Exception: pass
         try:
             vals_1w = _get_cached(symbol, "1week", exchange)
             if vals_1w:
@@ -947,7 +1516,8 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
     print(f"-> {senal_final} (score 1D:{score_1d} global:{score_global})")
 
     return {"nombre":nombre,"symbol":symbol,"tf":tfs,"senal":senal_final,
-            "precio_actual":precio_actual,"score_global":score_global,"confluencia":confluencia}
+            "precio_actual":precio_actual,"score_global":score_global,
+            "confluencia":confluencia,"sr":sr}
 
 
 # ── ANÁLISIS PORTAFOLIO ───────────────────────────────────
@@ -1024,16 +1594,13 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
 def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None = None,
                    vix: float = 20.0, spy: dict | None = None):
-    """
-    Scanner con filtros macro: VIX + SPY EMA200 + protección ETFs apalancados.
-    """
     global _TD_CACHE
     _TD_CACHE = {}
 
     if spy is None: spy = {}
     regimen = regimen_mercado(vix, spy)
 
-    port_map = {p["ticker"]:p["titulos"] for p in get_portafolio()}
+    port_map   = {p["ticker"]: p["titulos"] for p in get_portafolio()}
     tickers_db = get_tickers_db()
     combinados: dict = {}
     combinados.update(SCANNER_TICKERS)
@@ -1043,73 +1610,82 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
 
     n_db  = len([k for k in tickers_db if k not in SCANNER_TICKERS])
     n_ext = len([k for k in (tickers_extra or {}) if k not in combinados])
-    print(f"  Scanner: {len(combinados)} únicos ({len(SCANNER_TICKERS)} base + {n_db} DB + {n_ext} extra)")
+    print(f"  Scanner: {len(combinados)} tickers ({len(SCANNER_TICKERS)} base + {n_db} DB + {n_ext} extra)")
     print(f"  Régimen: {regimen['label']} | VIX={vix:.1f} | SPY {'✅' if spy.get('sobre_ema200') else '❌'} EMA200")
 
+    # ── PRECARGAR CACHE CON BATCH (1 call por intervalo en lugar de N) ────
+    todos_syms = [v[0] for v in combinados.values()]
+    _precargar_cache_batch(todos_syms, ["1day", "1week"])
+
     resultados = []
-    for nombre,(symbol,exchange) in combinados.items():
+    for nombre, (symbol, exchange) in combinados.items():
         tit = port_map.get(nombre, 0.0)
         origen_ticker = "MX" if exchange == "BMV" else "USA"
         an  = analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
-                                  tit, tc=tc, origen=origen_ticker)
-        tf_1d = an["tf"].get("1D",{})
+                                 tit, tc=tc, origen=origen_ticker)
+        tf_1d = an["tf"].get("1D", {})
         if not tf_1d.get("valido"): continue
 
         precio_usd    = tf_1d["precio"]
         etf_peligroso = es_etf_apalancado(nombre)
-        exit_info     = detectar_exit(nombre, tf_1d, tf_1d.get("score",0))
-
-        # ── MOTOR DE DECISIÓN CENTRALIZADO ───────────────────────────────
-        setup = evaluar_setup(nombre, tf_1d, an["tf"], vix, spy, tit, exit_info)
+        exit_info     = detectar_exit(nombre, tf_1d, tf_1d.get("score", 0))
+        setup         = evaluar_setup(nombre, tf_1d, an["tf"], vix, spy, tit, exit_info)
         estado        = setup["estado"]
         score         = tf_1d["score"]
         score_ajustado= setup.get("score_ajustado", max(0, score - regimen["penalizacion"]))
 
-        # Guardar historial
         try:
-            guardar_score(nombre, score, tf_1d.get("senal","—"), vix, precio_usd, estado)
+            guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
         except Exception: pass
 
-        c = {k:v["ok"] for k,v in tf_1d["criterios"].items()}
+        c = {k: v["ok"] for k, v in tf_1d["criterios"].items()}
         resultados.append({
-            "nombre":nombre,"estado":estado,
-            "precio_usd":precio_usd,"precio_mxn":precio_usd*tc,
-            "entrada_mxn":tf_1d.get("entrada_sugerida",precio_usd)*tc,
-            "stop_mxn":tf_1d.get("stop",0)*tc,"obj_mxn":tf_1d.get("objetivo",0)*tc,
-            "rsi":tf_1d["rsi"],"rr":tf_1d["rr"],"macd_ok":tf_1d["macd_alcista"],
-            "ema200_ok":c.get("ema200",False),
-            "score":score,"score_ajustado":score_ajustado,
-            "total_criterios":tf_1d.get("total_criterios",9),
-            "criterios":tf_1d["criterios"],"sizing":tf_1d.get("sizing",{}),
-            "tfs":an["tf"],"confluencia":an["confluencia"],"titulos_cartera":tit,
-            "etf_apalancado":etf_peligroso,
-            "exit_info":exit_info,
-            "vix":vix,"regimen":regimen,
-            "adx":tf_1d.get("adx",0),
-            "setup":setup,
+            "nombre": nombre, "estado": estado,
+            "precio_usd": precio_usd, "precio_mxn": precio_usd * tc,
+            "entrada_mxn": tf_1d.get("entrada_sugerida", precio_usd) * tc,
+            "stop_mxn": tf_1d.get("stop", 0) * tc, "obj_mxn": tf_1d.get("objetivo", 0) * tc,
+            "rsi": tf_1d["rsi"], "rr": tf_1d["rr"], "macd_ok": tf_1d["macd_alcista"],
+            "ema200_ok": c.get("ema200", False),
+            "score": score, "score_ajustado": score_ajustado,
+            "total_criterios": tf_1d.get("total_criterios", 9),
+            "criterios": tf_1d["criterios"], "sizing": tf_1d.get("sizing", {}),
+            "tfs": an["tf"], "confluencia": an["confluencia"], "titulos_cartera": tit,
+            "etf_apalancado": etf_peligroso,
+            "exit_info": exit_info,
+            "vix": vix, "regimen": regimen,
+            "adx": tf_1d.get("adx", 0),
+            "setup": setup,
+            "sr": an.get("sr", {}),
         })
 
     orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
-    resultados.sort(key=lambda x:(orden.get(x["estado"],9),-x["rr"]))
+    resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
     return resultados
 
 
 def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = None,
                  vix: float = 20.0, spy: dict | None = None):
-    """Radar: analiza UNIVERSO + DB en modo 1D. Reutiliza cache del scanner. Aplica todas las reglas."""
+    """Radar: analiza UNIVERSO + DB en modo 1D. Reutiliza cache del scanner."""
     if spy is None: spy = {"sobre_ema200": True}
-    port_map   = {p["ticker"]:p["titulos"] for p in get_portafolio()}
-    tickers_db = get_tickers_db()
+    port_map          = {p["ticker"]: p["titulos"] for p in get_portafolio()}
+    tickers_db        = get_tickers_db()
     universo_completo = {**UNIVERSO, **tickers_db}
-    resultados = []
-    total      = len(universo_completo)
-    print(f"  Radar: analizando {total} acciones en 1D (VIX={vix:.1f})...")
+    total             = len(universo_completo)
+    print(f"  Radar: {total} acciones (VIX={vix:.1f})...")
 
     # Límite de tiempo para que el radar no cuelgue indefinidamente
-    _radar_start = time.time()
-    _RADAR_TIMEOUT = 120  # segundos máx para todo el radar
+    _radar_start  = time.time()
+    _RADAR_TIMEOUT = 300  # ampliado porque el batch es rápido
 
-    for i,(nombre,(symbol,exchange)) in enumerate(universo_completo.items()):
+    # Precargar solo los tickers del radar que NO están ya en cache del scanner
+    syms_sin_cache = [v[0] for k, v in universo_completo.items()
+                      if f"{v[0].upper()}:1day" not in _TD_CACHE]
+    if syms_sin_cache:
+        print(f"  [Radar batch] Precargando {len(syms_sin_cache)} tickers faltantes...")
+        _precargar_cache_batch(syms_sin_cache, ["1day"])
+
+    resultados = []
+    for i, (nombre, (symbol, exchange)) in enumerate(universo_completo.items()):
         # Abort si llevamos más de 2 minutos en el radar
         if time.time() - _radar_start > _RADAR_TIMEOUT:
             print(f"  [Radar] Timeout — procesados {i}/{total}")
@@ -1128,6 +1704,9 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
         tf = analizar_tf(closes, volumes, "1D", capital, riesgo_pct, rr_min,
                           tit, tc=tc, origen="USA", highs=highs, lows=lows)
         if not tf["valido"]: continue
+
+        # S/R para el radar
+        sr_radar = calcular_zonas_sr(highs, lows, closes, volumes, tc=tc, origen="USA")
 
         # Construir tfs mínimo para evaluar_setup (radar solo tiene 1D)
         tfs_radar = {"1D": tf, "1H": {"valido":False}, "1W": {"valido":False}}
@@ -1156,6 +1735,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "titulos_cartera":tit,"adx":tf.get("adx",0),
             "etf_apalancado":es_etf_apalancado(nombre),
             "exit_info":exit_info,"setup":setup,
+            "sr":sr_radar,
         })
 
     print(f"  Radar completo: {len(resultados)} de {total} analizadas")
@@ -1414,9 +1994,43 @@ def render_port_rows(posiciones, tc):
         # Score block central con señal
         score_block = render_score_badge(score, total_c, senal) if tf_1d.get("valido") else ""
 
+        # ── S/R del portafolio ───────────────────────────────────────
+        sr_port = an.get("sr", {})
+        sr_html_port = render_zonas_sr(sr_port, pos.get("precio_actual_mxn") or pos["cto_prom_mxn"], tc)
+        stop_sr_port = sr_port.get("stop_sr")
+        obj_sr_port  = sr_port.get("objetivo_sr")
+        precio_ref   = pos.get("precio_actual_mxn") or pos["cto_prom_mxn"]
+        # Celda S/R inline: "S $X (-Y%) / R $X (+Z%)"
+        if stop_sr_port or obj_sr_port:
+            s_txt = (f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px;font-weight:600">S</span> '
+                     f'<span style="color:var(--green);font-family:var(--mono);font-size:11px">{fmt(stop_sr_port)}</span>'
+                     f'<span style="color:var(--muted);font-size:9px"> ({(stop_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>'
+                     if stop_sr_port else "")
+            r_txt = (f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px;font-weight:600">R</span> '
+                     f'<span style="color:var(--red);font-family:var(--mono);font-size:11px">{fmt(obj_sr_port)}</span>'
+                     f'<span style="color:var(--muted);font-size:9px"> (+{(obj_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>'
+                     if obj_sr_port else "")
+            sr_inline_port = f'<div style="font-size:10px;line-height:1.9">{s_txt}{r_txt}</div>'
+        else:
+            sr_inline_port = '<span class="hint" style="font-size:10px">—</span>'
+
         detail=(f'<div class="detail-panel">'
                 f'{render_conf(conf) if conf else ""}'
                 f'{alertas_h}'
+                # ── Escenarios S/R prominente en portafolio ──
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
+                f'<div class="esc-card esc-card-down">'
+                f'<div class="esc-title" style="color:var(--red)">📉 Si cae — soporte próximo</div>'
+                f'<div class="esc-price" style="color:var(--red)">{fmt(stop_sr_port) if stop_sr_port else "—"}</div>'
+                f'<div class="esc-sub" style="color:#7f1d1d">'
+                f'{"Puede caer hasta aquí · " + f"{(stop_sr_port-precio_ref)/precio_ref*100:.1f}% desde precio actual" if stop_sr_port else "Sin soporte claro debajo"}'
+                f'</div></div>'
+                f'<div class="esc-card esc-card-up">'
+                f'<div class="esc-title" style="color:var(--green)">📈 Si sube — resistencia / vender en</div>'
+                f'<div class="esc-price" style="color:var(--green)">{fmt(obj_sr_port) if obj_sr_port else "—"}</div>'
+                f'<div class="esc-sub" style="color:#14532d">'
+                f'{"Meta de venta o toma de ganancias · +" + f"{(obj_sr_port-precio_ref)/precio_ref*100:.1f}% potencial" if obj_sr_port else "Sin resistencia clara arriba"}'
+                f'</div></div></div>'
                 f'<div class="dp-grid">'
                 # Col 1: semáforo
                 f'<div class="dp-sec"><div class="dp-sec-t">Semáforo indicadores (1D)</div>'
@@ -1427,12 +2041,17 @@ def render_port_rows(posiciones, tc):
                 f'<div class="dp-sec"><div class="dp-sec-t">Score técnico</div>{score_block}</div>'
                 f'<div class="dp-sec"><div class="dp-sec-t">Tamaño de posición adicional</div>'
                 f'{render_sizing(sz,pos["titulos"],tc,pos["origen"])}</div></div>'
-                # Col 3: niveles + rec
+                # Col 3: niveles + rec + S/R mapa
                 f'<div style="display:flex;flex-direction:column;gap:8px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div>'
                 f'{render_niveles(tf_1d if tf_1d.get("valido") else {},tc,pos["origen"])}</div>'
                 f'{render_rec(senal,tf_1d,pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}'
-                f'</div></div></div>')
+                f'</div></div>'
+                f'<div style="margin-top:10px">'
+                f'<div class="dp-sec"><div class="dp-sec-t">Mapa completo de Soportes / Resistencias</div>'
+                f'{sr_html_port}</div>'
+                f'</div>'
+                f'</div>')
 
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{pos["ticker"]}</strong><br><span class="hint">{pos["origen"]} · {pos["mercado"]}</span></td>'
@@ -1443,9 +2062,10 @@ def render_port_rows(posiciones, tc):
             f'<td class="num {pl_cls}">{fmt(pos["pl_mxn"])}</td>'
             f'<td class="num {pl_cls}">{pos["pl_pct"]:+.1f}%</td>'
             f'<td>{badge_senal(senal)}</td>'
+            f'<td>{sr_inline_port}</td>'
             f'<td>{gbm_cell(pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="9" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="10" style="padding:0">{detail}</td></tr>')
     return h
 
 
@@ -1483,6 +2103,35 @@ def render_scan_rows(scanner, tc):
         exit_html   = render_exit_banner(exit_info) if exit_info else ""
         decision_html = render_decision_box(setup)
 
+        # ── ZONAS S/R ────────────────────────────────────────────────────
+        sr         = r.get("sr", {})
+        sr_html    = render_zonas_sr(sr, r["precio_mxn"], tc)
+        sr_ctx     = sr.get("contexto","")
+        # Badge de contexto S/R inline en la fila
+        sr_badge   = ""
+        if sr.get("en_zona"):
+            sr_badge = '<span style="font-size:9px;background:#fff7e6;color:#d46b08;border:1px solid #ffd591;border-radius:8px;padding:1px 5px;margin-left:4px">⚡ en zona</span>'
+
+        # ── CELDA S/R INLINE para la fila ──────────────────────────
+        stop_sr_mxn  = sr.get("stop_sr")
+        obj_sr_mxn   = sr.get("objetivo_sr")
+        sr_cell_html = ""
+        if stop_sr_mxn or obj_sr_mxn:
+            down_pct = ((stop_sr_mxn - r["precio_mxn"]) / r["precio_mxn"] * 100) if stop_sr_mxn else None
+            up_pct   = ((obj_sr_mxn  - r["precio_mxn"]) / r["precio_mxn"] * 100) if obj_sr_mxn  else None
+            lines = []
+            if stop_sr_mxn:
+                lines.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px">S</span> '
+                             f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn)}</span>'
+                             f'<span style="color:var(--muted);font-size:9px"> ({down_pct:.1f}%)</span></div>')
+            if obj_sr_mxn:
+                lines.append(f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px">R</span> '
+                             f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn)}</span>'
+                             f'<span style="color:var(--muted);font-size:9px"> (+{up_pct:.1f}%)</span></div>')
+            sr_cell_html = f'<div style="font-size:10px;line-height:1.9">{"".join(lines)}</div>'
+        else:
+            sr_cell_html = '<span class="hint" style="font-size:10px">—</span>'
+
         etf_warning = ""
         if etf_peligroso:
             min_s = 8 if r.get("vix",20)>20 else 7
@@ -1509,6 +2158,7 @@ def render_scan_rows(scanner, tc):
                 f'{score_block}{score_adj_note}</div>'
                 f'<div class="dp-sec"><div class="dp-sec-t">Tamaño de posición</div>'
                 f'{render_sizing(sz,en_cartera,tc,"USA")}</div></div>'
+                f'<div style="display:flex;flex-direction:column;gap:8px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Niveles clave MXN</div>'
                 f'<div class="sz-grid" style="font-size:12px">'
                 f'<div class="pl-row"><span>Precio actual</span><span class="num">{fmt(r["precio_mxn"])}</span></div>'
@@ -1518,14 +2168,22 @@ def render_scan_rows(scanner, tc):
                 f'<div class="pl-row"><span>RSI</span><span class="num" style="color:{rsi_col(r["rsi"])}">{r["rsi"]:.0f}</span></div>'
                 f'<div class="pl-row"><span>ADX</span><span class="num" style="color:{adx_color}">{adx_val:.0f} {adx_label}</span></div>'
                 f'<div class="pl-row"><span>R:R</span><span class="num" style="color:{rr_col}">{r["rr"]:.1f}x</span></div>'
-                f'</div></div></div></div>')
+                f'</div></div></div></div>'
+                # ── Fila extra: S/R + Score History (ancho completo) ─────
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">'
+                f'<div class="dp-sec"><div class="dp-sec-t">Zonas de soporte / resistencia</div>'
+                f'{sr_html}</div>'
+                f'<div class="dp-sec"><div class="dp-sec-t">Historial de scores</div>'
+                f'{hist_html}</div>'
+                f'</div>'
+                f'</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         conf_bar_mini = (f'<div style="width:36px;height:4px;background:var(--brd2);border-radius:2px;margin-top:2px">'
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{cartera_badge}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{sr_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -1535,11 +2193,12 @@ def render_scan_rows(scanner, tc):
             f'<td>{"<span style=color:var(--green)>▲</span>" if r["macd_ok"] else "<span style=color:var(--red)>▼</span>"}</td>'
             f'<td>{"<span style=color:var(--green)>↑</span>" if r["ema200_ok"] else "<span style=color:var(--red)>↓</span>"}</td>'
             f'<td>{gbm_cell(r["entrada_mxn"],r["stop_mxn"],r["obj_mxn"])}</td>'
+            f'<td>{sr_cell_html}</td>'
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
             f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="10" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
 
@@ -1610,6 +2269,14 @@ def render_radar_rows(radar, tc):
         decision_html = render_decision_box(setup)
         exit_html     = render_exit_banner(exit_info) if exit_info else ""
 
+        # ── S/R y HISTORIAL para radar ────────────────────────────────
+        sr        = r.get("sr", {})
+        sr_html   = render_zonas_sr(sr, r["precio_mxn"], tc)
+        hist_html = render_score_history(r["nombre"], score_aj)
+        sr_badge  = ""
+        if sr.get("en_zona"):
+            sr_badge = '<span style="font-size:9px;background:#fff7e6;color:#d46b08;border:1px solid #ffd591;border-radius:8px;padding:1px 5px;margin-left:4px">⚡ en zona</span>'
+
         adx_color = "var(--green)" if adx_val>=25 else "var(--yellow)" if adx_val>=20 else "var(--red)"
         adx_label = "✅" if adx_val>=25 else "⚠️" if adx_val>=20 else "❌"
 
@@ -1633,14 +2300,40 @@ def render_radar_rows(radar, tc):
                 f'<div class="pl-row"><span>RSI</span><span class="num" style="color:{rsi_col(r["rsi"])}">{r["rsi"]:.0f}</span></div>'
                 f'<div class="pl-row"><span>ADX</span><span class="num" style="color:{adx_color}">{adx_val:.0f} {adx_label}</span></div>'
                 f'<div class="pl-row"><span>R:R</span><span class="num" style="color:{rr_col}">{r["rr"]:.1f}x</span></div>'
-                f'</div></div></div></div>')
+                f'</div></div></div>'
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">'
+                f'<div class="dp-sec"><div class="dp-sec-t">Zonas de soporte / resistencia</div>'
+                f'{sr_html}</div>'
+                f'<div class="dp-sec"><div class="dp-sec-t">Historial de scores</div>'
+                f'{hist_html}</div>'
+                f'</div>'
+                f'</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         conf_mini   = (f'<div style="width:36px;height:3px;background:var(--brd2);border-radius:2px;margin-top:2px">'
                        f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14"};border-radius:2px"></div></div>'
                        if confianza>0 else "")
+        # ── CELDA S/R INLINE radar ──────────────────────────────────
+        stop_sr_mxn_r  = sr.get("stop_sr")
+        obj_sr_mxn_r   = sr.get("objetivo_sr")
+        sr_cell_r = ""
+        if stop_sr_mxn_r or obj_sr_mxn_r:
+            d_pct = ((stop_sr_mxn_r - r["precio_mxn"]) / r["precio_mxn"] * 100) if stop_sr_mxn_r else None
+            u_pct = ((obj_sr_mxn_r  - r["precio_mxn"]) / r["precio_mxn"] * 100) if obj_sr_mxn_r  else None
+            lines_r = []
+            if stop_sr_mxn_r:
+                lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px">S</span> '
+                               f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn_r)}</span>'
+                               f'<span style="color:var(--muted);font-size:9px"> ({d_pct:.1f}%)</span></div>')
+            if obj_sr_mxn_r:
+                lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px">R</span> '
+                               f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn_r)}</span>'
+                               f'<span style="color:var(--muted);font-size:9px"> (+{u_pct:.1f}%)</span></div>')
+            sr_cell_r = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_r)}</div>'
+        else:
+            sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{cartera_tag}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -1652,9 +2345,10 @@ def render_radar_rows(radar, tc):
             f'<td>{"<span style=color:var(--green)>↑</span>" if r["ema200_ok"] else "<span style=color:var(--red)>↓</span>"}</td>'
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_mini}</td>'
+            f'<td>{sr_cell_r}</td>'
             f'<td>{gbm_cell(r["entrada_mxn"],r["stop_mxn"],r["obj_mxn"])}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="12" style="padding:0">{detail}</td></tr>')
     return h
 
 
@@ -1752,6 +2446,8 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "precio_actual_mxn": p.get("precio_actual_mxn"),
         "pl_mxn":        p.get("pl_mxn",0),
         "pl_pct":        p.get("pl_pct",0),
+        "activo":        p.get("activo",1),
+        "sr": (p.get("analisis") or {}).get("sr", {}),
     } for p in port_data], ensure_ascii=False)
 
     port_rows  = render_port_rows(port_data, tc)
@@ -1947,6 +2643,9 @@ td strong{{font-size:13px;font-weight:500}}
 .exit-banner{{background:#fff1f0;border:2px solid #ffa39e;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:12px;color:#7f1d1d}}
 .exit-banner strong{{font-size:13px}}
 .score-adj{{font-size:10px;color:var(--muted);margin-top:2px}}
+.sr-zone-r{{color:var(--red);font-family:var(--mono)}}
+.sr-zone-s{{color:var(--green);font-family:var(--mono)}}
+.sr-zone-row{{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--brd);font-size:11px}}
 
 @media(max-width:720px){{thead th:nth-child(n+5){{display:none}}td:nth-child(n+5){{display:none}}}}
 </style></head><body>
@@ -1972,10 +2671,10 @@ td strong{{font-size:13px;font-weight:500}}
 </div></div>
 
 <div class="nav"><div class="nav-inner">
-  <button class="nb active" onclick="showTab('portafolio',this)">Mi portafolio</button>
+  <button class="nb" onclick="showTab('portafolio',this)">Mi portafolio</button>
   <button class="nb" onclick="showTab('registrar',this)">Registrar operación</button>
   <button class="nb" onclick="showTab('historial',this)">Historial</button>
-  <button class="nb" onclick="showTab('scanner',this)">Scanner</button>
+  <button class="nb active" onclick="showTab('scanner',this)">Scanner</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('buscador',this)">🔍 Buscador</button>
 </div></div>
@@ -2010,7 +2709,7 @@ td strong{{font-size:13px;font-weight:500}}
 <div class="wrap">
 
 <!-- ══ PORTAFOLIO ══ -->
-<div id="tab-portafolio" class="tab active">
+<div id="tab-portafolio" class="tab">
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Mi portafolio</h2>
     <p class="hint">Capital ${capital:,.0f} MXN · Riesgo {riesgo_pct*100:.0f}% · R:R mín 1:{rr_min:.0f} · Las operaciones registradas se reflejan al instante</p>
@@ -2048,7 +2747,9 @@ td strong{{font-size:13px;font-weight:500}}
     </div>
     <div style="overflow-x:auto"><table>
       <thead><tr><th>Emisora</th><th>Títulos</th><th>Cto. prom MXN</th><th>Precio actual</th>
-        <th>Valor MXN</th><th>P&L MXN</th><th>% Var</th><th>Señal</th><th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+        <th>Valor MXN</th><th>P&L MXN</th><th>% Var</th><th>Señal</th>
+        <th class="sr-th" title="Soporte / Resistencia automáticos — clic para mapa completo">📊 S/R</th>
+        <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
       <tbody id="port_tbody">{port_rows}</tbody>
     </table></div>
   </div>
@@ -2159,7 +2860,7 @@ td strong{{font-size:13px;font-weight:500}}
 </div>
 
 <!-- ══ SCANNER ══ -->
-<div id="tab-scanner" class="tab">
+<div id="tab-scanner" class="tab active">
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
     <p class="hint">Muestra <strong>todas</strong> las acciones configuradas · 1D base · 1H+1W si score≥5 · TC ${tc:.4f} · {ts}</p>
@@ -2219,8 +2920,9 @@ td strong{{font-size:13px;font-weight:500}}
     <div style="overflow-x:auto"><table id="scan_table">
       <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
         <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
-        <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th><th>Score</th></tr></thead>
-      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — agrega tu API key</td></tr>'}</tbody>
+        <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
+        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th>Score</th></tr></thead>
+      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
 </div>
@@ -2262,6 +2964,7 @@ td strong{{font-size:13px;font-weight:500}}
       <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
         <th style="color:var(--green)">Entrada EMA9</th><th style="color:var(--green)">Potencial</th>
         <th>R:R</th><th>RSI</th><th>MACD</th><th>EMA200</th><th>Score</th>
+        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th>
         <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
       <tbody id="radar_body">{radar_rows}</tbody>
     </table></div>
@@ -3144,6 +3847,24 @@ def _construir_con_etapas():
         radar_data = []
 
         if API_KEY not in ("TU_KEY_AQUI", ""):
+            # ── DIAGNÓSTICO DE API ANTES DE CONSTRUIR ───────────────────────
+            print("[build] 🔍 Verificando conexión a TwelveData...")
+            try:
+                _test_r = requests.get(f"{API_BASE}/time_series",
+                    params={"symbol":"AAPL","interval":"1day","outputsize":"5","apikey":API_KEY},
+                    timeout=10)
+                _test_d = _test_r.json()
+                if "values" in _test_d:
+                    print(f"[build] ✅ TwelveData OK — {len(_test_d['values'])} velas de prueba")
+                elif _test_r.status_code == 429:
+                    print("[build] ⚠️  TwelveData: RATE LIMIT 429 — esperando 15s antes de continuar...")
+                    time.sleep(15)
+                else:
+                    _msg = _test_d.get("message", _test_d.get("code", str(_test_d)[:120]))
+                    print(f"[build] ❌ TwelveData error: {_msg}")
+                    print(f"[build]    status HTTP: {_test_r.status_code}")
+            except Exception as _e:
+                print(f"[build] ❌ TwelveData sin conexión: {_e}")
             print("[build] Obteniendo VIX y SPY...")
             try:
                 vix = get_vix()
@@ -3357,6 +4078,90 @@ def api_config():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "version": "3.2"})
+
+
+# ── API Debug — diagnóstico rápido desde el browser ──────
+@app.route("/api/debug")
+def api_debug():
+    """Prueba TwelveData y SerpApi y muestra respuesta cruda."""
+    resultado = {
+        "api_key":    f"{API_KEY[:6]}...{API_KEY[-4:]}" if len(API_KEY)>10 else "NO CONFIGURADA",
+        "serpapi_key": f"{SERPAPI_KEY[:6]}...{SERPAPI_KEY[-4:]}" if len(SERPAPI_KEY)>10 else "NO CONFIGURADA",
+        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "twelvedata": {},
+        "serpapi":    {},
+    }
+    # Test TwelveData — respuesta RAW completa
+    try:
+        r = requests.get(f"{API_BASE}/time_series",
+            params={"symbol":"AAPL","interval":"1day","outputsize":"5","apikey":API_KEY},
+            timeout=12)
+        d = r.json()
+        if "values" in d and d["values"]:
+            resultado["twelvedata"] = {
+                "ok": True, "http": r.status_code,
+                "velas": len(d["values"]),
+                "ultimo": d["values"][-1],
+            }
+        else:
+            resultado["twelvedata"] = {
+                "ok": False, "http": r.status_code,
+                "respuesta_completa": d,
+            }
+    except Exception as e:
+        resultado["twelvedata"] = {"ok": False, "excepcion": str(e)}
+
+    # Test SerpApi — respuesta RAW
+    try:
+        r2 = requests.get(SERPAPI_BASE, params={
+            "engine":"google_finance","q":"AAPL:NASDAQ","window":"1M",
+            "hl":"en","api_key":SERPAPI_KEY}, timeout=12)
+        d2 = r2.json()
+        if "graph" in d2:
+            resultado["serpapi"] = {
+                "ok": True, "http": r2.status_code,
+                "puntos": len(d2["graph"]),
+                "primer_punto": d2["graph"][0] if d2["graph"] else None,
+            }
+        else:
+            resultado["serpapi"] = {
+                "ok": False, "http": r2.status_code,
+                "respuesta_completa": d2,
+            }
+    except Exception as e2:
+        resultado["serpapi"] = {"ok": False, "excepcion": str(e2)}
+
+    return jsonify(resultado)
+
+
+# ── API Test — prueba todos los tickers del scanner ──────
+@app.route("/api/test")
+def api_test():
+    """Prueba TwelveData para cada ticker del scanner y reporta cuáles funcionan."""
+    tickers = list(get_all_scanner_tickers().keys())
+    resultados = {}
+    for sym in tickers:
+        try:
+            r = requests.get(f"{API_BASE}/time_series",
+                params={"symbol":sym,"interval":"1day","outputsize":"5","apikey":API_KEY},
+                timeout=10)
+            d = r.json()
+            if "values" in d and d["values"]:
+                resultados[sym] = {"ok": True, "velas": len(d["values"]),
+                                   "precio": d["values"][-1]["close"]}
+            else:
+                resultados[sym] = {"ok": False, "http": r.status_code,
+                                   "error": str(d)[:300]}
+        except Exception as e:
+            resultados[sym] = {"ok": False, "error": str(e)}
+        time.sleep(0.3)  # no saturar
+    ok  = sum(1 for v in resultados.values() if v["ok"])
+    return jsonify({
+        "resumen": f"{ok}/{len(tickers)} tickers OK",
+        "tickers": resultados,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
 
 
 # ═══════════════════════════════════════════════════════════
