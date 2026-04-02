@@ -287,8 +287,8 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
         try:
             r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
             if r.status_code == 429:
-                print(f"    ⏳ Rate limit ({symbol}) key …{use_key[-4:]} — esperando 65s...")
-                time.sleep(65)
+                print(f"    ⏳ Rate limit ({symbol}) key …{use_key[-4:]} — esperando 15s...")
+                time.sleep(15)
                 continue
             d = r.json()
             if "values" in d and d["values"]:
@@ -309,8 +309,7 @@ def api_timeseries_batch(symbols: list, interval: str,
                           outputsize: int = 100, key: str = "") -> dict:
     """
     Llama TwelveData con hasta 8 símbolos en UNA sola request.
-    Usa la key indicada (o toma la siguiente del pool).
-    Devuelve dict {SYMBOL: [valores]}.
+    Si hay rate limit (429), espera 15s y reintenta UNA vez — sin bloquear minutos.
     """
     use_key = key or _next_key()
     if not use_key or not symbols:
@@ -319,38 +318,36 @@ def api_timeseries_batch(symbols: list, interval: str,
     sym_str = ",".join(s.upper() for s in symbols)
     params  = {"symbol": sym_str, "interval": interval, "outputsize": out,
                "apikey": use_key, "order": "ASC"}
-    for intento in range(2):
-        try:
+    try:
+        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
+        if r.status_code == 429:
+            print(f"    ⏳ Rate limit batch k=…{use_key[-4:]} — esperando 15s...")
+            time.sleep(15)
             r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
-            if r.status_code == 429:
-                print(f"    ⏳ Rate limit batch k={use_key[-4:]} — esperando 65s...")
-                time.sleep(65)
-                continue
-            d = r.json()
-            resultado = {}
-            if len(symbols) == 1:
-                sym = symbols[0].upper()
-                if "values" in d and d["values"]:
-                    resultado[sym] = d["values"]
-                    print(f"    ✅ TD batch ({sym} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
-                else:
-                    print(f"    ❌ TD batch ({sym}): {str(d)[:100]}")
+        d = r.json()
+        resultado = {}
+        if len(symbols) == 1:
+            sym = symbols[0].upper()
+            if "values" in d and d["values"]:
+                resultado[sym] = d["values"]
+                print(f"    ✅ TD ({sym} {interval}) k=…{use_key[-4:]}: {len(d['values'])} velas")
             else:
-                for sym in symbols:
-                    sym_up = sym.upper()
-                    entry  = d.get(sym_up, {})
-                    vals   = entry.get("values", []) if isinstance(entry, dict) else []
-                    if vals:
-                        resultado[sym_up] = vals
-                        print(f"    ✅ TD batch ({sym_up} {interval}) k={use_key[-4:]}: {len(vals)} velas")
-                    else:
-                        err = entry.get("message","") if isinstance(entry, dict) else str(entry)[:60]
-                        print(f"    ❌ TD batch ({sym_up}): {err or 'sin valores'}")
-            return resultado
-        except Exception as e:
-            print(f"    ❌ TD batch exception ({interval}) k={use_key[-4:]}: {e}")
-            time.sleep(3)
-    return {}
+                print(f"    ❌ TD ({sym}): {str(d)[:80]}")
+        else:
+            for sym in symbols:
+                sym_up = sym.upper()
+                entry  = d.get(sym_up, {})
+                vals   = entry.get("values", []) if isinstance(entry, dict) else []
+                if vals:
+                    resultado[sym_up] = vals
+                    print(f"    ✅ TD ({sym_up} {interval}) k=…{use_key[-4:]}: {len(vals)} velas")
+                else:
+                    err = entry.get("message","") if isinstance(entry, dict) else str(entry)[:60]
+                    print(f"    ❌ TD ({sym_up}): {err or 'sin valores'}")
+        return resultado
+    except Exception as e:
+        print(f"    ❌ TD batch exception k=…{use_key[-4:]}: {e}")
+        return {}
 
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
@@ -1829,80 +1826,62 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
 def _precargar_cache_batch(symbols: list, intervals: list = None):
     """
     Precarga el cache con batches de hasta 8 símbolos por key.
-    KEY_1 y KEY_2 alternan por chunk (round-robin).
-    Si un chunk falla por rate limit → espera 65s y reintenta automáticamente.
-    Nunca pierde un ticker silenciosamente — siempre reintenta antes de marcar None.
+    KEY_1 y KEY_2 alternan por chunk — cada una tiene su propio límite de 8 req/min.
+    Sin esperas largas: si un chunk falla, reintenta inmediatamente con la otra key.
+    Diseñado para completar en < 60s con 2 keys y 21 símbolos.
     """
     global _TD_CACHE, _KEY_IDX
     if intervals is None:
         intervals = ["1day", "1week"]
 
-    syms  = [s.upper() for s in symbols if s]
-    # Deduplicar preservando orden
+    syms = [s.upper() for s in symbols if s]
     seen = set(); syms = [s for s in syms if not (s in seen or seen.add(s))]
-    CHUNK = 8
+    CHUNK  = 8
     n_keys = len(_TD_KEYS)
 
     print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos | "
           f"{n_keys} key(s) | chunks de {CHUNK}")
 
-    _KEY_IDX = 0  # resetear rotación
+    _KEY_IDX = 0
 
     for interval in intervals:
         chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
         for idx, chunk in enumerate(chunks):
+            # Alternar key por chunk: chunk 0→KEY1, chunk 1→KEY2, chunk 2→KEY1...
             key_use = _TD_KEYS[idx % n_keys] if _TD_KEYS else ""
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:] if key_use else 'N/A'} → {', '.join(chunk)}")
 
-            # ── Intento con backoff automático ────────────────────────────
-            batch = {}
-            for intento in range(3):
-                batch = api_timeseries_batch(chunk, interval,
-                                             outputsize=100, key=key_use)
-                # Verificar cuántos tickers llegaron
-                llegaron = len(batch)
-                esperados = len(chunk)
-                if llegaron == esperados:
-                    break  # todo llegó bien
-                if llegaron == 0 and intento < 2:
-                    espera = 65 if intento == 0 else 120
-                    print(f"  [batch] ⚠️  0/{esperados} llegaron — "
-                          f"esperando {espera}s (intento {intento+2}/3)...")
-                    time.sleep(espera)
-                    # Alternar a la otra key en el reintento
-                    if n_keys > 1:
-                        key_use = _TD_KEYS[(idx + 1) % n_keys]
-                elif llegaron < esperados and intento < 2:
-                    # Llegaron algunos pero no todos — espera corta y reintenta
-                    # solo los que faltaron
-                    faltantes = [s for s in chunk if s not in batch]
-                    print(f"  [batch] ⚠️  Faltaron {faltantes} — "
-                          f"esperando 30s y reintentando...")
-                    time.sleep(30)
-                    batch2 = api_timeseries_batch(
-                        faltantes, interval, outputsize=100, key=key_use)
-                    batch.update(batch2)
-                    break
-                else:
-                    break
+            batch = api_timeseries_batch(chunk, interval, outputsize=100, key=key_use)
+
+            # Si algún ticker faltó, reintenta SOLO los faltantes con la otra key
+            # Sin esperar — la otra key tiene cuota fresca
+            faltantes = [s for s in chunk if s.upper() not in batch]
+            if faltantes and n_keys > 1:
+                otra_key = _TD_KEYS[(idx + 1) % n_keys]
+                print(f"  [batch] Reintentando {faltantes} con k=…{otra_key[-4:]}...")
+                batch2 = api_timeseries_batch(faltantes, interval, outputsize=100, key=otra_key)
+                batch.update(batch2)
 
             # Guardar en cache
             for sym, vals in batch.items():
                 _TD_CACHE[f"{sym}:{interval}"] = vals
 
-            # Solo marcar como None los que definitivamente fallaron tras todos los intentos
+            # Marcar como None los que definitivamente no llegaron
             for sym in chunk:
-                cache_key = f"{sym}:{interval}"
-                if cache_key not in _TD_CACHE:
-                    print(f"  [batch] ❌ {sym} sin datos tras {3} intentos — se omitirá")
-                    _TD_CACHE[cache_key] = None
+                if f"{sym}:{interval}" not in _TD_CACHE:
+                    _TD_CACHE[f"{sym}:{interval}"] = None
 
-            # Pausa entre chunks — suficiente para no saturar el rate limit
+            # Pausa mínima entre chunks del MISMO intervalo (evitar 429 en la misma key)
+            # Con 2 keys alternas, cada key descansa 1 chunk completo entre usos
             if idx < len(chunks) - 1:
-                time.sleep(12)
+                time.sleep(4)
 
-        time.sleep(8)  # pausa entre intervalos (1day → 1week)
+        time.sleep(3)  # pausa mínima entre intervalos
+
+    con_datos = sum(1 for v in _TD_CACHE.values() if v)
+    sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
+    print(f"  [batch] ✅ Listo: {con_datos} con datos, {sin_datos} sin datos")
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
@@ -2237,6 +2216,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "exit_info":exit_info,"setup":setup,
             "sr":sr_radar,
             "dca":dca_plan_r,
+            "vix":vix,"regimen":regimen_mercado(vix,spy),
         })
 
     print(f"  Radar completo: {len(resultados)} de {total} analizadas")
@@ -2795,6 +2775,7 @@ def render_radar_rows(radar, tc):
         crit = r.get("criterios",{}); sz = r.get("sizing",{})
         senal_est = ("COMPRAR" if estado in ("ROCKET","BUY") else
                      "VENDER" if estado in ("SHORT","EXIT","RUPTURA") else "MANTENER")
+        penaliz   = r.get("regimen",{}).get("penalizacion",0)  # para badge adj VIX
         score_block   = render_score_badge(score_aj, total_c, senal_est)
         decision_html = render_decision_box(setup)
         exit_html     = render_exit_banner(exit_info) if exit_info else ""
@@ -4423,7 +4404,7 @@ def status():
 
 
 # ── Función de build con reporte de etapas ───────────────
-_BUILD_TIMEOUT = 280   # segundos — Render free tier mata workers a los ~300s
+_BUILD_TIMEOUT = 480   # segundos — 8 min, suficiente para scanner + radar completos
 
 def _construir_con_etapas():
     """Wrapper de construir_dashboard() que va reportando el stage."""
