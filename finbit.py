@@ -553,85 +553,79 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
     }
 
 
-def calcular_dca(precio_actual: float, atr: float, soportes: list,
-                 capital_total: float, tc: float = 1.0,
-                 es_etf_3x: bool = False) -> dict:
+def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
+                 capital_total: float, es_etf_3x: bool = False) -> dict:
     """
-    Calcula un plan de acumulación DCA en 3 escalones basado en:
-    - Soportes reales del S/R (zonas con ≥2 toques)
-    - Proyección ATR como referencia de distancia entre escalones
-    - Capital dividido en 3 partes iguales
-
-    Reglas:
-    - Solo se acumula en soportes reales, no en caída libre
-    - Cada escalón tiene stop propio
-    - Si no hay soportes suficientes → usar 1x y 2x ATR como escalones
-    - ETF 3x: espaciado 1.5x mayor entre escalones (más volátil)
+    Plan de acumulación DCA en 3 escalones.
+    TODOS los precios en MXN — sin conversiones internas.
+    - precio_actual_mxn: precio actual en pesos
+    - atr_mxn: ATR diario en pesos (atr_usd * tc)
+    - soportes_mxn: lista de zonas S/R con precio en pesos
+    - capital_total: capital disponible en pesos (dividido en 3 partes iguales)
+    - es_etf_3x: espaciado mayor entre escalones por volatilidad
     """
-    if not capital_total or capital_total <= 0 or precio_actual <= 0:
+    if not capital_total or capital_total <= 0 or precio_actual_mxn <= 0:
         return {}
 
-    mult       = 1.5 if es_etf_3x else 1.0
+    mult        = 1.5 if es_etf_3x else 1.0
     cap_escalon = round(capital_total / 3, 2)
 
-    # Calcular escalones: usar soportes reales si existen, ATR si no
+    # Soportes ya en MXN — filtrar los que están bajo el precio actual
     soportes_validos = [
-        z for z in soportes
-        if z.get("fuerza", 0) >= 2 and z.get("precio", 0) < precio_actual
+        z for z in soportes_mxn
+        if z.get("fuerza", 0) >= 2 and z.get("precio_mxn", 0) < precio_actual_mxn
     ]
 
     if len(soportes_validos) >= 2:
-        # Escalones en soportes reales (más confiable)
-        e1_precio = soportes_validos[0]["precio"] * tc
-        e2_precio = soportes_validos[1]["precio"] * tc if len(soportes_validos) > 1 else e1_precio * 0.93
-        e3_precio = soportes_validos[2]["precio"] * tc if len(soportes_validos) > 2 else e2_precio * 0.93
+        e1_precio = soportes_validos[0]["precio_mxn"]
+        e2_precio = soportes_validos[1]["precio_mxn"] if len(soportes_validos) > 1 else e1_precio * 0.93
+        e3_precio = soportes_validos[2]["precio_mxn"] if len(soportes_validos) > 2 else e2_precio * 0.93
         metodo = "soportes S/R"
-    elif atr > 0:
-        # Escalones por ATR cuando no hay soportes suficientes
-        atr_mxn = atr * tc
-        e1_precio = precio_actual - (atr_mxn * 1.0 * mult)
-        e2_precio = precio_actual - (atr_mxn * 2.0 * mult)
-        e3_precio = precio_actual - (atr_mxn * 3.0 * mult)
+    elif atr_mxn > 0:
+        e1_precio = precio_actual_mxn - (atr_mxn * 1.0 * mult)
+        e2_precio = precio_actual_mxn - (atr_mxn * 2.0 * mult)
+        e3_precio = precio_actual_mxn - (atr_mxn * 3.0 * mult)
         metodo = "proyección ATR"
     else:
-        # Fallback porcentual
-        e1_precio = precio_actual * (0.93 if es_etf_3x else 0.95)
-        e2_precio = precio_actual * (0.86 if es_etf_3x else 0.90)
-        e3_precio = precio_actual * (0.79 if es_etf_3x else 0.85)
+        e1_precio = precio_actual_mxn * (0.93 if es_etf_3x else 0.95)
+        e2_precio = precio_actual_mxn * (0.86 if es_etf_3x else 0.90)
+        e3_precio = precio_actual_mxn * (0.79 if es_etf_3x else 0.85)
         metodo = "porcentual"
 
-    # Stop de cada escalón: 3% bajo ese escalón (ETF 3x: 5%)
+    # Asegurar que los escalones tengan precios positivos y descendentes
+    e1_precio = max(e1_precio, precio_actual_mxn * 0.01)
+    e2_precio = max(e2_precio, precio_actual_mxn * 0.01)
+    e3_precio = max(e3_precio, precio_actual_mxn * 0.01)
+
     stop_pct = 0.05 if es_etf_3x else 0.03
 
     escalones = []
     for i, ep in enumerate([e1_precio, e2_precio, e3_precio], 1):
-        ep = round(ep, 2)
-        stop_e = round(ep * (1 - stop_pct), 2)
+        ep        = round(ep, 2)
+        stop_e    = round(ep * (1 - stop_pct), 2)
         titulos_e = round(cap_escalon / ep, 4) if ep > 0 else 0
-        dist_pct  = round((ep - precio_actual) / precio_actual * 100, 1)
+        dist_pct  = round((ep - precio_actual_mxn) / precio_actual_mxn * 100, 1)
         escalones.append({
-            "escalon":    i,
-            "precio":     ep,
-            "stop":       stop_e,
-            "capital":    cap_escalon,
-            "titulos":    titulos_e,
-            "distancia":  dist_pct,
-            "label":      f"Escalón {i}" + (" — soporte fuerte" if metodo == "soportes S/R" else ""),
+            "escalon":   i,
+            "precio":    ep,
+            "stop":      stop_e,
+            "capital":   cap_escalon,
+            "titulos":   titulos_e,
+            "distancia": dist_pct,
         })
 
-    # Costo promedio si se compran los 3 escalones
     total_titulos = sum(e["titulos"] for e in escalones)
     costo_prom    = round(capital_total / total_titulos, 2) if total_titulos > 0 else 0
 
     return {
-        "escalones":   escalones,
+        "escalones":     escalones,
         "capital_total": capital_total,
-        "cap_escalon": cap_escalon,
-        "costo_prom":  costo_prom,
+        "cap_escalon":   cap_escalon,
+        "costo_prom":    costo_prom,
         "total_titulos": round(total_titulos, 4),
-        "metodo":      metodo,
-        "es_etf_3x":   es_etf_3x,
-        "activo":      True,
+        "metodo":        metodo,
+        "es_etf_3x":     es_etf_3x,
+        "activo":        True,
     }
 
 
@@ -813,12 +807,33 @@ def init_score_history():
 
 def guardar_score(ticker: str, score: int, senal: str, vix: float,
                   precio: float, estado: str):
-    """Guarda una entrada en score_history."""
-    con = sqlite3.connect(DB_FILE)
-    con.execute(
-        "INSERT INTO score_history (ticker,fecha,score,senal,vix,precio,estado) VALUES(?,?,?,?,?,?,?)",
-        (ticker.upper(), datetime.now().strftime("%Y-%m-%d %H:%M"), score, senal, round(vix,2), round(precio,4), estado)
-    )
+    """
+    Guarda score en historial — máximo 1 entrada por ticker por día.
+    Si ya existe una entrada hoy, la actualiza (no duplica).
+    Así el historial acumula día a día correctamente.
+    """
+    from datetime import timezone, timedelta
+    tz_mx  = timezone(timedelta(hours=-6))
+    hoy    = datetime.now(tz_mx).strftime("%Y-%m-%d")
+    ahora  = datetime.now(tz_mx).strftime("%Y-%m-%d %H:%M")
+    con    = sqlite3.connect(DB_FILE)
+    # Verificar si ya hay entrada de hoy para este ticker
+    existe = con.execute(
+        "SELECT id FROM score_history WHERE ticker=? AND fecha LIKE ?",
+        (ticker.upper(), f"{hoy}%")
+    ).fetchone()
+    if existe:
+        # Actualizar la entrada de hoy con los datos más recientes
+        con.execute(
+            "UPDATE score_history SET fecha=?,score=?,senal=?,vix=?,precio=?,estado=? WHERE id=?",
+            (ahora, score, senal, round(vix,2), round(precio,4), estado, existe[0])
+        )
+    else:
+        # Nueva entrada para este día
+        con.execute(
+            "INSERT INTO score_history (ticker,fecha,score,senal,vix,precio,estado) VALUES(?,?,?,?,?,?,?)",
+            (ticker.upper(), ahora, score, senal, round(vix,2), round(precio,4), estado)
+        )
     con.commit(); con.close()
 
 def get_score_previo(ticker: str) -> dict | None:
@@ -1783,23 +1798,30 @@ _TD_CACHE: dict = {}
 def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
     """
     Devuelve datos del cache.
-    Cache miss → petición individual al pool dual-key.
-    Si el batch marcó None → reintenta con la otra key.
+    Cache miss → petición individual rotando keys.
+    None en cache (batch falló) → reintenta con cada key antes de rendirse.
     """
     global _TD_CACHE
     key = f"{symbol.upper()}:{interval}"
 
     if key not in _TD_CACHE:
+        # Cache miss total: no estaba en el batch — intenta con cada key disponible
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
-        result = api_timeseries(symbol, interval, 100, exchange)
+        result = None
+        for k in (_TD_KEYS or [""]):
+            result = api_timeseries(symbol, interval, 100, exchange, key=k)
+            if result:
+                break
         _TD_CACHE[key] = result
 
     elif _TD_CACHE[key] is None:
-        # El batch falló para este ticker → reintenta con la otra key del pool
-        print(f"    [retry] {symbol} {interval} — reintentando con otra key...")
-        result = api_timeseries(symbol, interval, 100, exchange)
-        if result:
-            _TD_CACHE[key] = result
+        # Batch marcó este ticker como fallido → reintenta con todas las keys
+        print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
+        for k in (_TD_KEYS or [""]):
+            result = api_timeseries(symbol, interval, 100, exchange, key=k)
+            if result:
+                _TD_CACHE[key] = result
+                break
 
     return _TD_CACHE[key]
 
@@ -1807,50 +1829,84 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
 def _precargar_cache_batch(symbols: list, intervals: list = None):
     """
     Precarga el cache con batches de hasta 8 símbolos por key.
-    KEY_1 cubre el primer bloque, KEY_2 el segundo — doubles el ancho de banda.
-    Estructura:
-      - Chunk A (syms 0-7)  → KEY_1
-      - Chunk B (syms 8-15) → KEY_2
-      - Chunk C (syms 16+)  → KEY_1 (rotación)
+    KEY_1 y KEY_2 alternan por chunk (round-robin).
+    Si un chunk falla por rate limit → espera 65s y reintenta automáticamente.
+    Nunca pierde un ticker silenciosamente — siempre reintenta antes de marcar None.
     """
     global _TD_CACHE, _KEY_IDX
     if intervals is None:
         intervals = ["1day", "1week"]
 
     syms  = [s.upper() for s in symbols if s]
-    CHUNK = 8  # límite batch del plan Basic (8 símbolos por request)
-    n_keys= len(_TD_KEYS)
+    # Deduplicar preservando orden
+    seen = set(); syms = [s for s in syms if not (s in seen or seen.add(s))]
+    CHUNK = 8
+    n_keys = len(_TD_KEYS)
 
     print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos | "
           f"{n_keys} key(s) | chunks de {CHUNK}")
 
-    _KEY_IDX = 0  # resetear rotación al inicio de cada corrida
+    _KEY_IDX = 0  # resetear rotación
 
     for interval in intervals:
         chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
         for idx, chunk in enumerate(chunks):
-            # Asignar key según índice de chunk (round-robin entre keys)
             key_use = _TD_KEYS[idx % n_keys] if _TD_KEYS else ""
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:] if key_use else 'N/A'} → {', '.join(chunk)}")
-            batch = api_timeseries_batch(chunk, interval, outputsize=100, key=key_use)
+
+            # ── Intento con backoff automático ────────────────────────────
+            batch = {}
+            for intento in range(3):
+                batch = api_timeseries_batch(chunk, interval,
+                                             outputsize=100, key=key_use)
+                # Verificar cuántos tickers llegaron
+                llegaron = len(batch)
+                esperados = len(chunk)
+                if llegaron == esperados:
+                    break  # todo llegó bien
+                if llegaron == 0 and intento < 2:
+                    espera = 65 if intento == 0 else 120
+                    print(f"  [batch] ⚠️  0/{esperados} llegaron — "
+                          f"esperando {espera}s (intento {intento+2}/3)...")
+                    time.sleep(espera)
+                    # Alternar a la otra key en el reintento
+                    if n_keys > 1:
+                        key_use = _TD_KEYS[(idx + 1) % n_keys]
+                elif llegaron < esperados and intento < 2:
+                    # Llegaron algunos pero no todos — espera corta y reintenta
+                    # solo los que faltaron
+                    faltantes = [s for s in chunk if s not in batch]
+                    print(f"  [batch] ⚠️  Faltaron {faltantes} — "
+                          f"esperando 30s y reintentando...")
+                    time.sleep(30)
+                    batch2 = api_timeseries_batch(
+                        faltantes, interval, outputsize=100, key=key_use)
+                    batch.update(batch2)
+                    break
+                else:
+                    break
+
+            # Guardar en cache
             for sym, vals in batch.items():
                 _TD_CACHE[f"{sym}:{interval}"] = vals
-            # Marcar fallidos como None (se reintentarán en _get_cached)
+
+            # Solo marcar como None los que definitivamente fallaron tras todos los intentos
             for sym in chunk:
                 cache_key = f"{sym}:{interval}"
                 if cache_key not in _TD_CACHE:
+                    print(f"  [batch] ❌ {sym} sin datos tras {3} intentos — se omitirá")
                     _TD_CACHE[cache_key] = None
-            if len(chunks) > 1:
-                # Pausa entre chunks: plan Basic = 8 req/min por key.
-                # Con 2 keys en alternancia necesitamos ~8s entre chunks
-                # para no superar el límite y perder tickers silenciosamente.
-                time.sleep(8)
-        time.sleep(5)  # pausa entre intervalos (1day → 1week)
+
+            # Pausa entre chunks — suficiente para no saturar el rate limit
+            if idx < len(chunks) - 1:
+                time.sleep(12)
+
+        time.sleep(8)  # pausa entre intervalos (1day → 1week)
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
-    print(f"  [batch] Listo: {con_datos} con datos, {sin_datos} sin datos")
+    print(f"  [batch] ✅ Listo: {con_datos} con datos, {sin_datos} sin datos")
 
 
 
@@ -2047,14 +2103,15 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
         c = {k: v["ok"] for k, v in tf_1d["criterios"].items()}
 
         # ── PLAN DCA ──────────────────────────────────────────────────────
-        sr_scan   = an.get("sr", {})
-        dca_plan  = calcular_dca(
-            precio_actual = tf_1d["precio"],
-            atr           = tf_1d.get("atr", 0),
-            soportes      = sr_scan.get("soportes", []),
-            capital_total = capital,
-            tc            = tc,
-            es_etf_3x     = etf_peligroso,
+        sr_scan  = an.get("sr", {})
+        # Enriquecer soportes con precio en MXN para DCA
+        soportes_mxn = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_scan.get("soportes", [])]
+        dca_plan = calcular_dca(
+            precio_actual_mxn = precio_usd * tc,
+            atr_mxn           = tf_1d.get("atr", 0) * tc,
+            soportes_mxn      = soportes_mxn,
+            capital_total     = capital,
+            es_etf_3x         = etf_peligroso,
         )
 
         resultados.append({
@@ -2154,13 +2211,13 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
                 f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
+        soportes_mxn_r = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_radar.get("soportes", [])]
         dca_plan_r = calcular_dca(
-            precio_actual = precio,
-            atr           = tf.get("atr", 0),
-            soportes      = sr_radar.get("soportes", []),
-            capital_total = capital,
-            tc            = tc,
-            es_etf_3x     = es_etf_apalancado(nombre),
+            precio_actual_mxn = precio * tc,
+            atr_mxn           = tf.get("atr", 0) * tc,
+            soportes_mxn      = soportes_mxn_r,
+            capital_total     = capital,
+            es_etf_3x         = es_etf_apalancado(nombre),
         )
 
         resultados.append({
@@ -2908,7 +2965,10 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
                  vix: float = 20.0, spy: dict | None = None, regimen: dict | None = None):
     if spy     is None: spy     = {"sobre_ema200": True}
     if regimen is None: regimen = regimen_mercado(vix, spy)
-    ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
+    # Hora de México (UTC-6) — Render corre en UTC
+    from datetime import timezone, timedelta
+    tz_mx = timezone(timedelta(hours=-6))
+    ts  = datetime.now(tz_mx).strftime("%d/%m/%Y %H:%M")
     res = resumen_hist(ops)
 
     total_valor = sum(p.get("valor_mxn",0) for p in port_data)
@@ -2936,12 +2996,12 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     radar_rows = render_radar_rows(radar_data, tc)
     hist_rows  = render_hist_rows(ops)
 
-    n_radar=len(radar_data)
+    n_radar =len(radar_data)
     n_rocket=sum(1 for r in radar_data if r["estado"]=="ROCKET")
     n_buy   =sum(1 for r in radar_data if r["estado"]=="BUY")
-    n_watch =sum(1 for r in radar_data if r["estado"]=="WATCH")
+    n_watch =sum(1 for r in radar_data if r["estado"] in ("WATCH","LATERAL","BLOQUEADO","RUPTURA"))
     n_short =sum(1 for r in radar_data if r["estado"]=="SHORT")
-    n_skip  =sum(1 for r in radar_data if r["estado"]=="SKIP")
+    n_skip  =sum(1 for r in radar_data if r["estado"] in ("SKIP","EXIT"))
     total_univ=len(UNIVERSO)
 
     df=pd.DataFrame(ops) if ops else pd.DataFrame(columns=["fecha","tipo","total_mxn"])
@@ -4570,7 +4630,6 @@ def api_tickers():
 
 @app.route("/api/tickers/add", methods=["POST"])
 def api_tickers_add():
-    global _dash_html
     try:
         data     = flask_req.get_json(force=True) or {}
         ticker   = (data.get("ticker") or "").upper().strip()
@@ -4578,9 +4637,15 @@ def api_tickers_add():
         origen   = data.get("origen", "USA")
         if not ticker:
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
+        # Validar formato
+        import re as _re
+        if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
+            return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
         add_ticker_db(ticker, exchange, origen)
-        _dash_html = ""  # invalidar cache
-        return jsonify({"status": "ok", "ticker": ticker, "source": "twelvedata"})
+        # NO invalidamos el cache aquí — el ticker aparecerá en la próxima actualización
+        # Invalidar el cache causaba que el dashboard quedara en blanco esperando rebuild
+        return jsonify({"status": "ok", "ticker": ticker,
+                        "msg": f"{ticker} guardado. Aparecerá en la próxima actualización (↺)."})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
