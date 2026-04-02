@@ -1817,20 +1817,18 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
     key = f"{symbol.upper()}:{interval}"
 
     if key not in _TD_CACHE:
-        # Cache miss total: no estaba en el batch — intenta con cada key disponible
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 200, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
 
     elif _TD_CACHE[key] is None:
-        # Batch marcó este ticker como fallido → reintenta con todas las keys
         print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 200, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -1867,7 +1865,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:] if key_use else 'N/A'} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=200, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
 
             # Si algún ticker faltó, reintenta SOLO los faltantes con la otra key
             # Sin esperar — la otra key tiene cuota fresca
@@ -1875,7 +1873,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             if faltantes and n_keys > 1:
                 otra_key = _TD_KEYS[(idx + 1) % n_keys]
                 print(f"  [batch] Reintentando {faltantes} con k=…{otra_key[-4:]}...")
-                batch2 = api_timeseries_batch(faltantes, interval, outputsize=200, key=otra_key)
+                batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=otra_key)
                 batch.update(batch2)
 
             # Guardar en cache
