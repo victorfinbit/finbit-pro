@@ -1718,6 +1718,9 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     adx_ok   = adx_val >= 20
     hhhl_ok  = estructura_info["estructura"] == "alcista"   # HH+HL confirmado
 
+    # mult necesario para mostrar valores en MXN en el semáforo
+    mult = tc if origen == "USA" else 1.0
+
     criterios = {
         "emas":   {"ok":emas_ok,  "label":"EMAs 9>21>50",
                    "val":f"${e9*mult:,.2f}/${e21*mult:,.2f}/${e50*mult:,.2f}",
@@ -2063,70 +2066,73 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
 
     resultados = []
     for nombre, (symbol, exchange) in combinados.items():
-        tit = port_map.get(nombre, 0.0)
-        origen_ticker = "MX" if exchange == "BMV" else "USA"
-        an  = analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
-                                 tit, tc=tc, origen=origen_ticker)
-        tf_1d = an["tf"].get("1D", {})
-        if not tf_1d.get("valido"): continue
-
-        precio_usd    = tf_1d["precio"]
-        etf_peligroso = es_etf_apalancado(nombre)
-        exit_info     = detectar_exit(nombre, tf_1d, tf_1d.get("score", 0))
-
-        # ── SECTOR ETF ────────────────────────────────────────────────
-        sector_info   = get_sector_estado(nombre)
-
-        setup         = evaluar_setup(nombre, tf_1d, an["tf"], vix, spy, tit, exit_info)
-        estado        = setup["estado"]
-        score         = tf_1d["score"]
-        score_ajustado= setup.get("score_ajustado", max(0, score - regimen["penalizacion"]))
-
-        # Si sector bajista → degradar a WATCH (no bloquear completamente)
-        if not sector_info["alcista"] and estado == "BUY":
-            estado = "WATCH"
-            setup["advertencias"].append(
-                f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
-
         try:
-            guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
-        except Exception: pass
+            tit = port_map.get(nombre, 0.0)
+            origen_ticker = "MX" if exchange == "BMV" else "USA"
+            an  = analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
+                                     tit, tc=tc, origen=origen_ticker)
+            tf_1d = an["tf"].get("1D", {})
+            if not tf_1d.get("valido"): continue
 
-        c = {k: v["ok"] for k, v in tf_1d["criterios"].items()}
+            precio_usd    = tf_1d["precio"]
+            etf_peligroso = es_etf_apalancado(nombre)
+            exit_info     = detectar_exit(nombre, tf_1d, tf_1d.get("score", 0))
 
-        # ── PLAN DCA ──────────────────────────────────────────────────────
-        sr_scan  = an.get("sr", {})
-        # Enriquecer soportes con precio en MXN para DCA
-        soportes_mxn = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_scan.get("soportes", [])]
-        dca_plan = calcular_dca(
-            precio_actual_mxn = precio_usd * tc,
-            atr_mxn           = tf_1d.get("atr", 0) * tc,
-            soportes_mxn      = soportes_mxn,
-            capital_total     = capital,
-            es_etf_3x         = etf_peligroso,
-        )
+            # ── SECTOR ETF ────────────────────────────────────────────────
+            sector_info   = get_sector_estado(nombre)
 
-        resultados.append({
-            "nombre": nombre, "estado": estado,
-            "precio_usd": precio_usd, "precio_mxn": precio_usd * tc,
-            "entrada_mxn": tf_1d.get("entrada_sugerida", precio_usd) * tc,
-            "stop_mxn": tf_1d.get("stop", 0) * tc, "obj_mxn": tf_1d.get("objetivo", 0) * tc,
-            "rsi": tf_1d["rsi"], "rr": tf_1d["rr"], "macd_ok": tf_1d["macd_alcista"],
-            "ema200_ok": c.get("ema200", False),
-            "score": score, "score_ajustado": score_ajustado,
-            "total_criterios": tf_1d.get("total_criterios", 11),
-            "criterios": tf_1d["criterios"], "sizing": tf_1d.get("sizing", {}),
-            "tfs": an["tf"], "confluencia": an["confluencia"], "titulos_cartera": tit,
-            "etf_apalancado": etf_peligroso,
-            "exit_info": exit_info,
-            "vix": vix, "regimen": regimen,
-            "adx": tf_1d.get("adx", 0),
-            "obv": tf_1d.get("obv", {}),
-            "sector": sector_info,
-            "setup": setup,
-            "sr": an.get("sr", {}),
-            "dca": dca_plan,
-        })
+            setup         = evaluar_setup(nombre, tf_1d, an["tf"], vix, spy, tit, exit_info)
+            estado        = setup["estado"]
+            score         = tf_1d["score"]
+            score_ajustado= setup.get("score_ajustado", max(0, score - regimen["penalizacion"]))
+
+            # Si sector bajista → degradar a WATCH (no bloquear completamente)
+            if not sector_info["alcista"] and estado == "BUY":
+                estado = "WATCH"
+                setup["advertencias"].append(
+                    f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
+
+            try:
+                guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
+            except Exception: pass
+
+            c = {k: v["ok"] for k, v in tf_1d["criterios"].items()}
+
+            # ── PLAN DCA ──────────────────────────────────────────────────────
+            sr_scan  = an.get("sr", {})
+            soportes_mxn = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_scan.get("soportes", [])]
+            dca_plan = calcular_dca(
+                precio_actual_mxn = precio_usd * tc,
+                atr_mxn           = tf_1d.get("atr", 0) * tc,
+                soportes_mxn      = soportes_mxn,
+                capital_total     = capital,
+                es_etf_3x         = etf_peligroso,
+            )
+
+            resultados.append({
+                "nombre": nombre, "estado": estado,
+                "precio_usd": precio_usd, "precio_mxn": precio_usd * tc,
+                "entrada_mxn": tf_1d.get("entrada_sugerida", precio_usd) * tc,
+                "stop_mxn": tf_1d.get("stop", 0) * tc, "obj_mxn": tf_1d.get("objetivo", 0) * tc,
+                "rsi": tf_1d["rsi"], "rr": tf_1d["rr"], "macd_ok": tf_1d["macd_alcista"],
+                "ema200_ok": c.get("ema200", False),
+                "score": score, "score_ajustado": score_ajustado,
+                "total_criterios": tf_1d.get("total_criterios", 11),
+                "criterios": tf_1d["criterios"], "sizing": tf_1d.get("sizing", {}),
+                "tfs": an["tf"], "confluencia": an["confluencia"], "titulos_cartera": tit,
+                "etf_apalancado": etf_peligroso,
+                "exit_info": exit_info,
+                "vix": vix, "regimen": regimen,
+                "adx": tf_1d.get("adx", 0),
+                "obv": tf_1d.get("obv", {}),
+                "sector": sector_info,
+                "setup": setup,
+                "sr": an.get("sr", {}),
+                "dca": dca_plan,
+            })
+        except Exception as e:
+            print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
+            continue
 
     orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
     resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
@@ -4507,18 +4513,28 @@ def _construir_con_etapas():
                 try:
                     scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                                vix=vix, spy=spy)
+                    print(f"[build] Scanner: {len(scan_data)} tickers procesados")
                 except Exception as e:
-                    print(f"[build] Scanner error (continuando): {e}")
+                    import traceback
+                    print(f"[build] Scanner error: {e}")
+                    traceback.print_exc()
                     scan_data = []
+            else:
+                print(f"[build] ⚠️  Timeout antes del scanner — omitiendo")
             _build_stage = "scan_ok"
 
             if not _timeout_exceeded():
                 try:
                     radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
                                               scan_results=scan_data, vix=vix, spy=spy)
+                    print(f"[build] Radar: {len(radar_data)} tickers procesados")
                 except Exception as e:
-                    print(f"[build] Radar error (continuando): {e}")
+                    import traceback
+                    print(f"[build] Radar error: {e}")
+                    traceback.print_exc()
                     radar_data = []
+            else:
+                print(f"[build] ⚠️  Timeout antes del radar — omitiendo")
             _build_stage = "radar_ok"
         else:
             regimen = regimen_mercado(vix, spy)
