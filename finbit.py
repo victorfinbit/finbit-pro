@@ -278,7 +278,7 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     use_key = key or _next_key()
     if not use_key:
         return None
-    out = min(outputsize, 100)
+    out = min(outputsize, 5000)  # TwelveData permite hasta 5000 velas
     params = {"symbol": symbol, "interval": interval, "outputsize": out,
               "apikey": use_key, "order": "ASC"}
     if exchange:
@@ -314,7 +314,7 @@ def api_timeseries_batch(symbols: list, interval: str,
     use_key = key or _next_key()
     if not use_key or not symbols:
         return {}
-    out     = min(outputsize, 100)
+    out = min(outputsize, 5000)  # TwelveData permite hasta 5000 velas
     sym_str = ",".join(s.upper() for s in symbols)
     params  = {"symbol": sym_str, "interval": interval, "outputsize": out,
                "apikey": use_key, "order": "ASC"}
@@ -1719,26 +1719,41 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     hhhl_ok  = estructura_info["estructura"] == "alcista"   # HH+HL confirmado
 
     criterios = {
-        "emas":   {"ok":emas_ok,  "label":"EMAs 9>21>50",   "val":f"{e9:.2f}/{e21:.2f}/{e50:.2f}",
-                   "razon":f"Precio {precio:.2f} {'>' if emas_ok else '<'} EMA9 {e9:.2f}"},
-        "ema200": {"ok":e200_ok,  "label":"Precio > EMA200","val":f"{e200:.2f}",
-                   "razon":f"EMA200 en {e200:.2f}. Precio {((precio-e200)/e200*100):+.1f}% {'encima' if e200_ok else 'DEBAJO'}."},
-        "macd":   {"ok":macd_ok,  "label":"MACD alcista",   "val":f"{ml_v:.3f}",
-                   "razon":f"MACD {ml_v:.3f} vs señal {ms_v:.3f}. {'Momentum comprador.' if macd_ok else 'Sin momentum.'}"},
-        "macd_h": {"ok":macdh_ok, "label":"Histograma >0",  "val":f"{mh_v:+.3f}",
-                   "razon":f"Histograma {'positivo.' if macdh_ok else 'negativo.'}"},
-        "rsi":    {"ok":rsi_ok,   "label":"RSI 40-72",      "val":f"{rv:.0f}",
-                   "razon":("Sobrecomprado >75." if rv>=75 else f"RSI {rv:.0f}: {'alcista.' if rv>=55 else 'neutral.' if rv>=40 else 'debil.'}")},
-        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med","val":f"{vol_now/vol_avg:.1f}x" if vol_avg and not _sin_volumen else "N/D",
-                   "razon":("Sin datos de volumen (fuente alternativa — criterio omitido)." if _sin_volumen
-                            else f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x).' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}")},
-        "rr":     {"ok":rr_ok,    "label":f"R:R>={rr_min:.0f}x", "val":f"{rr_val:.1f}x",
-                   "razon":f"Stop ATR {stop:.2f} Obj {objetivo:.2f}. R:R {rr_val:.1f}x {'valido.' if rr_ok else 'insuficiente.'}"},
-        "soporte":{"ok":sop_ok,   "label":"Sobre soporte",  "val":f"{soporte:.2f}",
-                   "razon":f"Soporte en {soporte:.2f}. {'OK.' if sop_ok else 'Roto — señal bajista.'}"},
-        "adx":    {"ok":adx_ok,   "label":"ADX≥20 tendencia","val":f"{adx_val:.0f}",
-                   "razon":f"ADX {adx_val:.0f}: {'✅ Tendencia real.' if adx_val>=25 else '⚠️ Tendencia débil.' if adx_val>=20 else '❌ Sin tendencia.'}"},
-        "hhhl":   {"ok":hhhl_ok,  "label":"Estructura HH+HL","val":estructura_info["estructura"],
+        "emas":   {"ok":emas_ok,  "label":"EMAs 9>21>50",
+                   "val":f"${e9*mult:,.2f}/${e21*mult:,.2f}/${e50*mult:,.2f}",
+                   "razon":f"Precio ${precio*mult:,.2f} {'>' if emas_ok else '<'} EMA9 ${e9*mult:,.2f}"},
+        "ema200": {"ok":e200_ok,  "label":"Precio > EMA200",
+                   "val":f"${e200*mult:,.2f}",
+                   "razon":(f"EMA200 en ${e200*mult:,.2f} MXN. "
+                            f"Precio {((precio-e200)/e200*100):+.1f}% "
+                            f"{'✅ ENCIMA' if e200_ok else '❌ DEBAJO'} de la EMA200. "
+                            f"{'Tendencia alcista de largo plazo.' if e200_ok else 'Cuidado — bajo EMA200 es zona de peligro.'}")},
+        "macd":   {"ok":macd_ok,  "label":"MACD alcista",
+                   "val":f"{ml_v:.3f}",
+                   "razon":f"MACD {ml_v:.3f} vs señal {ms_v:.3f}. {'✅ Momentum comprador.' if macd_ok else '❌ Sin momentum — vendedores en control.'}"},
+        "macd_h": {"ok":macdh_ok, "label":"Histograma >0",
+                   "val":f"{mh_v:+.3f}",
+                   "razon":f"Histograma {'✅ positivo — momentum acelerando.' if macdh_ok else '❌ negativo — momentum frenando.'}"},
+        "rsi":    {"ok":rsi_ok,   "label":"RSI 40-72",
+                   "val":f"{rv:.0f}",
+                   "razon":("⚠️ Sobrecomprado >72 — riesgo de corrección." if rv>72
+                            else f"RSI {rv:.0f}: {'✅ zona alcista.' if rv>=55 else '✅ zona neutral — ok para entrar.' if rv>=40 else '❌ débil — no entrar.'}")},
+        "volumen":{"ok":vol_ok,   "label":"Volumen≥1.5x med",
+                   "val":f"{vol_now/vol_avg:.1f}x" if vol_avg and not _sin_volumen else "N/D",
+                   "razon":("Sin datos de volumen — criterio omitido." if _sin_volumen
+                            else f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x) — movimiento institucional.' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}")},
+        "rr":     {"ok":rr_ok,    "label":f"R:R>={rr_min:.0f}x",
+                   "val":f"{rr_val:.1f}x",
+                   "razon":(f"Stop ${stop*mult:,.2f} MXN · Objetivo ${objetivo*mult:,.2f} MXN · "
+                            f"R:R {rr_val:.1f}x {'✅ válido.' if rr_ok else '❌ insuficiente — el riesgo supera la recompensa.'}")},
+        "soporte":{"ok":sop_ok,   "label":"Sobre soporte",
+                   "val":f"${soporte*mult:,.2f}",
+                   "razon":f"Soporte en ${soporte*mult:,.2f} MXN. {'✅ Precio sobre soporte.' if sop_ok else '❌ Soporte roto — señal bajista.'}"},
+        "adx":    {"ok":adx_ok,   "label":"ADX≥20 tendencia",
+                   "val":f"{adx_val:.0f}",
+                   "razon":f"ADX {adx_val:.0f}: {'✅ Tendencia real y fuerte.' if adx_val>=25 else '⚠️ Tendencia débil — precaución.' if adx_val>=20 else '❌ Sin tendencia — mercado lateral.'}"},
+        "hhhl":   {"ok":hhhl_ok,  "label":"Estructura HH+HL",
+                   "val":estructura_info["estructura"],
                    "razon":estructura_info["desc"] or f"Estructura: {estructura_info['estructura']}"},
         "obv":    {"ok":obv_info["ok"],"label":"OBV sin divergencia",
                    "val":obv_info["tendencia"],
@@ -1806,7 +1821,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 100, exchange, key=k)
+            result = api_timeseries(symbol, interval, 200, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -1815,7 +1830,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         # Batch marcó este ticker como fallido → reintenta con todas las keys
         print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 100, exchange, key=k)
+            result = api_timeseries(symbol, interval, 200, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -1852,7 +1867,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:] if key_use else 'N/A'} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=100, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=200, key=key_use)
 
             # Si algún ticker faltó, reintenta SOLO los faltantes con la otra key
             # Sin esperar — la otra key tiene cuota fresca
@@ -1860,7 +1875,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             if faltantes and n_keys > 1:
                 otra_key = _TD_KEYS[(idx + 1) % n_keys]
                 print(f"  [batch] Reintentando {faltantes} con k=…{otra_key[-4:]}...")
-                batch2 = api_timeseries_batch(faltantes, interval, outputsize=100, key=otra_key)
+                batch2 = api_timeseries_batch(faltantes, interval, outputsize=200, key=otra_key)
                 batch.update(batch2)
 
             # Guardar en cache
