@@ -4599,6 +4599,20 @@ def _construir_con_etapas():
         _build_error = str(e)
         print(f"[build] ERROR: {e}")
         import traceback; traceback.print_exc()
+
+        # ── Si el build falla (sin créditos API, timeout, etc.)
+        #    servir el dashboard anterior en lugar de pantalla de error
+        if not _dash_html and os.path.exists(OUTPUT_FILE):
+            try:
+                with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+                    cached = f.read()
+                if len(cached) > 500:
+                    with _dash_lock:
+                        _dash_html = cached
+                    _build_stage = "html_ok"
+                    print(f"[build] ⚠️  Build falló — sirviendo dashboard anterior desde disco")
+            except Exception:
+                pass
         # Intentar servir un dashboard mínimo con lo que tengamos
         try:
             tc_fallback = 17.5
@@ -4817,12 +4831,23 @@ if __name__ == "__main__":
 
     init_db()
 
+    # ── Cargar dashboard anterior si existe (sin créditos de API,
+    #    mostramos el último dashboard guardado en lugar de pantalla vacía)
+    if os.path.exists(OUTPUT_FILE):
+        try:
+            with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+                _cached = f.read()
+            if len(_cached) > 500:   # archivo válido, no vacío
+                with _dash_lock:
+                    _dash_html = _cached
+                print(f"[server] 📂 Dashboard anterior cargado desde disco ({len(_cached)//1024}KB)")
+                print(f"[server]    Puedes usar Finbit mientras se actualiza en background.")
+        except Exception as _e:
+            print(f"[server] No se pudo cargar dashboard anterior: {_e}")
+
     # Lanzar build en segundo plano — Flask responde de inmediato
-    # con la loading screen mientras se construye el dashboard
     threading.Thread(target=_construir_con_etapas, daemon=True).start()
 
     port = int(os.environ.get("PORT", 5000))
     print(f"[server] Puerto: {port}  |  http://localhost:{port}")
-    print(f"[server] Loading screen sirve instantaneamente")
-    print(f"[server] Dashboard aparece cuando el analisis termina\n")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
