@@ -177,17 +177,50 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
 
 def get_all_scanner_tickers() -> dict:
     """
-    Retorna el diccionario completo de tickers para el scanner,
-    combinando SCANNER_TICKERS + DB, sin duplicados.
+    Retorna el diccionario completo de tickers para el scanner.
+    La DB tiene prioridad: si un ticker está en DB con activo=0,
+    NO aparece aunque esté hardcoded en SCANNER_TICKERS.
     """
-    combinados = dict(SCANNER_TICKERS)
-    combinados.update(get_tickers_db())
+    con = sqlite3.connect(DB_FILE)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute("SELECT ticker, exchange, activo FROM tickers").fetchall()
+    except Exception:
+        rows = []
+    con.close()
+
+    db_map = {r["ticker"]: (r["activo"], r["exchange"] or "") for r in rows}
+
+    combinados = {}
+    # Hardcoded — solo si no están eliminados en DB
+    for t, val in SCANNER_TICKERS.items():
+        estado = db_map.get(t)
+        if estado is None or estado[0] == 1:
+            combinados[t] = val
+    # Custom de DB con activo=1
+    for t, (activo, exchange) in db_map.items():
+        if activo == 1:
+            combinados[t] = (t, exchange)
     return combinados
 
 def remove_ticker_db(ticker: str):
-    """Desactiva un ticker del scanner."""
+    """
+    Desactiva un ticker del scanner.
+    Funciona para cualquier ticker — incluyendo los hardcoded en SCANNER_TICKERS.
+    Hace INSERT OR REPLACE con activo=0 para que la DB prevalezca sobre el código.
+    """
+    t = ticker.upper()
+    # Buscar el exchange del ticker hardcoded si existe
+    exchange = ""
+    for src in (SCANNER_TICKERS, UNIVERSO):
+        if t in src:
+            exchange = src[t][1]
+            break
     con = sqlite3.connect(DB_FILE)
-    con.execute("UPDATE tickers SET activo=0 WHERE ticker=?", (ticker.upper(),))
+    con.execute(
+        "INSERT OR REPLACE INTO tickers (ticker, exchange, origen, activo) VALUES (?,?,?,0)",
+        (t, exchange, "USA")
+    )
     con.commit()
     con.close()
 
@@ -258,15 +291,32 @@ API_BASE = "https://api.twelvedata.com"
 
 # Índice global del pool de keys (alterna entre KEY_1 y KEY_2)
 _KEY_IDX: int = 0
+# Set de keys agotadas en esta corrida (se resetea en cada build)
+_KEYS_AGOTADAS: set = set()
+
+def _es_error_creditos(d: dict) -> bool:
+    """Detecta si TwelveData respondió con error de créditos/límite dentro del JSON."""
+    if not isinstance(d, dict): return False
+    code = d.get("code", 0)
+    msg  = str(d.get("message", "")).lower()
+    return code in (429, 402) or "run out" in msg or "credits" in msg or "limit" in msg
 
 def _next_key() -> str:
-    """Devuelve la siguiente key del pool en round-robin."""
+    """Devuelve la siguiente key disponible del pool, saltando las agotadas."""
     global _KEY_IDX
     if not _TD_KEYS:
         return ""
-    key = _TD_KEYS[_KEY_IDX % len(_TD_KEYS)]
-    _KEY_IDX += 1
-    return key
+    # Intentar cada key hasta encontrar una no agotada
+    for _ in range(len(_TD_KEYS)):
+        key = _TD_KEYS[_KEY_IDX % len(_TD_KEYS)]
+        _KEY_IDX += 1
+        if key not in _KEYS_AGOTADAS:
+            return key
+    # Todas agotadas — resetear y devolver la primera de todas formas
+    print("  ⚠️  Todas las API keys agotadas — reintentando con KEY_1")
+    _KEYS_AGOTADAS.clear()
+    _KEY_IDX = 0
+    return _TD_KEYS[0] if _TD_KEYS else ""
 
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
@@ -274,34 +324,51 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     """
     Petición individual a TwelveData.
     Si no se pasa key, toma la siguiente del pool dual-key.
+    Si la key está agotada (créditos), la marca y prueba la siguiente automáticamente.
     """
-    use_key = key or _next_key()
-    if not use_key:
-        return None
-    out = min(outputsize, 5000)  # TwelveData permite hasta 5000 velas
-    params = {"symbol": symbol, "interval": interval, "outputsize": out,
-              "apikey": use_key, "order": "ASC"}
-    if exchange:
-        params["exchange"] = exchange
-    for intento in range(2):
-        try:
-            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
-            if r.status_code == 429:
-                print(f"    ⏳ Rate limit ({symbol}) key …{use_key[-4:]} — esperando 15s...")
-                time.sleep(15)
-                continue
-            d = r.json()
-            if "values" in d and d["values"]:
-                print(f"    ✅ TD ({symbol} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
-                return d["values"]
-            print(f"    ❌ TD ({symbol} {interval}): {str(d)[:120]}")
-            return None
-        except requests.exceptions.Timeout:
-            print(f"    ⏱️  TD Timeout ({symbol}) intento {intento+1}/2")
-            time.sleep(3)
-        except Exception as e:
-            print(f"    ❌ TD exception ({symbol}): {e}")
-            time.sleep(3)
+    global _KEYS_AGOTADAS
+    out = min(outputsize, 5000)
+
+    # Intentar con hasta N keys disponibles
+    keys_a_probar = [key] if key else [_next_key()]
+    # Si hay más keys en el pool, agregarlas como fallback
+    if not key and len(_TD_KEYS) > 1:
+        for k in _TD_KEYS:
+            if k not in keys_a_probar:
+                keys_a_probar.append(k)
+
+    for use_key in keys_a_probar:
+        if not use_key or use_key in _KEYS_AGOTADAS:
+            continue
+        params = {"symbol": symbol, "interval": interval, "outputsize": out,
+                  "apikey": use_key, "order": "ASC"}
+        if exchange:
+            params["exchange"] = exchange
+        for intento in range(2):
+            try:
+                r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
+                if r.status_code == 429:
+                    print(f"    ⏳ Rate limit HTTP ({symbol}) key …{use_key[-4:]} — esperando 15s...")
+                    time.sleep(15)
+                    continue
+                d = r.json()
+                if _es_error_creditos(d):
+                    print(f"    ⚠️  Key …{use_key[-4:]} agotada — cambiando a la siguiente key")
+                    _KEYS_AGOTADAS.add(use_key)
+                    break  # salir del loop de intentos, probar siguiente key
+                if "values" in d and d["values"]:
+                    print(f"    ✅ TD ({symbol} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
+                    return d["values"]
+                print(f"    ❌ TD ({symbol} {interval}): {str(d)[:120]}")
+                return None
+            except requests.exceptions.Timeout:
+                print(f"    ⏱️  TD Timeout ({symbol}) intento {intento+1}/2")
+                time.sleep(3)
+            except Exception as e:
+                print(f"    ❌ TD exception ({symbol}): {e}")
+                time.sleep(3)
+
+    print(f"    ❌ TD ({symbol}): todas las keys fallaron o agotadas")
     return None
 
 
@@ -309,45 +376,61 @@ def api_timeseries_batch(symbols: list, interval: str,
                           outputsize: int = 100, key: str = "") -> dict:
     """
     Llama TwelveData con hasta 8 símbolos en UNA sola request.
-    Si hay rate limit (429), espera 15s y reintenta UNA vez — sin bloquear minutos.
+    Si la key está agotada, cambia a la siguiente automáticamente.
     """
-    use_key = key or _next_key()
-    if not use_key or not symbols:
+    global _KEYS_AGOTADAS
+    if not symbols:
         return {}
-    out = min(outputsize, 5000)  # TwelveData permite hasta 5000 velas
+    out = min(outputsize, 5000)
     sym_str = ",".join(s.upper() for s in symbols)
-    params  = {"symbol": sym_str, "interval": interval, "outputsize": out,
-               "apikey": use_key, "order": "ASC"}
-    try:
-        r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
-        if r.status_code == 429:
-            print(f"    ⏳ Rate limit batch k=…{use_key[-4:]} — esperando 15s...")
-            time.sleep(15)
+
+    # Keys a probar en orden
+    keys_a_probar = [key] if key else [_next_key()]
+    if len(_TD_KEYS) > 1:
+        for k in _TD_KEYS:
+            if k not in keys_a_probar:
+                keys_a_probar.append(k)
+
+    for use_key in keys_a_probar:
+        if not use_key or use_key in _KEYS_AGOTADAS:
+            continue
+        params = {"symbol": sym_str, "interval": interval, "outputsize": out,
+                  "apikey": use_key, "order": "ASC"}
+        try:
             r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
-        d = r.json()
-        resultado = {}
-        if len(symbols) == 1:
-            sym = symbols[0].upper()
-            if "values" in d and d["values"]:
-                resultado[sym] = d["values"]
-                print(f"    ✅ TD ({sym} {interval}) k=…{use_key[-4:]}: {len(d['values'])} velas")
-            else:
-                print(f"    ❌ TD ({sym}): {str(d)[:80]}")
-        else:
-            for sym in symbols:
-                sym_up = sym.upper()
-                entry  = d.get(sym_up, {})
-                vals   = entry.get("values", []) if isinstance(entry, dict) else []
-                if vals:
-                    resultado[sym_up] = vals
-                    print(f"    ✅ TD ({sym_up} {interval}) k=…{use_key[-4:]}: {len(vals)} velas")
+            if r.status_code == 429:
+                print(f"    ⏳ Rate limit batch HTTP k=…{use_key[-4:]} — esperando 15s...")
+                time.sleep(15)
+                r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
+            d = r.json()
+            if _es_error_creditos(d):
+                print(f"    ⚠️  Key …{use_key[-4:]} agotada en batch — cambiando a la siguiente key")
+                _KEYS_AGOTADAS.add(use_key)
+                continue  # probar siguiente key
+            resultado = {}
+            if len(symbols) == 1:
+                sym = symbols[0].upper()
+                if "values" in d and d["values"]:
+                    resultado[sym] = d["values"]
+                    print(f"    ✅ TD ({sym} {interval}) k=…{use_key[-4:]}: {len(d['values'])} velas")
                 else:
-                    err = entry.get("message","") if isinstance(entry, dict) else str(entry)[:60]
-                    print(f"    ❌ TD ({sym_up}): {err or 'sin valores'}")
-        return resultado
-    except Exception as e:
-        print(f"    ❌ TD batch exception k=…{use_key[-4:]}: {e}")
-        return {}
+                    print(f"    ❌ TD ({sym}): {str(d)[:80]}")
+            else:
+                for sym in symbols:
+                    sym_up = sym.upper()
+                    entry  = d.get(sym_up, {})
+                    vals   = entry.get("values", []) if isinstance(entry, dict) else []
+                    if vals:
+                        resultado[sym_up] = vals
+                        print(f"    ✅ TD ({sym_up} {interval}) k=…{use_key[-4:]}: {len(vals)} velas")
+                    else:
+                        err = entry.get("message","") if isinstance(entry, dict) else str(entry)[:60]
+                        print(f"    ❌ TD ({sym_up}): {err or 'sin valores'}")
+            return resultado
+        except Exception as e:
+            print(f"    ❌ TD batch exception k=…{use_key[-4:]}: {e}")
+
+    return {}
 
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
@@ -624,79 +707,6 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
         "es_etf_3x":     es_etf_3x,
         "activo":        True,
     }
-
-
-# ── MODO GANGA ────────────────────────────────────────────
-def detectar_ganga(tf_1d: dict, sr: dict, obv_info: dict,
-                   closes: list, volumes: list) -> dict:
-    """
-    Detecta acumulacion anticipada antes de que la tendencia se alinee.
-    Criterios (solo acciones, NO ETFs 3x):
-      1. Soporte con >= 3 toques historicos bajo el precio actual
-      2. OBV sube aunque precio baje (divergencia alcista)
-      3. RSI entre 25 y 40
-      4. Volumen bajando en dias rojos (vendedores agotados)
-    Necesita >= 3 de 4 para activarse.
-    """
-    if not tf_1d or not tf_1d.get("valido"):
-        return {"es_ganga": False, "criterios_ok": [], "fuerza": 0, "soportes_fuertes": []}
-
-    rsi_val = tf_1d.get("rsi", 50)
-    precio  = tf_1d.get("precio", 0)
-    obv_div = obv_info.get("div_alcista", False)
-
-    # Criterio 1: soporte fuerte >= 3 toques bajo el precio
-    soportes_fuertes = [z for z in sr.get("soportes", [])
-                        if z.get("fuerza", 0) >= 3 and z.get("precio", precio+1) < precio]
-    c1 = len(soportes_fuertes) > 0
-
-    # Criterio 2: OBV divergencia alcista
-    c2 = obv_div
-
-    # Criterio 3: RSI en sobreventa moderada
-    c3 = 25 <= rsi_val <= 40
-
-    # Criterio 4: volumen decreciente en dias rojos recientes
-    c4 = False
-    if closes and volumes and len(closes) >= 6:
-        vols_rojos = [volumes[i] for i in range(len(closes)-5, len(closes))
-                      if closes[i] < closes[i-1]]
-        if len(vols_rojos) >= 2:
-            vol_media = sum(volumes[-20:]) / max(len(volumes[-20:]), 1)
-            c4 = all(v < vol_media * 0.85 for v in vols_rojos)
-
-    criterios_ok = []
-    if c1: criterios_ok.append(f"Soporte {soportes_fuertes[0]['fuerza']}x toques en ${soportes_fuertes[0]['precio']:.2f}")
-    if c2: criterios_ok.append("OBV sube mientras precio baja — acumulacion institucional")
-    if c3: criterios_ok.append(f"RSI {rsi_val:.0f} en sobreventa (25-40)")
-    if c4: criterios_ok.append("Volumen bajando en dias rojos — vendedores agotandose")
-
-    fuerza = len(criterios_ok)
-    return {
-        "es_ganga":         fuerza >= 3,
-        "criterios_ok":     criterios_ok,
-        "fuerza":           fuerza,
-        "soportes_fuertes": soportes_fuertes,
-    }
-
-
-def render_ganga_panel(ganga: dict) -> str:
-    if not ganga or not ganga.get("es_ganga"):
-        return ""
-    items = "".join(f'<li style="margin:2px 0">{c}</li>' for c in ganga.get("criterios_ok", []))
-    sops  = ganga.get("soportes_fuertes", [])
-    sop_txt = (f'Soporte clave: <strong>${sops[0]["precio"]:.2f}</strong> ({sops[0]["fuerza"]}x toques)'
-               if sops else "")
-    return (f'<div style="background:#f0fdf4;border:2px solid #86efac;border-radius:8px;'
-            f'padding:11px 14px;margin-bottom:10px;font-size:11px">'
-            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:5px">'
-            f'🏷️ GANGA — acumulacion anticipada</div>'
-            f'<ul style="margin:0 0 6px 14px;color:#166534">{items}</ul>'
-            f'<div style="color:#14532d;font-size:10px">{sop_txt}</div>'
-            f'<div style="margin-top:8px;background:#dcfce7;border-radius:5px;padding:5px 9px;'
-            f'color:#166534;font-size:10px">'
-            f'Entrada escalonada con el plan DCA de abajo. Stop bajo el soporte.</div>'
-            f'</div>')
 
 
 def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
@@ -2112,8 +2122,10 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
 def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None = None,
                    vix: float = 20.0, spy: dict | None = None):
-    global _TD_CACHE
-    _TD_CACHE = {}
+    global _TD_CACHE, _KEYS_AGOTADAS, _KEY_IDX
+    _TD_CACHE      = {}
+    _KEYS_AGOTADAS = set()   # resetear al inicio de cada corrida
+    _KEY_IDX       = 0
 
     if spy is None: spy = {}
     regimen = regimen_mercado(vix, spy)
@@ -2166,17 +2178,6 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 setup["advertencias"].append(
                     f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-            # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
-            ganga_info = {}
-            if not etf_peligroso and estado not in ("BUY", "ROCKET", "EXIT"):
-                vals_cache = _get_cached(symbol, "1day", exchange) or []
-                closes_g   = [float(x["close"]) for x in vals_cache]
-                volumes_g  = [float(x.get("volume", 0)) for x in vals_cache]
-                ganga_info = detectar_ganga(tf_1d, an.get("sr", {}),
-                                            tf_1d.get("obv", {}), closes_g, volumes_g)
-                if ganga_info.get("es_ganga"):
-                    estado = "GANGA"
-
             try:
                 guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
             except Exception: pass
@@ -2214,13 +2215,12 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "setup": setup,
                 "sr": an.get("sr", {}),
                 "dca": dca_plan,
-                "ganga": ganga_info,
             })
         except Exception as e:
             print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
             continue
 
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
     resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
     return resultados
 
@@ -2294,13 +2294,6 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             setup["advertencias"].append(
                 f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-        # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
-        ganga_info_r = {}
-        if not es_etf_apalancado(nombre) and estado not in ("BUY", "ROCKET", "EXIT"):
-            ganga_info_r = detectar_ganga(tf, sr_radar, tf.get("obv", {}), closes, volumes)
-            if ganga_info_r.get("es_ganga"):
-                estado = "GANGA"
-
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
         soportes_mxn_r = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_radar.get("soportes", [])]
         dca_plan_r = calcular_dca(
@@ -2328,12 +2321,11 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "exit_info":exit_info,"setup":setup,
             "sr":sr_radar,
             "dca":dca_plan_r,
-            "ganga":ganga_info_r,
             "vix":vix,"regimen":regimen_mercado(vix,spy),
         })
 
     print(f"  Radar completo: {len(resultados)} de {total} analizadas")
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
     resultados.sort(key=lambda x:(orden.get(x["estado"],9),-x["pot_alza"]))
     return resultados
 
@@ -2355,7 +2347,6 @@ def badge_estado(s):
     m={
         "ROCKET":   ("b-rocket", "🚀 Explosión"),
         "BUY":      ("b-buy",    "↑ Compra"),
-        "GANGA":    ("b-ganga",  "🏷️ Ganga"),
         "WATCH":    ("b-hold",   "👁 Vigilar"),
         "SKIP":     ("b-none",   "Esperar"),
         "SHORT":    ("b-sell",   "↓ Bajista"),
@@ -2765,7 +2756,6 @@ def render_scan_rows(scanner, tc):
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
-                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'{etf_warning}'
                 f'{render_conf(conf) if conf else ""}'
@@ -2911,7 +2901,6 @@ def render_radar_rows(radar, tc):
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
-                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'<div class="dp-grid">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Semáforo indicadores 1D</div>'
@@ -3270,7 +3259,6 @@ td strong{{font-size:13px;font-weight:500}}
 @keyframes pulse-exit{{0%,100%{{opacity:1}}50%{{opacity:.6}}}}
 .b-blocked{{background:#f0f0f0;color:#888;border:1px solid #ccc}}
 .b-etf{{background:#fff7e6;color:#d46b08;border:1px solid #ffd591;font-size:9px;padding:2px 6px;border-radius:10px;margin-left:4px}}
-.b-ganga{{background:#f0fdf4;color:#14532d;border:2px solid #86efac;font-weight:700}}
 .vix-chip{{font-size:11px;border-radius:20px;padding:3px 10px;font-family:var(--mono);font-weight:600;border:1px solid}}
 .vix-verde{{background:#f0fdf4;color:#16a34a;border-color:#bbf7d0}}
 .vix-amarillo{{background:#fffbeb;color:#b45309;border-color:#fde68a}}
@@ -4213,22 +4201,38 @@ function cargarTickersPersonalizados() {{
     .then(d => {{
       const el = document.getElementById('custom_tickers_list');
       if (!el) return;
-      const defaults = d.defaults || [];
-      const custom   = d.custom   || [];
-      const total    = d.total    || (defaults.length + custom.length);
-      let html = `<span class="hint" style="font-size:11px">${{total}} ticker(s) en el scanner — </span>`;
-      html += defaults.map(t =>
-        `<span class="ticker-chip" title="Ticker base (no se puede borrar)"><strong>${{t}}</strong></span>`
-      ).join('');
-      if (custom.length) {{
-        html += '<span class="hint" style="font-size:10px;margin:0 6px">+ personalizados:</span>';
-        html += custom.map(t =>
-          `<span class="ticker-chip" style="border-color:var(--red-b)">` +
-          `<strong style="color:var(--red)">${{t}}</strong>` +
-          `<button onclick="quitarTickerScanner('${{t}}')" title="Quitar del scanner" ` +
-          `style="border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;padding:0 0 0 4px">×</button></span>`
+      const defaults   = d.defaults   || [];
+      const custom     = d.custom     || [];
+      const eliminados = d.eliminados || [];
+      const total      = d.total      || (defaults.length + custom.length);
+
+      let html = `<div style="margin-bottom:6px"><span class="hint" style="font-size:11px">${{total}} ticker(s) activos — clic en × para quitar del scanner</span></div>`;
+
+      // Todos los activos: defaults en gris, custom en rojo — todos con ×
+      const todos = [...defaults, ...custom];
+      html += todos.map(t => {{
+        const esCustom = custom.includes(t);
+        const col = esCustom ? 'var(--red)' : 'var(--text)';
+        const brd = esCustom ? 'border-color:var(--red-b)' : '';
+        return `<span class="ticker-chip" style="${{brd}};margin:2px">` +
+          `<strong style="color:${{col}}">${{t}}</strong>` +
+          `<button onclick="quitarTickerScanner('${{t}}')" title="Quitar ${{t}}" ` +
+          `style="border:none;background:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1">×</button></span>`;
+      }}).join('');
+
+      // Eliminados: tachados con botón ↩ para restaurar
+      if (eliminados.length) {{
+        html += `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd)">`;
+        html += `<span class="hint" style="font-size:10px">Quitados (clic ↩ para restaurar):</span><br style="margin-bottom:4px">`;
+        html += eliminados.map(t =>
+          `<span class="ticker-chip" style="opacity:.5;margin:2px">` +
+          `<s style="font-size:11px;color:var(--muted)">${{t}}</s>` +
+          `<button onclick="restaurarTickerScanner('${{t}}')" title="Restaurar ${{t}}" ` +
+          `style="border:none;background:none;color:var(--green);cursor:pointer;font-size:13px;padding:0 0 0 4px">↩</button></span>`
         ).join('');
+        html += `</div>`;
       }}
+
       el.innerHTML = html;
     }})
     .catch(() => {{
@@ -4241,6 +4245,16 @@ function cargarTickersPersonalizados() {{
           ? keys.map(t => `<span class="ticker-chip"><strong>${{t}}</strong></span>`).join('')
           : '<span class="hint" style="font-size:11px">Sin tickers guardados</span>');
     }});
+}}
+
+function restaurarTickerScanner(ticker) {{
+  fetch('/api/tickers/add', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{ticker}})
+  }})
+  .then(() => cargarTickersPersonalizados())
+  .catch(() => cargarTickersPersonalizados());
 }}
 
 
@@ -4767,10 +4781,24 @@ def set_tf(tf: str):
 @app.route("/api/tickers")
 def api_tickers():
     try:
-        defaults = list(SCANNER_TICKERS.keys())
-        custom   = [t for t in get_tickers_db() if t not in SCANNER_TICKERS]
-        return jsonify({"defaults": defaults, "custom": custom,
-                        "total": len(defaults) + len(custom)})
+        activos = get_all_scanner_tickers()
+        defaults_activos = [t for t in activos if t in SCANNER_TICKERS]
+        custom_activos   = [t for t in activos if t not in SCANNER_TICKERS]
+        # Hardcoded que el usuario eliminó (en DB con activo=0)
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        try:
+            del_rows = con.execute("SELECT ticker FROM tickers WHERE activo=0").fetchall()
+        except Exception:
+            del_rows = []
+        con.close()
+        eliminados = [r["ticker"] for r in del_rows if r["ticker"] in SCANNER_TICKERS]
+        return jsonify({
+            "defaults":  defaults_activos,
+            "custom":    custom_activos,
+            "eliminados": eliminados,
+            "total":     len(activos)
+        })
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
