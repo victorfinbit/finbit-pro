@@ -177,51 +177,17 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
 
 def get_all_scanner_tickers() -> dict:
     """
-    Retorna el diccionario completo de tickers para el scanner.
-    La DB tiene prioridad sobre el hardcode: si un ticker está en la DB
-    con activo=0 (eliminado por el usuario), NO aparece aunque esté en SCANNER_TICKERS.
+    Retorna el diccionario completo de tickers para el scanner,
+    combinando SCANNER_TICKERS + DB, sin duplicados.
     """
-    con = sqlite3.connect(DB_FILE)
-    con.row_factory = sqlite3.Row
-    try:
-        rows = con.execute("SELECT ticker, exchange, activo FROM tickers").fetchall()
-    except Exception:
-        rows = []
-    con.close()
-
-    # Mapa completo de la DB: ticker → (activo, exchange)
-    db_map = {r["ticker"]: (r["activo"], r["exchange"] or "") for r in rows}
-
-    combinados = {}
-    # Primero agregar hardcoded, pero solo si no están desactivados en DB
-    for ticker, val in SCANNER_TICKERS.items():
-        estado = db_map.get(ticker)
-        if estado is None or estado[0] == 1:
-            combinados[ticker] = val
-    # Luego agregar los de la DB con activo=1 (custom añadidos por el usuario)
-    for ticker, (activo, exchange) in db_map.items():
-        if activo == 1:
-            combinados[ticker] = (ticker, exchange)
+    combinados = dict(SCANNER_TICKERS)
+    combinados.update(get_tickers_db())
     return combinados
 
 def remove_ticker_db(ticker: str):
-    """
-    Desactiva un ticker del scanner.
-    Si el ticker está hardcoded en SCANNER_TICKERS o UNIVERSO,
-    lo inserta en la DB con activo=0 para que el override de DB prevalezca.
-    """
-    t = ticker.upper()
+    """Desactiva un ticker del scanner."""
     con = sqlite3.connect(DB_FILE)
-    # INSERT OR REPLACE garantiza que exista en la tabla aunque venga del hardcode
-    exchange = ""
-    for src in (SCANNER_TICKERS, UNIVERSO):
-        if t in src:
-            exchange = src[t][1]
-            break
-    con.execute(
-        "INSERT OR REPLACE INTO tickers (ticker, exchange, origen, activo) VALUES (?,?,?,0)",
-        (t, exchange, "USA")
-    )
+    con.execute("UPDATE tickers SET activo=0 WHERE ticker=?", (ticker.upper(),))
     con.commit()
     con.close()
 
@@ -660,76 +626,54 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
     }
 
 
-def detectar_ganga(nombre: str, tf_1d: dict, sr: dict, obv_info: dict,
+# ── MODO GANGA ────────────────────────────────────────────
+def detectar_ganga(tf_1d: dict, sr: dict, obv_info: dict,
                    closes: list, volumes: list) -> dict:
     """
-    Detecta oportunidades GANGA — acumulación anticipada antes de que los
-    indicadores de tendencia se alineen completamente.
-
+    Detecta acumulacion anticipada antes de que la tendencia se alinee.
     Criterios (solo acciones, NO ETFs 3x):
-      1. Soporte fuerte con >= 3 toques históricos debajo del precio actual
-      2. OBV subiendo aunque el precio baje (divergencia alcista)
-      3. RSI entre 25 y 40 (zona de sobreventa sin colapso)
-      4. Volumen bajando en días rojos (vendedores agotándose)
-
-    Retorna dict con: es_ganga (bool), razon (str), criterios_ok (list),
-                      fuerza (int 0-4), soportes_fuertes (list)
+      1. Soporte con >= 3 toques historicos bajo el precio actual
+      2. OBV sube aunque precio baje (divergencia alcista)
+      3. RSI entre 25 y 40
+      4. Volumen bajando en dias rojos (vendedores agotados)
+    Necesita >= 3 de 4 para activarse.
     """
     if not tf_1d or not tf_1d.get("valido"):
-        return {"es_ganga": False, "razon": "", "criterios_ok": [], "fuerza": 0}
+        return {"es_ganga": False, "criterios_ok": [], "fuerza": 0, "soportes_fuertes": []}
 
-    rsi_val  = tf_1d.get("rsi", 50)
-    obv_ok   = obv_info.get("div_alcista", False)   # precio baja, OBV sube
-    precio   = tf_1d.get("precio", 0)
+    rsi_val = tf_1d.get("rsi", 50)
+    precio  = tf_1d.get("precio", 0)
+    obv_div = obv_info.get("div_alcista", False)
 
-    # Criterio 1: soporte fuerte (>= 3 toques) debajo del precio
-    soportes_fuertes = [
-        z for z in sr.get("soportes", [])
-        if z.get("fuerza", 0) >= 3 and z.get("precio", precio + 1) < precio
-    ]
-    soporte_ok = len(soportes_fuertes) > 0
+    # Criterio 1: soporte fuerte >= 3 toques bajo el precio
+    soportes_fuertes = [z for z in sr.get("soportes", [])
+                        if z.get("fuerza", 0) >= 3 and z.get("precio", precio+1) < precio]
+    c1 = len(soportes_fuertes) > 0
 
-    # Criterio 2: OBV subiendo mientras precio baja
-    obv_alcista = obv_ok
+    # Criterio 2: OBV divergencia alcista
+    c2 = obv_div
 
-    # Criterio 3: RSI en zona de sobreventa sin colapso (25-40)
-    rsi_ok = 25 <= rsi_val <= 40
+    # Criterio 3: RSI en sobreventa moderada
+    c3 = 25 <= rsi_val <= 40
 
-    # Criterio 4: volumen bajando en días rojos (últimas 5 velas)
-    vol_agotamiento = False
-    if closes and volumes and len(closes) >= 5:
-        dias_rojos = [(closes[i] - closes[i-1], volumes[i])
-                      for i in range(max(len(closes)-5, 1), len(closes))
+    # Criterio 4: volumen decreciente en dias rojos recientes
+    c4 = False
+    if closes and volumes and len(closes) >= 6:
+        vols_rojos = [volumes[i] for i in range(len(closes)-5, len(closes))
                       if closes[i] < closes[i-1]]
-        if len(dias_rojos) >= 2:
-            vols_rojos   = [v for _, v in dias_rojos]
-            vol_media_20 = sum(volumes[-20:]) / max(len(volumes[-20:]), 1)
-            vol_agotamiento = all(v < vol_media_20 * 0.85 for v in vols_rojos)
+        if len(vols_rojos) >= 2:
+            vol_media = sum(volumes[-20:]) / max(len(volumes[-20:]), 1)
+            c4 = all(v < vol_media * 0.85 for v in vols_rojos)
 
     criterios_ok = []
-    if soporte_ok:
-        criterios_ok.append(
-            f"Soporte fuerte x{soportes_fuertes[0]['fuerza']} toques "
-            f"(precio ${soportes_fuertes[0]['precio']:.2f})")
-    if obv_alcista:
-        criterios_ok.append("OBV sube mientras precio baja — acumulacion institucional")
-    if rsi_ok:
-        criterios_ok.append(f"RSI {rsi_val:.0f} en zona de sobreventa (25-40)")
-    if vol_agotamiento:
-        criterios_ok.append("Volumen bajando en dias rojos — vendedores agotandose")
+    if c1: criterios_ok.append(f"Soporte {soportes_fuertes[0]['fuerza']}x toques en ${soportes_fuertes[0]['precio']:.2f}")
+    if c2: criterios_ok.append("OBV sube mientras precio baja — acumulacion institucional")
+    if c3: criterios_ok.append(f"RSI {rsi_val:.0f} en sobreventa (25-40)")
+    if c4: criterios_ok.append("Volumen bajando en dias rojos — vendedores agotandose")
 
-    fuerza   = len(criterios_ok)
-    es_ganga = fuerza >= 3   # minimo 3 de 4 criterios
-
-    razon = ""
-    if es_ganga:
-        razon = ("Zona de soporte fuerte con senales de acumulacion institucional "
-                 "antes de que los indicadores de tendencia se alineen. "
-                 "Entrada escalonada (DCA) con stops ajustados al soporte.")
-
+    fuerza = len(criterios_ok)
     return {
-        "es_ganga":         es_ganga,
-        "razon":            razon,
+        "es_ganga":         fuerza >= 3,
         "criterios_ok":     criterios_ok,
         "fuerza":           fuerza,
         "soportes_fuertes": soportes_fuertes,
@@ -737,33 +681,21 @@ def detectar_ganga(nombre: str, tf_1d: dict, sr: dict, obv_info: dict,
 
 
 def render_ganga_panel(ganga: dict) -> str:
-    """Panel explicativo del estado GANGA para el detail-panel."""
     if not ganga or not ganga.get("es_ganga"):
         return ""
-    criterios  = ganga.get("criterios_ok", [])
-    razon      = ganga.get("razon", "")
-    sops       = ganga.get("soportes_fuertes", [])
-    items_html = "".join(
-        f'<li style="margin:3px 0;color:#14532d">{c}</li>' for c in criterios
-    )
-    sop_html = ""
-    if sops:
-        sop_html = (f'<div style="margin-top:8px;font-size:10px;color:#14532d">'
-                    f'Soporte mas cercano: <strong>${sops[0]["precio"]:.2f}</strong> '
-                    f'({sops[0]["fuerza"]}x toques)</div>')
+    items = "".join(f'<li style="margin:2px 0">{c}</li>' for c in ganga.get("criterios_ok", []))
+    sops  = ganga.get("soportes_fuertes", [])
+    sop_txt = (f'Soporte clave: <strong>${sops[0]["precio"]:.2f}</strong> ({sops[0]["fuerza"]}x toques)'
+               if sops else "")
     return (f'<div style="background:#f0fdf4;border:2px solid #86efac;border-radius:8px;'
-            f'padding:12px 14px;margin-bottom:10px">'
-            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:6px">'
-            f'GANGA - Acumulacion anticipada</div>'
-            f'<div style="font-size:11px;color:#166534;margin-bottom:8px">{razon}</div>'
-            f'<div style="font-size:10px;color:#14532d;font-weight:600;margin-bottom:4px">'
-            f'Criterios detectados:</div>'
-            f'<ul style="font-size:11px;margin:0 0 0 14px">{items_html}</ul>'
-            f'{sop_html}'
-            f'<div style="margin-top:10px;font-size:10px;color:#166534;'
-            f'background:#dcfce7;border-radius:5px;padding:6px 9px">'
-            f'Usa el plan DCA de 3 escalones (abajo). '
-            f'Primer escalon en el soporte fuerte. Stop bajo el ultimo escalon.</div>'
+            f'padding:11px 14px;margin-bottom:10px;font-size:11px">'
+            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:5px">'
+            f'🏷️ GANGA — acumulacion anticipada</div>'
+            f'<ul style="margin:0 0 6px 14px;color:#166534">{items}</ul>'
+            f'<div style="color:#14532d;font-size:10px">{sop_txt}</div>'
+            f'<div style="margin-top:8px;background:#dcfce7;border-radius:5px;padding:5px 9px;'
+            f'color:#166534;font-size:10px">'
+            f'Entrada escalonada con el plan DCA de abajo. Stop bajo el soporte.</div>'
             f'</div>')
 
 
@@ -2234,14 +2166,15 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 setup["advertencias"].append(
                     f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-            # ── MODO GANGA — solo acciones, no ETFs 3x ────────────────────
+            # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
             ganga_info = {}
             if not etf_peligroso and estado not in ("BUY", "ROCKET", "EXIT"):
-                closes_scan  = [float(x["close"]) for x in _get_cached(symbol, "1day", exchange) or []]
-                volumes_scan = [float(x.get("volume", 0)) for x in _get_cached(symbol, "1day", exchange) or []]
-                ganga_info   = detectar_ganga(nombre, tf_1d, an.get("sr", {}),
-                                              tf_1d.get("obv", {}), closes_scan, volumes_scan)
-                if ganga_info.get("es_ganga") and estado in ("WATCH", "LATERAL", "SKIP", "BLOQUEADO"):
+                vals_cache = _get_cached(symbol, "1day", exchange) or []
+                closes_g   = [float(x["close"]) for x in vals_cache]
+                volumes_g  = [float(x.get("volume", 0)) for x in vals_cache]
+                ganga_info = detectar_ganga(tf_1d, an.get("sr", {}),
+                                            tf_1d.get("obv", {}), closes_g, volumes_g)
+                if ganga_info.get("es_ganga"):
                     estado = "GANGA"
 
             try:
@@ -2361,12 +2294,11 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             setup["advertencias"].append(
                 f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-        # ── MODO GANGA radar — solo acciones, no ETFs 3x ──────────────────
+        # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
         ganga_info_r = {}
         if not es_etf_apalancado(nombre) and estado not in ("BUY", "ROCKET", "EXIT"):
-            ganga_info_r = detectar_ganga(nombre, tf, sr_radar,
-                                          tf.get("obv", {}), closes, volumes)
-            if ganga_info_r.get("es_ganga") and estado in ("WATCH", "LATERAL", "SKIP", "BLOQUEADO"):
+            ganga_info_r = detectar_ganga(tf, sr_radar, tf.get("obv", {}), closes, volumes)
+            if ganga_info_r.get("es_ganga"):
                 estado = "GANGA"
 
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
@@ -2819,7 +2751,6 @@ def render_scan_rows(scanner, tc):
         sector_html = render_sector_panel(r.get("sector", {}))
         hist_html   = render_score_history(r["nombre"], score_aj)
         dca_html    = render_dca_panel(r.get("dca", {}), r["precio_mxn"])
-        ganga_html  = render_ganga_panel(r.get("ganga", {}))
 
         etf_warning = ""
         if etf_peligroso:
@@ -2834,7 +2765,7 @@ def render_scan_rows(scanner, tc):
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
-                f'{ganga_html}'
+                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'{etf_warning}'
                 f'{render_conf(conf) if conf else ""}'
@@ -2977,11 +2908,10 @@ def render_radar_rows(radar, tc):
 
         obv_html_r    = render_obv_panel(r.get("obv", {}))
         sector_html_r = render_sector_panel(r.get("sector", {}))
-        ganga_html_r  = render_ganga_panel(r.get("ganga", {}))
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
-                f'{ganga_html_r}'
+                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'<div class="dp-grid">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Semáforo indicadores 1D</div>'
@@ -3376,10 +3306,6 @@ td strong{{font-size:13px;font-weight:500}}
       <button class="cfg-btn" onclick="saveConfig()">Guardar</button>
     </div>
     <button onclick="actualizarDashboard()" id="btn_update" style="background:var(--green);color:#fff;border:none;border-radius:var(--r);padding:5px 14px;font-size:12px;font-family:var(--sans);cursor:pointer;font-weight:500;white-space:nowrap">↺ Actualizar</button>
-    <button onclick="backupDB()" title="Descarga tu finbit.db — guárdala antes de cada deploy en Render" style="background:var(--surface);color:var(--text);border:1px solid var(--brd);border-radius:var(--r);padding:5px 11px;font-size:12px;font-family:var(--sans);cursor:pointer;white-space:nowrap">💾 Backup DB</button>
-    <label title="Restaura una DB previamente descargada" style="background:var(--surface);color:var(--text);border:1px solid var(--brd);border-radius:var(--r);padding:5px 11px;font-size:12px;font-family:var(--sans);cursor:pointer;white-space:nowrap">
-      📂 Restaurar DB<input type="file" accept=".db" onchange="restaurarDB(this)" style="display:none">
-    </label>
     <span style="font-size:11px;color:var(--muted)">{ts}</span>
   </div>
 </div></div>
@@ -3676,7 +3602,6 @@ td strong{{font-size:13px;font-weight:500}}
           <option value="Explosión">🚀 Explosión</option>
           <option value="Compra">↑ Compra</option>
           <option value="EXIT">⚠️ EXIT</option>
-          <option value="Ganga">🏷️ Ganga</option>
           <option value="Vigilar">👁 Vigilar</option>
           <option value="Esperar">Esperar</option>
           <option value="Bajista">↓ Bajista</option>
@@ -3717,7 +3642,6 @@ td strong{{font-size:13px;font-weight:500}}
     <span class="hint">Filtrar:</span>
     <button class="filter-btn active" onclick="filtrarRadar('ALL',this)">Todos</button>
     <button class="filter-btn" onclick="filtrarRadar('alza',this)">↑ Alza</button>
-    <button class="filter-btn" onclick="filtrarRadar('ganga',this)">🏷️ Gangas</button>
     <button class="filter-btn" onclick="filtrarRadar('baja',this)">↓ Bajistas</button>
     <button class="filter-btn" onclick="filtrarRadar('10pct',this)">🔥 +10% potencial</button>
     <button class="filter-btn" onclick="filtrarRadar('rocket',this)">🚀 Explosiones</button>
@@ -3731,10 +3655,6 @@ td strong{{font-size:13px;font-weight:500}}
   <div style="background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);padding:12px 16px;margin-bottom:14px;font-size:11px">
     <div style="font-weight:600;margin-bottom:8px;color:var(--text)">¿Qué hago con cada resultado?</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:6px">
-      <div style="display:flex;gap:6px;align-items:flex-start">
-        <span style="background:#f0fdf4;color:#14532d;border:2px solid #86efac;border-radius:4px;padding:2px 7px;font-weight:700;white-space:nowrap">🏷️ GANGA</span>
-        <span style="color:var(--muted);line-height:1.5">Soporte fuerte + acumulación institucional. Entra escalonado con DCA. Stop bajo el soporte.</span>
-      </div>
       <div style="display:flex;gap:6px;align-items:flex-start">
         <span style="background:#f5f3ff;color:#7c3aed;border-radius:4px;padding:2px 7px;font-weight:700;white-space:nowrap">🚀 ROCKET</span>
         <span style="color:var(--muted);line-height:1.5">Entra con tamaño completo. Stop desde el primer día.</span>
@@ -4123,7 +4043,6 @@ function filtrarRadar(tipo,btn){{
     const pot=parseFloat(potEl.replace('%','').replace('+',''))||0;
     let show=true;
     if(tipo==='alza') show=estado.includes('↑')||estado.includes('🚀')||estado.includes('👁');
-    if(tipo==='ganga') show=estado.includes('Ganga');
     if(tipo==='baja') show=estado.includes('↓');
     if(tipo==='10pct') show=pot>=10;
     if(tipo==='rocket') show=estado.includes('🚀');
@@ -4294,38 +4213,22 @@ function cargarTickersPersonalizados() {{
     .then(d => {{
       const el = document.getElementById('custom_tickers_list');
       if (!el) return;
-      const defaults   = d.defaults   || [];
-      const custom     = d.custom     || [];
-      const eliminados = d.eliminados || [];
-      const total      = d.total      || (defaults.length + custom.length);
-      let html = `<span class="hint" style="font-size:11px">${{total}} ticker(s) activos en el scanner</span><br><br>`;
-
-      // Todos los activos (defaults + custom) — con botón × para todos
-      const todos = [...defaults, ...custom];
-      html += todos.map(t => {{
-        const isCustom = !d.defaults.includes(t);
-        const style = isCustom
-          ? 'border-color:var(--red-b)'
-          : 'border-color:var(--brd)';
-        return `<span class="ticker-chip" style="${{style}};margin-bottom:4px">` +
-          `<strong style="color:${{isCustom?'var(--red)':'var(--text)'}}">${{t}}</strong>` +
-          `<button onclick="quitarTickerScanner('${{t}}')" title="Quitar ${{t}} del scanner" ` +
-          `style="border:none;background:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1">×</button></span>`;
-      }}).join(' ');
-
-      // Tickers eliminados por el usuario (aparecen tachados con opción de restaurar)
-      if (eliminados.length) {{
-        html += `<div style="margin-top:10px;border-top:1px solid var(--brd);padding-top:8px">`;
-        html += `<span class="hint" style="font-size:10px">Eliminados (solo de tu scanner):</span><br>`;
-        html += eliminados.map(t =>
-          `<span class="ticker-chip" style="opacity:.5;margin-top:4px">` +
-          `<s style="font-size:11px">${{t}}</s>` +
-          `<button onclick="restaurarTickerScanner('${{t}}')" title="Restaurar ${{t}}" ` +
-          `style="border:none;background:none;color:var(--green);cursor:pointer;font-size:12px;padding:0 0 0 4px">↩</button></span>`
-        ).join(' ');
-        html += '</div>';
+      const defaults = d.defaults || [];
+      const custom   = d.custom   || [];
+      const total    = d.total    || (defaults.length + custom.length);
+      let html = `<span class="hint" style="font-size:11px">${{total}} ticker(s) en el scanner — </span>`;
+      html += defaults.map(t =>
+        `<span class="ticker-chip" title="Ticker base (no se puede borrar)"><strong>${{t}}</strong></span>`
+      ).join('');
+      if (custom.length) {{
+        html += '<span class="hint" style="font-size:10px;margin:0 6px">+ personalizados:</span>';
+        html += custom.map(t =>
+          `<span class="ticker-chip" style="border-color:var(--red-b)">` +
+          `<strong style="color:var(--red)">${{t}}</strong>` +
+          `<button onclick="quitarTickerScanner('${{t}}')" title="Quitar del scanner" ` +
+          `style="border:none;background:none;color:var(--red);cursor:pointer;font-size:13px;padding:0 0 0 4px">×</button></span>`
+        ).join('');
       }}
-
       el.innerHTML = html;
     }})
     .catch(() => {{
@@ -4338,16 +4241,6 @@ function cargarTickersPersonalizados() {{
           ? keys.map(t => `<span class="ticker-chip"><strong>${{t}}</strong></span>`).join('')
           : '<span class="hint" style="font-size:11px">Sin tickers guardados</span>');
     }});
-}}
-
-function restaurarTickerScanner(ticker) {{
-  fetch('/api/tickers/add', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{ticker}})
-  }})
-  .then(() => cargarTickersPersonalizados())
-  .catch(() => cargarTickersPersonalizados());
 }}
 
 
@@ -4373,39 +4266,6 @@ function actualizarDashboard() {{
       }}, 3000);
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
-}}
-
-// ── Backup / Restore DB ──────────────────────────────────
-function backupDB() {{
-  window.location.href = '/api/backup';
-}}
-
-function restaurarDB(input) {{
-  if (!input.files || !input.files[0]) return;
-  const file = input.files[0];
-  if (!file.name.endsWith('.db')) {{
-    alert('El archivo debe tener extensión .db');
-    input.value = '';
-    return;
-  }}
-  if (!confirm('¿Restaurar la base de datos con "' + file.name + '"?\n\nSe hará un backup automático de la DB actual antes de reemplazarla.')) {{
-    input.value = '';
-    return;
-  }}
-  const formData = new FormData();
-  formData.append('file', file);
-  fetch('/api/restore', {{method:'POST', body: formData}})
-    .then(r => r.json())
-    .then(d => {{
-      if (d.status === 'ok') {{
-        alert('✅ ' + d.msg);
-        actualizarDashboard();
-      }} else {{
-        alert('❌ Error: ' + (d.error || 'desconocido'));
-      }}
-      input.value = '';
-    }})
-    .catch(() => {{ alert('❌ Error de red al restaurar'); input.value = ''; }});
 }}
 </script></body></html>"""
 
@@ -4907,27 +4767,10 @@ def set_tf(tf: str):
 @app.route("/api/tickers")
 def api_tickers():
     try:
-        todos_activos = get_all_scanner_tickers()
-        # Separar: los que vienen del hardcode vs los que son solo custom DB
-        defaults_activos = [t for t in todos_activos if t in SCANNER_TICKERS]
-        custom_activos   = [t for t in todos_activos if t not in SCANNER_TICKERS]
-        # Tickers hardcoded que el usuario eliminó (en DB con activo=0)
-        con = sqlite3.connect(DB_FILE)
-        con.row_factory = sqlite3.Row
-        try:
-            deleted_rows = con.execute(
-                "SELECT ticker FROM tickers WHERE activo=0"
-            ).fetchall()
-        except Exception:
-            deleted_rows = []
-        con.close()
-        eliminados = [r["ticker"] for r in deleted_rows if r["ticker"] in SCANNER_TICKERS]
-        return jsonify({
-            "defaults": defaults_activos,
-            "custom":   custom_activos,
-            "eliminados": eliminados,
-            "total": len(todos_activos)
-        })
+        defaults = list(SCANNER_TICKERS.keys())
+        custom   = [t for t in get_tickers_db() if t not in SCANNER_TICKERS]
+        return jsonify({"defaults": defaults, "custom": custom,
+                        "total": len(defaults) + len(custom)})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
@@ -4945,16 +4788,9 @@ def api_tickers_add():
         import re as _re
         if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
             return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
-        # Si el ticker ya existe en la DB (puede estar activo=0), lo reactiva
-        con = sqlite3.connect(DB_FILE)
-        con.execute(
-            "INSERT OR REPLACE INTO tickers (ticker, exchange, origen, activo) VALUES (?,?,?,1)",
-            (ticker, exchange or (SCANNER_TICKERS.get(ticker, ("", ""))[1] or
-                                   UNIVERSO.get(ticker, ("", ""))[1] or ""),
-             origen)
-        )
-        con.commit(); con.close()
+        add_ticker_db(ticker, exchange, origen)
         # NO invalidamos el cache aquí — el ticker aparecerá en la próxima actualización
+        # Invalidar el cache causaba que el dashboard quedara en blanco esperando rebuild
         return jsonify({"status": "ok", "ticker": ticker,
                         "msg": f"{ticker} guardado. Aparecerá en la próxima actualización (↺)."})
     except Exception as e:
@@ -5012,48 +4848,6 @@ def api_config():
             json.dump(data, f, indent=2)
         _dash_html = ""
         return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-# ── Backup / Restore de la base de datos ─────────────────
-@app.route("/api/backup")
-def api_backup():
-    """Descarga el archivo finbit.db completo como binario."""
-    if not os.path.exists(DB_FILE):
-        return jsonify({"status": "error", "error": "DB no encontrada"}), 404
-    from flask import send_file
-    from datetime import timezone, timedelta
-    tz_mx  = timezone(timedelta(hours=-6))
-    ts     = datetime.now(tz_mx).strftime("%Y%m%d_%H%M")
-    nombre = f"finbit_backup_{ts}.db"
-    return send_file(
-        DB_FILE,
-        as_attachment=True,
-        download_name=nombre,
-        mimetype="application/octet-stream"
-    )
-
-@app.route("/api/restore", methods=["POST"])
-def api_restore():
-    """Restaura la DB desde un archivo .db subido por el usuario."""
-    global _dash_html
-    if "file" not in flask_req.files:
-        return jsonify({"status": "error", "error": "No se envió ningún archivo"}), 400
-    f = flask_req.files["file"]
-    if not f.filename.endswith(".db"):
-        return jsonify({"status": "error", "error": "El archivo debe tener extensión .db"}), 400
-    try:
-        # Guardar backup de la DB actual antes de reemplazarla
-        backup_path = DB_FILE + ".prev"
-        if os.path.exists(DB_FILE):
-            import shutil
-            shutil.copy2(DB_FILE, backup_path)
-        f.save(DB_FILE)
-        # Invalidar cache del dashboard
-        with _dash_lock:
-            _dash_html = ""
-        return jsonify({"status": "ok", "msg": "DB restaurada. Haz clic en ↺ Actualizar para recargar el dashboard."})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
