@@ -2273,23 +2273,46 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # TOMAR GANANCIAS: cerca del objetivo
-    if obj and precio_mxn >= obj * 0.92:
+    # TOMAR GANANCIAS: cerca del objetivo Y con ganancia real
+    if obj and precio_mxn >= obj * 0.92 and pl_pct > 3:
         return {
             "accion":   "TOMAR GANANCIAS",
             "color":    "#d46b08",
             "icono":    "💰",
-            "mensaje":  f"Precio cerca del objetivo {fmt(obj)}. Considera cerrar el 50-75% de la posición.",
+            "mensaje":  f"Precio cerca del objetivo {fmt(obj)} con +{pl_pct:.1f}% de ganancia. Considera cerrar 50-75% de la posición.",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # EN PÉRDIDA CONTROLADA: pérdida pequeña, stop no tocado
+    if pl_pct < -3 and pl_pct >= -8:
+        return {
+            "accion":   "VIGILAR",
+            "color":    "var(--yellow)",
+            "icono":    "⚠️",
+            "mensaje":  f"Pérdida de {pl_pct:.1f}%. Stop en {fmt(stop)} — si lo toca, salir sin dudar.",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # STOP INMINENTE: pérdida grande
+    if pl_pct < -8:
+        return {
+            "accion":   "SALIR",
+            "color":    "var(--red)",
+            "icono":    "🚨",
+            "mensaje":  f"Pérdida de {pl_pct:.1f}%. Stop en {fmt(stop)}. Salir para proteger capital.",
             "stop":     stop,
             "objetivo": obj,
         }
 
     # MANTENER: todo en orden
+    estado_pl = f"+{pl_pct:.1f}% ganancia" if pl_pct > 0 else f"{pl_pct:.1f}% pérdida pequeña"
     return {
         "accion":   "MANTENER",
         "color":    "var(--yellow)",
         "icono":    "→",
-        "mensaje":  f"Stop en {fmt(stop)} ({dist_stop_pct:.1f}% abajo). Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
+        "mensaje":  f"{estado_pl}. Stop en {fmt(stop)} ({dist_stop_pct:.1f}% abajo). Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
         "stop":     stop,
         "objetivo": obj,
     }
@@ -4010,7 +4033,7 @@ function actualizarTablaPortafolio(){{
   }});
   const totalPL    = totalValor - totalCosto;
   const rendPct    = totalCosto>0 ? (totalPL/totalCosto*100) : 0;
-  const fmtMXN = v => (v<0?'-':'')+'$'+Math.abs(v).toLocaleString('es-MX',{{minimumFractionDigits:2}});
+  const fmtMXN = v => (v<0?'-$':'$')+Math.abs(v).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}});
 
   const setKPI = (id, val, cls) => {{
     const el = document.getElementById(id);
