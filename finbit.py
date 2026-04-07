@@ -2007,12 +2007,11 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
 
 def _precargar_cache_batch(symbols: list, intervals: list = None):
     """
-    Precarga el cache con batches de hasta 8 símbolos por key.
-    KEY_1 y KEY_2 alternan por chunk — cada una tiene su propio límite de 8 req/min.
-    Sin esperas largas: si un chunk falla, reintenta inmediatamente con la otra key.
-    Diseñado para completar en < 60s con 2 keys y 21 símbolos.
+    Precarga el cache con batches de hasta 8 símbolos.
+    Usa KEY_1 para TODO. Solo cambia a KEY_2 si KEY_1 se agota.
+    No alterna por chunk — eso gastaba ambas keys al mismo tiempo.
     """
-    global _TD_CACHE, _KEY_IDX
+    global _TD_CACHE, _KEY_IDX, _KEYS_AGOTADAS
     if intervals is None:
         intervals = ["1day", "1week"]
 
@@ -2022,48 +2021,51 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
     n_keys = len(_TD_KEYS)
 
     print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos | "
-          f"{n_keys} key(s) | chunks de {CHUNK}")
+          f"{n_keys} key(s) disponibles | chunks de {CHUNK}")
 
-    _KEY_IDX = 0
+    def _key_activa() -> str:
+        """Devuelve la primera key no agotada."""
+        for k in _TD_KEYS:
+            if k not in _KEYS_AGOTADAS:
+                return k
+        return _TD_KEYS[0] if _TD_KEYS else ""
 
     for interval in intervals:
         chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
         for idx, chunk in enumerate(chunks):
-            # Alternar key por chunk: chunk 0→KEY1, chunk 1→KEY2, chunk 2→KEY1...
-            key_use = _TD_KEYS[idx % n_keys] if _TD_KEYS else ""
+            key_use = _key_activa()
+            if not key_use:
+                print(f"  [batch] ⚠️ Sin keys disponibles — abortando batch")
+                break
+
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
-                  f"k=…{key_use[-4:] if key_use else 'N/A'} → {', '.join(chunk)}")
+                  f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
             batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
 
-            # Si algún ticker faltó, reintenta SOLO los faltantes con la otra key
-            # Sin esperar — la otra key tiene cuota fresca
+            # Si la key se agotó durante el batch, intentar con la siguiente
             faltantes = [s for s in chunk if s.upper() not in batch]
-            if faltantes and n_keys > 1:
-                otra_key = _TD_KEYS[(idx + 1) % n_keys]
-                print(f"  [batch] Reintentando {faltantes} con k=…{otra_key[-4:]}...")
-                batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=otra_key)
-                batch.update(batch2)
+            if faltantes:
+                key2 = _key_activa()  # puede ser diferente si key_use se marcó agotada
+                if key2 and key2 != key_use:
+                    print(f"  [batch] Reintentando {faltantes} con k=…{key2[-4:]}...")
+                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=key2)
+                    batch.update(batch2)
 
             # Guardar en cache
             for sym, vals in batch.items():
                 _TD_CACHE[f"{sym}:{interval}"] = vals
 
-            # Marcar como None los que definitivamente no llegaron
+            # Marcar como None los que no llegaron
             for sym in chunk:
                 if f"{sym}:{interval}" not in _TD_CACHE:
                     _TD_CACHE[f"{sym}:{interval}"] = None
 
-            # Pausa mínima entre chunks del MISMO intervalo (evitar 429 en la misma key)
-            # Con 2 keys alternas, cada key descansa 1 chunk completo entre usos
+            # Pausa entre chunks para no saturar el rate limit de la key activa
             if idx < len(chunks) - 1:
                 time.sleep(4)
 
         time.sleep(3)  # pausa mínima entre intervalos
-
-    con_datos = sum(1 for v in _TD_CACHE.values() if v)
-    sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
-    print(f"  [batch] ✅ Listo: {con_datos} con datos, {sin_datos} sin datos")
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
