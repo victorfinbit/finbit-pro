@@ -3708,7 +3708,7 @@ td strong{{font-size:13px;font-weight:500}}
   <div class="kpis">
     <div class="kpi"><div class="lbl">Total invertido</div><div class="val">{fmt(res['inv'])}</div></div>
     <div class="kpi"><div class="lbl">Total vendido</div><div class="val">{fmt(res['vta'])}</div></div>
-    <div class="kpi"><div class="lbl">P&L realizado</div><div class="val {pl_hist_cls}">{fmt(res['pl'])}</div></div>
+    <div class="kpi"><div class="lbl">P&L realizado</div><div class="val {pl_hist_cls}">{fmt(res['pl']) if res.get('n_ops_cerradas',0) > 0 else '$0.00'}</div></div>
     <div class="kpi"><div class="lbl">Operaciones</div><div class="val">{res['n']}</div></div>
     <div class="kpi"><div class="lbl">Ops cerradas</div><div class="val">{res.get('n_ops_cerradas',0)}</div></div>
   </div>
@@ -4072,14 +4072,14 @@ function actualizarTablaPortafolio(){{
     const cells=row.querySelectorAll('td');
     if(cells.length<7) return;
     cells[1].textContent=parseFloat(d.titulos.toFixed(6));
-    cells[2].innerHTML='<span class="num">$'+cto.toLocaleString('es-MX',{{minimumFractionDigits:2}})+'</span>';
+    cells[2].innerHTML='<span class="num">$'+cto.toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span>';
     const costo=cto*d.titulos;
-    cells[4].innerHTML='<span class="num">$'+( (d.precio_actual_mxn||cto)*d.titulos ).toLocaleString('es-MX',{{minimumFractionDigits:2}})+'</span>';
+    cells[4].innerHTML='<span class="num">$'+( (d.precio_actual_mxn||cto)*d.titulos ).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span>';
     if(d.precio_actual_mxn){{
       const pl=(d.precio_actual_mxn-cto)*d.titulos;
       const plPct=(pl/costo*100);
       const col=pl>=0?'var(--green)':'var(--red)';
-      cells[5].innerHTML='<span class="num" style="color:'+col+'">'+( pl<0?'-':'')+'$'+Math.abs(pl).toLocaleString('es-MX',{{minimumFractionDigits:2}})+'</span>';
+      cells[5].innerHTML='<span class="num" style="color:'+col+'">'+( pl<0?'-':'')+'$'+Math.abs(pl).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span>';
       cells[6].innerHTML='<span class="num" style="color:'+col+'">'+(plPct>=0?'+':'')+plPct.toFixed(1)+'%</span>';
     }}
   }});
@@ -4097,9 +4097,9 @@ function actualizarTablaPortafolio(){{
     newRow.innerHTML=
       `<td><strong>${{tk}}</strong><br><span class="hint">${{d.origen||'USA'}} · ${{d.mercado||'SIC'}}</span></td>`
       +`<td class="num">${{parseFloat(d.titulos.toFixed(6))}}</td>`
-      +`<td class="num">$${{cto.toLocaleString('es-MX',{{minimumFractionDigits:2}})}}</td>`
+      +`<td class="num">$${{cto.toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</td>`
       +`<td class="num">—</td>`
-      +`<td class="num">$${{(cto*d.titulos).toLocaleString('es-MX',{{minimumFractionDigits:2}})}}</td>`
+      +`<td class="num">$${{(cto*d.titulos).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</td>`
       +`<td class="num">—</td><td class="num">—</td>`
       +`<td><span class="badge b-none">Sin análisis</span></td>`
       +`<td><span style="font-size:10px;color:var(--muted)">Actualiza ↺ para ver recomendación</span></td>`
@@ -4161,7 +4161,7 @@ function updatePreview(){{
   const n=parseFloat(document.getElementById('f_titulos').value)||0;
   const p=parseFloat(document.getElementById('f_precio').value)||0;
   if(t&&n&&p){{
-    const total=(n*p).toLocaleString('es-MX',{{minimumFractionDigits:2}});
+    const total=(n*p).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}});
     const color=tipo==='COMPRA'?'#16a34a':'#dc2626';
     document.getElementById('f_preview_txt').innerHTML='<strong style="color:'+color+'">'+tipo+'</strong> '+n+' tít de <strong>'+t+'</strong> a <strong>$'+p.toFixed(2)+' MXN</strong> = <strong>$'+total+' MXN</strong>';
     document.getElementById('f_preview').style.display='block';
@@ -4215,8 +4215,8 @@ function renderOpsTable(ops){{
   if(!ops.length){{body.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">Sin operaciones</td></tr>';return;}}
   body.innerHTML=ops.map((op,i)=>{{
     const color=op.tipo==='COMPRA'?'#16a34a':'#dc2626';
-    const total=(op.total_mxn||0).toLocaleString('es-MX',{{minimumFractionDigits:2}});
-    const precio=(op.precio_mxn||0).toLocaleString('es-MX',{{minimumFractionDigits:2}});
+    const total=(op.total_mxn||0).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}});
+    const precio=(op.precio_mxn||0).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}});
     return '<tr><td>'+(op.fecha||'').slice(0,10)+'</td><td><strong>'+(op.ticker||'')+'</strong></td>'
       +'<td style="color:'+color+';font-weight:600">'+(op.tipo||'')+'</td><td class="num">'+(op.titulos||0)+'</td>'
       +'<td class="num">$'+precio+'</td><td class="num">$'+total+'</td>'
@@ -4353,8 +4353,6 @@ window.addEventListener('load',()=>{{
   if(cap) document.getElementById('cfg_capital').value=cap;
   if(rie) document.getElementById('cfg_riesgo').value=(parseFloat(rie)*100).toFixed(0);
   if(rr) document.getElementById('cfg_rr').value=rr;
-  // Sincronizar ops del localStorage al servidor (para que el portafolio y las tarjetas funcionen)
-  sincronizarOpsAlServidor();
 }});
 
 function sincronizarOpsAlServidor() {{
