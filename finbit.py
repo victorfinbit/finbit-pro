@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          FINBIT PRO                                    ║
+║          FINBIT PRO  v3.2                                    ║
 ║  python finbit.py → abre dashboard.html                     ║
 ╚══════════════════════════════════════════════════════════════╝
 
@@ -3557,7 +3557,7 @@ td strong{{font-size:13px;font-weight:500}}
 </style></head><body>
 
 <div class="topbar"><div class="topbar-inner">
-  <div class="logo">fin<em>bit</em> <span style="font-size:11px;color:var(--muted);font-weight:400">pro</span></div>
+  <div class="logo">fin<em>bit</em> <span style="font-size:11px;color:var(--muted);font-weight:400">pro v3.2</span></div>
   <div class="topbar-right">
     <span class="tc-chip">USD/MXN <strong>${tc:.4f}</strong></span>
     <span class="vix-chip vix-{regimen["color"]}" title="VIX={vix:.1f} — Fear Index. <18 calma, 18-25 precaución, >25 pánico">
@@ -3967,7 +3967,7 @@ td strong{{font-size:13px;font-weight:500}}
 
 
 <footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
-TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro</footer>
+TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
 </div>
 
 <script>
@@ -4593,9 +4593,9 @@ def construir_dashboard() -> str:
         regimen = regimen_mercado(vix, spy)
         print(f"  VIX={vix:.1f} | SPY EMA200={'✅' if spy.get('sobre_ema200') else '❌'} | {regimen['label']}")
 
-        port_data  = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
         scan_data  = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                      vix=vix, spy=spy)
+        port_data  = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
         radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results=scan_data,
                                    vix=vix, spy=spy)
     else:
@@ -4876,14 +4876,6 @@ def _construir_con_etapas():
 
             if not _timeout_exceeded():
                 try:
-                    port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
-                except Exception as e:
-                    print(f"[build] Portafolio error (continuando): {e}")
-                    port_data = []
-            _build_stage = "port_ok"
-
-            if not _timeout_exceeded():
-                try:
                     scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                                vix=vix, spy=spy)
                     print(f"[build] Scanner: {len(scan_data)} tickers procesados")
@@ -4895,6 +4887,15 @@ def _construir_con_etapas():
             else:
                 print(f"[build] ⚠️  Timeout antes del scanner — omitiendo")
             _build_stage = "scan_ok"
+
+            if not _timeout_exceeded():
+                try:
+                    # Portafolio DESPUÉS del scanner — reutiliza el caché ya lleno
+                    port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
+                except Exception as e:
+                    print(f"[build] Portafolio error (continuando): {e}")
+                    port_data = []
+            _build_stage = "port_ok"
 
             if not _timeout_exceeded():
                 try:
@@ -5220,7 +5221,7 @@ def api_test():
 # ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "="*56)
-    print("   FINBIT PRO  — servidor web (non-blocking)")
+    print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
     print("="*56)
 
     init_db()
