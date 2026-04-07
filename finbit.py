@@ -2134,10 +2134,30 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
 def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     posiciones = get_portafolio()
+    if not posiciones:
+        return []
+
+    tickers_db = get_tickers_db()
+
+    # Precargar datos de tickers del portafolio que no estén ya en caché
+    syms_port = []
+    for pos in posiciones:
+        ticker = pos["ticker"]
+        symbol, exchange = tickers_db.get(
+            ticker,
+            (ticker.replace(" CPO","CPO").replace(" ",""),
+             "BMV" if pos["origen"] == "MX" else "")
+        )
+        key_1d = f"{symbol.upper()}:1day"
+        key_1w = f"{symbol.upper()}:1week"
+        if key_1d not in _TD_CACHE or _TD_CACHE[key_1d] is None:
+            syms_port.append(symbol)
+
+    if syms_port:
+        print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
+        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
 
     resultados = []
-
-    tickers_db = get_tickers_db()  # Una sola query SQL para todo el portafolio
 
     for pos in posiciones:
 
@@ -2195,11 +2215,82 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
         stop_mxn    = tf_1d.get("stop",0)*mult if tf_1d.get("valido") else None
         obj_mxn     = tf_1d.get("objetivo",0)*mult if tf_1d.get("valido") else None
 
+        # ── RECOMENDACIÓN CLARA para el portafolio ──────────────────────
+        recomendacion = _calcular_recomendacion_port(
+            pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct
+        )
+
         resultados.append({**pos, "analisis":an,
                 "precio_actual_usd":precio_usd,"precio_actual_mxn":precio_mxn,
                 "valor_mxn":valor_mxn,"costo_total":costo_total,"pl_mxn":pl_mxn,"pl_pct":pl_pct,
-                "alertas":alertas,"entrada_mxn":entrada_mxn,"stop_mxn":stop_mxn,"obj_mxn":obj_mxn})
+                "alertas":alertas,"entrada_mxn":entrada_mxn,"stop_mxn":stop_mxn,"obj_mxn":obj_mxn,
+                "recomendacion":recomendacion})
     return resultados
+
+
+def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) -> dict:
+    """
+    Genera una recomendación clara y accionable para cada posición del portafolio.
+    SALIR / MANTENER / AGREGAR — con precio objetivo y stop.
+    """
+    if not precio_mxn or not tf_1d.get("valido"):
+        return {"accion": "SIN DATOS", "color": "var(--muted)", "icono": "—",
+                "mensaje": "Sin precio actual — verifica tu API key", "stop": None, "objetivo": None}
+
+    rsi     = tf_1d.get("rsi", 50)
+    score   = tf_1d.get("score", 0)
+    total_c = tf_1d.get("total_criterios", 11)
+    stop    = tf_1d.get("stop", 0) * mult
+    obj     = tf_1d.get("objetivo", 0) * mult
+    senal   = tf_1d.get("senal", "MANTENER")
+    adx     = tf_1d.get("adx", 0)
+    macd_ok = tf_1d.get("macd_alcista", False)
+
+    dist_stop_pct = ((precio_mxn - stop) / precio_mxn * 100) if stop else 0
+    dist_obj_pct  = ((obj - precio_mxn) / precio_mxn * 100) if obj else 0
+
+    # SALIR: múltiples señales de deterioro
+    if senal == "VENDER" or (score <= 3) or (rsi < 35 and pl_pct < -5):
+        return {
+            "accion":   "SALIR",
+            "color":    "var(--red)",
+            "icono":    "🚨",
+            "mensaje":  f"Indicadores deteriorados (score {score}/{total_c}, RSI {rsi:.0f}). Stop en {fmt(stop)}.",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # AGREGAR: señal fuerte de compra con posición existente
+    if senal == "COMPRAR" and score >= 7 and macd_ok and adx >= 20 and pl_pct > -3:
+        return {
+            "accion":   "AGREGAR",
+            "color":    "var(--green)",
+            "icono":    "✅",
+            "mensaje":  f"Señal alcista confirmada. Entrada en {fmt(precio_mxn)}. Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # TOMAR GANANCIAS: cerca del objetivo
+    if obj and precio_mxn >= obj * 0.92:
+        return {
+            "accion":   "TOMAR GANANCIAS",
+            "color":    "#d46b08",
+            "icono":    "💰",
+            "mensaje":  f"Precio cerca del objetivo {fmt(obj)}. Considera cerrar el 50-75% de la posición.",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # MANTENER: todo en orden
+    return {
+        "accion":   "MANTENER",
+        "color":    "var(--yellow)",
+        "icono":    "→",
+        "mensaje":  f"Stop en {fmt(stop)} ({dist_stop_pct:.1f}% abajo). Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
+        "stop":     stop,
+        "objetivo": obj,
+    }
 
 
 def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None = None,
@@ -2659,6 +2750,58 @@ def gbm_cell(entrada_mxn, stop_mxn, obj_mxn) -> str:
             f'<div>✅ <span style="color:var(--green)">{fmt(obj_mxn)}</span></div></div>')
 
 
+def _render_rec_badge(rec: dict) -> str:
+    """Badge compacto de recomendación para la tabla del portafolio."""
+    if not rec or rec.get("accion") == "SIN DATOS":
+        return '<span class="hint" style="font-size:10px">Sin análisis</span>'
+    accion  = rec.get("accion", "—")
+    color   = rec.get("color", "var(--muted)")
+    icono   = rec.get("icono", "—")
+    stop    = rec.get("stop")
+    objetivo= rec.get("objetivo")
+    bg_map  = {
+        "SALIR":          "#fff1f0",
+        "AGREGAR":        "#f0fdf4",
+        "TOMAR GANANCIAS":"#fffbeb",
+        "MANTENER":       "#fffbeb",
+    }
+    brd_map = {
+        "SALIR":          "#fca5a5",
+        "AGREGAR":        "#86efac",
+        "TOMAR GANANCIAS":"#fde68a",
+        "MANTENER":       "#fde68a",
+    }
+    bg  = bg_map.get(accion, "var(--surface2)")
+    brd = brd_map.get(accion, "var(--brd)")
+    lines = [f'<div style="font-weight:700;font-size:11px;color:{color}">{icono} {accion}</div>']
+    if stop:
+        lines.append(f'<div style="font-size:10px;color:var(--muted)">Stop: <span style="color:var(--red);font-family:var(--mono)">{fmt(stop)}</span></div>')
+    if objetivo:
+        lines.append(f'<div style="font-size:10px;color:var(--muted)">Meta: <span style="color:var(--green);font-family:var(--mono)">{fmt(objetivo)}</span></div>')
+    return (f'<div style="background:{bg};border:1px solid {brd};border-radius:6px;'
+            f'padding:5px 8px;min-width:110px">{"".join(lines)}</div>')
+
+
+def _render_rec_panel(rec: dict) -> str:
+    """Panel completo de recomendación en el detail del portafolio."""
+    if not rec or rec.get("accion") == "SIN DATOS":
+        return ""
+    accion  = rec.get("accion", "—")
+    color   = rec.get("color", "var(--muted)")
+    icono   = rec.get("icono", "—")
+    mensaje = rec.get("mensaje", "")
+    bg_map  = {"SALIR":"#fff1f0","AGREGAR":"#f0fdf4","TOMAR GANANCIAS":"#fffbeb","MANTENER":"#fffbeb"}
+    brd_map = {"SALIR":"#fca5a5","AGREGAR":"#86efac","TOMAR GANANCIAS":"#fde68a","MANTENER":"#fde68a"}
+    bg  = bg_map.get(accion, "var(--surface2)")
+    brd = brd_map.get(accion, "var(--brd)")
+    return (f'<div style="background:{bg};border:2px solid {brd};border-radius:8px;'
+            f'padding:12px 14px;margin-bottom:10px">'
+            f'<div style="font-weight:700;font-size:14px;color:{color};margin-bottom:4px">'
+            f'{icono} {accion}</div>'
+            f'<div style="font-size:12px;color:{color};opacity:.9">{mensaje}</div>'
+            f'</div>')
+
+
 # ── RENDER ROWS ───────────────────────────────────────────
 def render_port_rows(posiciones, tc):
     h=""
@@ -2728,6 +2871,7 @@ def render_port_rows(posiciones, tc):
         detail=(f'<div class="detail-panel">'
                 f'{render_conf(conf) if conf else ""}'
                 f'{alertas_h}'
+                f'{_render_rec_panel(pos.get("recomendacion",{}))}'
                 # ── Gestión de posición (lo más importante para posiciones abiertas)
                 f'<div class="dp-sec" style="margin-bottom:10px">'
                 f'<div class="dp-sec-t">🎯 Gestión de la posición</div>'
@@ -2774,10 +2918,11 @@ def render_port_rows(posiciones, tc):
             f'<td class="num {pl_cls}">{fmt(pos["pl_mxn"])}</td>'
             f'<td class="num {pl_cls}">{pos["pl_pct"]:+.1f}%</td>'
             f'<td>{badge_senal(senal)}</td>'
+            f'<td>{_render_rec_badge(pos.get("recomendacion",{}))}</td>'
             f'<td>{sr_inline_port}</td>'
             f'<td>{gbm_cell(pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="10" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
 
@@ -3484,7 +3629,8 @@ td strong{{font-size:13px;font-weight:500}}
     <div style="overflow-x:auto"><table>
       <thead><tr><th>Emisora</th><th>Títulos</th><th>Cto. prom MXN</th><th>Precio actual</th>
         <th>Valor MXN</th><th>P&L MXN</th><th>% Var</th><th>Señal</th>
-        <th class="sr-th" title="Soporte / Resistencia automáticos — clic para mapa completo">📊 S/R</th>
+        <th style="color:var(--green)">¿Qué hago?</th>
+        <th class="sr-th" title="Soporte / Resistencia automáticos">📊 S/R</th>
         <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
       <tbody id="port_tbody">{port_rows}</tbody>
     </table></div>
