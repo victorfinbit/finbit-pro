@@ -58,23 +58,16 @@ PORTAFOLIO_INICIAL = [
 
 # ── Exchanges vacíos "" = auto-detect TwelveData (más estable) ──
 SCANNER_TICKERS = {
-    "SOXL":("SOXL",""),  "TQQQ":("TQQQ",""),
-    "NVDA":("NVDA",""),  "TSLA":("TSLA",""),
-    "AAPL":("AAPL",""),  "META":("META",""),
-    "PLTR":("PLTR",""),  "PYPL":("PYPL",""),
-    "NFLX":("NFLX",""),  "NKE":("NKE",""),
+    "SOXL":("SOXL",""),
+    "TSLA":("TSLA",""),
+    "PYPL":("PYPL",""),
 }
 
 # SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
 
 
-# Universo para el radar (deduplicado automáticamente con SCANNER_TICKERS)
-_UNIVERSO_EXTRA = {
-    "MSFT":("MSFT",""), "GOOGL":("GOOGL",""),
-    "AMZN":("AMZN",""), "SPXL":("SPXL",""),
-    "UBER":("UBER",""), "ABNB":("ABNB",""),
-    "DIS":("DIS",""),
-}
+# Universo para el radar (mismo que scanner — el usuario agrega los que necesite)
+_UNIVERSO_EXTRA = {}
 UNIVERSO = {**SCANNER_TICKERS, **_UNIVERSO_EXTRA}
 
 
@@ -709,6 +702,67 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
     }
 
 
+# ── MODO GANGA ────────────────────────────────────────────
+def detectar_ganga(tf_1d: dict, sr: dict, obv_info: dict,
+                   closes: list, volumes: list) -> dict:
+    """
+    Acumulacion anticipada antes de que la tendencia se alinee.
+    Solo acciones (no ETFs 3x). Necesita >= 3 de 4 criterios.
+    """
+    if not tf_1d or not tf_1d.get("valido"):
+        return {"es_ganga": False, "criterios_ok": [], "fuerza": 0, "soportes_fuertes": []}
+
+    rsi_val = tf_1d.get("rsi", 50)
+    precio  = tf_1d.get("precio", 0)
+    obv_div = obv_info.get("div_alcista", False)
+
+    soportes_fuertes = [z for z in sr.get("soportes", [])
+                        if z.get("fuerza", 0) >= 3 and z.get("precio", precio+1) < precio]
+    c1 = len(soportes_fuertes) > 0
+    c2 = obv_div
+    c3 = 25 <= rsi_val <= 40
+    c4 = False
+    if closes and volumes and len(closes) >= 6:
+        vols_rojos = [volumes[i] for i in range(len(closes)-5, len(closes))
+                      if closes[i] < closes[i-1]]
+        if len(vols_rojos) >= 2:
+            vol_media = sum(volumes[-20:]) / max(len(volumes[-20:]), 1)
+            c4 = all(v < vol_media * 0.85 for v in vols_rojos)
+
+    criterios_ok = []
+    if c1: criterios_ok.append(f"Soporte {soportes_fuertes[0]['fuerza']}x toques en ${soportes_fuertes[0]['precio']:.2f}")
+    if c2: criterios_ok.append("OBV sube mientras precio baja — acumulacion institucional")
+    if c3: criterios_ok.append(f"RSI {rsi_val:.0f} en sobreventa (25-40)")
+    if c4: criterios_ok.append("Volumen bajando en dias rojos — vendedores agotandose")
+
+    fuerza = len(criterios_ok)
+    return {
+        "es_ganga":         fuerza >= 3,
+        "criterios_ok":     criterios_ok,
+        "fuerza":           fuerza,
+        "soportes_fuertes": soportes_fuertes,
+    }
+
+
+def render_ganga_panel(ganga: dict) -> str:
+    if not ganga or not ganga.get("es_ganga"):
+        return ""
+    items = "".join(f'<li style="margin:2px 0">{c}</li>' for c in ganga.get("criterios_ok", []))
+    sops  = ganga.get("soportes_fuertes", [])
+    sop_txt = (f'Soporte clave: <strong>${sops[0]["precio"]:.2f}</strong> ({sops[0]["fuerza"]}x toques)'
+               if sops else "")
+    return (f'<div style="background:#f0fdf4;border:2px solid #86efac;border-radius:8px;'
+            f'padding:11px 14px;margin-bottom:10px;font-size:11px">'
+            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:5px">'
+            f'🏷️ GANGA — acumulacion anticipada</div>'
+            f'<ul style="margin:0 0 6px 14px;color:#166534">{items}</ul>'
+            f'<div style="color:#14532d;font-size:10px">{sop_txt}</div>'
+            f'<div style="margin-top:8px;background:#dcfce7;border-radius:5px;padding:5px 9px;'
+            f'color:#166534;font-size:10px">'
+            f'Entrada escalonada con el plan DCA de abajo. Stop bajo el soporte.</div>'
+            f'</div>')
+
+
 def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
     """
     Panel visual del plan DCA — claro, accionable, sin tecnicismos.
@@ -889,28 +943,27 @@ def init_score_history():
 def guardar_score(ticker: str, score: int, senal: str, vix: float,
                   precio: float, estado: str):
     """
-    Guarda score en historial — máximo 1 entrada por ticker por día.
-    Si ya existe una entrada hoy, la actualiza (no duplica).
-    Así el historial acumula día a día correctamente.
+    Guarda score en historial. Inserta siempre una nueva fila — acumula histórico.
+    Solo actualiza si ya hay una entrada en los últimos 30 minutos (evita duplicados
+    por múltiples corridas seguidas en el mismo día).
     """
     from datetime import timezone, timedelta
     tz_mx  = timezone(timedelta(hours=-6))
-    hoy    = datetime.now(tz_mx).strftime("%Y-%m-%d")
     ahora  = datetime.now(tz_mx).strftime("%Y-%m-%d %H:%M")
+    hace30 = (datetime.now(tz_mx) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
     con    = sqlite3.connect(DB_FILE)
-    # Verificar si ya hay entrada de hoy para este ticker
+    # Solo actualizar si hay una entrada de los últimos 30 minutos (misma corrida)
     existe = con.execute(
-        "SELECT id FROM score_history WHERE ticker=? AND fecha LIKE ?",
-        (ticker.upper(), f"{hoy}%")
+        "SELECT id FROM score_history WHERE ticker=? AND fecha >= ?",
+        (ticker.upper(), hace30)
     ).fetchone()
     if existe:
-        # Actualizar la entrada de hoy con los datos más recientes
         con.execute(
             "UPDATE score_history SET fecha=?,score=?,senal=?,vix=?,precio=?,estado=? WHERE id=?",
             (ahora, score, senal, round(vix,2), round(precio,4), estado, existe[0])
         )
     else:
-        # Nueva entrada para este día
+        # Nueva entrada — acumula histórico
         con.execute(
             "INSERT INTO score_history (ticker,fecha,score,senal,vix,precio,estado) VALUES(?,?,?,?,?,?,?)",
             (ticker.upper(), ahora, score, senal, round(vix,2), round(precio,4), estado)
@@ -2178,6 +2231,17 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 setup["advertencias"].append(
                     f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
+            # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
+            ganga_info = {}
+            if not etf_peligroso and estado not in ("BUY", "ROCKET", "EXIT"):
+                vals_cache = _get_cached(symbol, "1day", exchange) or []
+                closes_g   = [float(x["close"]) for x in vals_cache]
+                volumes_g  = [float(x.get("volume", 0)) for x in vals_cache]
+                ganga_info = detectar_ganga(tf_1d, an.get("sr", {}),
+                                            tf_1d.get("obv", {}), closes_g, volumes_g)
+                if ganga_info.get("es_ganga"):
+                    estado = "GANGA"
+
             try:
                 guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
             except Exception: pass
@@ -2215,12 +2279,13 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "setup": setup,
                 "sr": an.get("sr", {}),
                 "dca": dca_plan,
+                "ganga": ganga_info,
             })
         except Exception as e:
             print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
             continue
 
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
     resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
     return resultados
 
@@ -2294,6 +2359,13 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             setup["advertencias"].append(
                 f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
+        # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
+        ganga_info_r = {}
+        if not es_etf_apalancado(nombre) and estado not in ("BUY", "ROCKET", "EXIT"):
+            ganga_info_r = detectar_ganga(tf, sr_radar, tf.get("obv", {}), closes, volumes)
+            if ganga_info_r.get("es_ganga"):
+                estado = "GANGA"
+
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
         soportes_mxn_r = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_radar.get("soportes", [])]
         dca_plan_r = calcular_dca(
@@ -2321,11 +2393,12 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "exit_info":exit_info,"setup":setup,
             "sr":sr_radar,
             "dca":dca_plan_r,
+            "ganga":ganga_info_r,
             "vix":vix,"regimen":regimen_mercado(vix,spy),
         })
 
     print(f"  Radar completo: {len(resultados)} de {total} analizadas")
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
     resultados.sort(key=lambda x:(orden.get(x["estado"],9),-x["pot_alza"]))
     return resultados
 
@@ -2347,6 +2420,7 @@ def badge_estado(s):
     m={
         "ROCKET":   ("b-rocket", "🚀 Explosión"),
         "BUY":      ("b-buy",    "↑ Compra"),
+        "GANGA":    ("b-ganga",  "🏷️ Ganga"),
         "WATCH":    ("b-hold",   "👁 Vigilar"),
         "SKIP":     ("b-none",   "Esperar"),
         "SHORT":    ("b-sell",   "↓ Bajista"),
@@ -2756,6 +2830,7 @@ def render_scan_rows(scanner, tc):
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
+                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'{etf_warning}'
                 f'{render_conf(conf) if conf else ""}'
@@ -2901,6 +2976,7 @@ def render_radar_rows(radar, tc):
 
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
+                f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{decision_html}'
                 f'<div class="dp-grid">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Semáforo indicadores 1D</div>'
@@ -3259,6 +3335,7 @@ td strong{{font-size:13px;font-weight:500}}
 @keyframes pulse-exit{{0%,100%{{opacity:1}}50%{{opacity:.6}}}}
 .b-blocked{{background:#f0f0f0;color:#888;border:1px solid #ccc}}
 .b-etf{{background:#fff7e6;color:#d46b08;border:1px solid #ffd591;font-size:9px;padding:2px 6px;border-radius:10px;margin-left:4px}}
+.b-ganga{{background:#f0fdf4;color:#14532d;border:2px solid #86efac;font-weight:700}}
 .vix-chip{{font-size:11px;border-radius:20px;padding:3px 10px;font-family:var(--mono);font-weight:600;border:1px solid}}
 .vix-verde{{background:#f0fdf4;color:#16a34a;border-color:#bbf7d0}}
 .vix-amarillo{{background:#fffbeb;color:#b45309;border-color:#fde68a}}
@@ -3304,7 +3381,6 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('historial',this)">Historial</button>
   <button class="nb active" onclick="showTab('scanner',this)">Scanner</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
-  <button class="nb" onclick="showTab('buscador',this)">🔍 Buscador</button>
 </div></div>
 
 <div class="regimen-bar regimen-{regimen["color"]}">
@@ -3687,46 +3763,6 @@ td strong{{font-size:13px;font-weight:500}}
 </div>
 
 
-<div id="tab-buscador" class="tab">
-  <div style="padding:20px 0 14px">
-    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Buscador de acciones</h2>
-    <p class="hint">Hasta 5 tickers a la vez. Se guardan y aparecen en el scanner en la proxima corrida.</p>
-  </div>
-  <div class="tw">
-    <div class="tw-head"><span>Agregar tickers al scanner</span><span class="hint">Simbolo exacto: NVDA, AAPL, SOXL, TLEVISACPO...</span></div>
-    <div class="nota-box">Los tickers guardados se analizan junto con los defaults. Descarga finbit_tickers.json y ponlo junto al script.</div>
-    <div style="padding:16px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        <input type="text" id="b_t1" placeholder="Ticker 1 (NVDA)" class="b-input">
-        <input type="text" id="b_t2" placeholder="Ticker 2" class="b-input">
-        <input type="text" id="b_t3" placeholder="Ticker 3" class="b-input">
-        <input type="text" id="b_t4" placeholder="Ticker 4" class="b-input">
-        <input type="text" id="b_t5" placeholder="Ticker 5" class="b-input">
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select id="b_exchange" style="padding:7px 10px;border:1px solid var(--brd);border-radius:var(--r);font-size:13px;background:var(--surface)">
-          <option value="">Exchange auto</option>
-          <option value="NASDAQ">NASDAQ</option>
-          <option value="NYSE">NYSE</option>
-          <option value="NYSEARCA">NYSE Arca (ETFs)</option>
-          <option value="BMV">BMV Mexico</option>
-        </select>
-        <button class="btn" onclick="guardarTickers()">Guardar al scanner</button>
-        <span id="b_msg" style="font-size:12px"></span>
-      </div>
-    </div>
-  </div>
-  <div class="tw">
-    <div class="tw-head"><span>Tickers en el scanner personalizado</span></div>
-    <div style="padding:14px">
-      <div id="b_saved_list" style="display:flex;flex-wrap:wrap;gap:8px;min-height:32px">
-        <span class="hint">Sin tickers guardados</span>
-      </div>
-      <p class="hint" style="margin-top:10px;font-size:11px">Despues de guardar, corre python finbit.py para analizarlos en el scanner.</p>
-    </div>
-  </div>
-</div>
-
 <footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
 TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
 </div>
@@ -4058,84 +4094,12 @@ function buscarRadar(){{
 }}
 
 
-// ── Buscador de tickers ───────────────────────────────────
-function getTickers() {{
-  const ids = ['b_t1','b_t2','b_t3','b_t4','b_t5'];
-  return ids.map(id => document.getElementById(id).value.toUpperCase().trim()).filter(Boolean);
-}}
-
-function buscarTickers() {{
-  const tickers = getTickers();
-  if (!tickers.length) {{
-    document.getElementById('b_msg').innerHTML = '<span style="color:var(--red)">Escribe al menos un ticker</span>';
-    return;
-  }}
-  const exchange = document.getElementById('b_exchange').value;
-  document.getElementById('b_loading').style.display = 'block';
-  document.getElementById('b_results').innerHTML = '';
-  document.getElementById('b_msg').innerHTML = '';
-
-  // Guardar para que el script los lea en la próxima corrida
-  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
-  tickers.forEach(t => {{ saved[t] = exchange; }});
-  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
-
-  // Mostrar resultado visual inmediato (el análisis real ocurre al correr el script)
-  setTimeout(() => {{
-    document.getElementById('b_loading').style.display = 'none';
-    let html = '<div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:var(--r);padding:13px 16px;font-size:12px;color:#14532d">';
-    html += '<strong>✅ Tickers registrados:</strong> ' + tickers.join(', ') + '<br>';
-    html += 'Se analizarán en la próxima corrida del script. ';
-    html += 'Para ver el análisis ahora mismo, cierra el browser y corre <code>python finbit.py</code>';
-    html += '</div>';
-    document.getElementById('b_results').innerHTML = html;
-    actualizarListaGuardados();
-  }}, 500);
-}}
-
-function guardarTickers() {{
-  const tickers = getTickers();
-  if (!tickers.length) return;
-  const exchange = document.getElementById('b_exchange').value;
-  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
-  tickers.forEach(t => {{ saved[t] = exchange; }});
-  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
-
-  // También exportar como JSON para que el script lo lea
-  const blob = new Blob([JSON.stringify(saved, null, 2)], {{type:'application/json'}});
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = 'finbit_tickers.json'; a.click(); URL.revokeObjectURL(a.href);
-
-  document.getElementById('b_msg').innerHTML = '<span style="color:var(--green)">✅ Guardado. Descargó finbit_tickers.json — ponlo junto al script y vuelve a correr</span>';
-  actualizarListaGuardados();
-}}
-
-function actualizarListaGuardados() {{
-  const saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
-  const el = document.getElementById('b_saved_list');
-  if (!Object.keys(saved).length) {{
-    el.innerHTML = '<span class="hint">Sin tickers guardados aún</span>';
-    return;
-  }}
-  el.innerHTML = Object.entries(saved).map(([t, ex]) =>
-    `<span class="ticker-chip"><strong>${{t}}</strong><span class="hint">${{ex||'auto'}}</span>`+
-    `<button onclick="quitarTicker('${{t}}')">×</button></span>`
-  ).join('');
-}}
-
-function quitarTicker(ticker) {{
-  let saved = JSON.parse(localStorage.getItem('finbit_custom_tickers') || '{{}}');
-  delete saved[ticker];
-  localStorage.setItem('finbit_custom_tickers', JSON.stringify(saved));
-  actualizarListaGuardados();
-}}
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load',()=>{{
   cargarTickersPersonalizados();
   const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
   if(ops.length) renderOpsTable(ops);
   actualizarTablaPortafolio();
-  actualizarListaGuardados();
   const cap=localStorage.getItem('cfg_capital');
   const rie=localStorage.getItem('cfg_riesgo');
   const rr=localStorage.getItem('cfg_rr');
