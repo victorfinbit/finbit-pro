@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          FINBIT PRO  v3.2                                    ║
+║          FINBIT PRO                                    ║
 ║  python finbit.py → abre dashboard.html                     ║
 ╚══════════════════════════════════════════════════════════════╝
 
@@ -3557,7 +3557,7 @@ td strong{{font-size:13px;font-weight:500}}
 </style></head><body>
 
 <div class="topbar"><div class="topbar-inner">
-  <div class="logo">fin<em>bit</em> <span style="font-size:11px;color:var(--muted);font-weight:400">pro v3.2</span></div>
+  <div class="logo">fin<em>bit</em> <span style="font-size:11px;color:var(--muted);font-weight:400">pro</span></div>
   <div class="topbar-right">
     <span class="tc-chip">USD/MXN <strong>${tc:.4f}</strong></span>
     <span class="vix-chip vix-{regimen["color"]}" title="VIX={vix:.1f} — Fear Index. <18 calma, 18-25 precaución, >25 pánico">
@@ -3967,7 +3967,7 @@ td strong{{font-size:13px;font-weight:500}}
 
 
 <footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
-TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
+TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro</footer>
 </div>
 
 <script>
@@ -5220,7 +5220,7 @@ def api_test():
 # ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "="*56)
-    print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
+    print("   FINBIT PRO  — servidor web (non-blocking)")
     print("="*56)
 
     init_db()
