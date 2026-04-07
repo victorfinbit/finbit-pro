@@ -3603,12 +3603,12 @@ td strong{{font-size:13px;font-weight:500}}
   </div>
   {alert_banner}
   <div class="kpis">
-    <div class="kpi"><div class="lbl">Valor total</div><div class="val">{fmt(total_valor)}</div></div>
-    <div class="kpi"><div class="lbl">Costo total</div><div class="val">{fmt(total_costo)}</div></div>
-    <div class="kpi"><div class="lbl">P&L total</div><div class="val {pl_cls}">{fmt(total_pl)}</div></div>
-    <div class="kpi"><div class="lbl">Rendimiento</div><div class="val {plpct_cls}">{total_pl_pct:+.1f}%</div></div>
+    <div class="kpi"><div class="lbl">Valor total</div><div class="val" id="kpi-valor">{fmt(total_valor)}</div></div>
+    <div class="kpi"><div class="lbl">Costo total</div><div class="val" id="kpi-costo">{fmt(total_costo)}</div></div>
+    <div class="kpi"><div class="lbl">P&L total</div><div class="val" id="kpi-pl">{fmt(total_pl)}</div></div>
+    <div class="kpi"><div class="lbl">Rendimiento</div><div class="val" id="kpi-rend">{total_pl_pct:+.1f}%</div></div>
     <div class="kpi"><div class="lbl">Posiciones</div><div class="val" id="kpi-pos">{len(port_data)}</div></div>
-    <div class="kpi"><div class="lbl">Alertas</div><div class="val {al_cls}">{n_alertas}</div></div>
+    <div class="kpi"><div class="lbl">Alertas</div><div class="val" id="kpi-alertas">{n_alertas}</div></div>
   </div>
   <div class="tw">
     <div class="tw-head">
@@ -3996,16 +3996,55 @@ function actualizarTablaPortafolio(){{
   const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
   const map=recalcPortafolio(ops);
   const tbody=document.getElementById('port_tbody');
+
+  // ── Actualizar tarjetas KPI desde localStorage ─────────────
+  let totalCosto=0, totalValor=0, nPos=0;
+  Object.entries(map).forEach(([tk,d])=>{{
+    if(d.titulos<=0) return;
+    const cto = d.titulos>0 ? d.costoTotal/d.titulos : 0;
+    const costoPos = cto*d.titulos;
+    const valorPos = (d.precio_actual_mxn||cto)*d.titulos;
+    totalCosto += costoPos;
+    totalValor += valorPos;
+    nPos++;
+  }});
+  const totalPL    = totalValor - totalCosto;
+  const rendPct    = totalCosto>0 ? (totalPL/totalCosto*100) : 0;
+  const fmtMXN = v => (v<0?'-':'')+'$'+Math.abs(v).toLocaleString('es-MX',{{minimumFractionDigits:2}});
+
+  const setKPI = (id, val, cls) => {{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.textContent = val;
+    if(cls) el.className = 'val '+cls;
+  }};
+  setKPI('kpi-valor', fmtMXN(totalValor));
+  setKPI('kpi-costo', fmtMXN(totalCosto));
+  setKPI('kpi-pl',   fmtMXN(totalPL),   totalPL>=0?'pos':'neg');
+  setKPI('kpi-rend', (rendPct>=0?'+':'')+rendPct.toFixed(1)+'%', rendPct>=0?'pos':'neg');
+  setKPI('kpi-pos',  nPos);
+
   if(!tbody) return;
 
-  // Actualizar filas existentes
+  // ── Ocultar filas de posiciones que ya se cerraron (titulos=0) ──
   tbody.querySelectorAll('tr.datarow').forEach(row=>{{
     const tkEl=row.querySelector('td strong');
     if(!tkEl) return;
     const tk=tkEl.textContent.trim();
-    if(!map[tk]) return;
     const d=map[tk];
-    if(d.titulos<=0) return;
+    const cerrada = !d || d.titulos<=0;
+    row.style.display = cerrada ? 'none' : '';
+    const next=row.nextElementSibling;
+    if(next&&next.classList.contains('detail')) next.style.display = cerrada?'none':'';
+  }});
+
+  // ── Actualizar filas existentes con datos del localStorage ──
+  tbody.querySelectorAll('tr.datarow').forEach(row=>{{
+    const tkEl=row.querySelector('td strong');
+    if(!tkEl) return;
+    const tk=tkEl.textContent.trim();
+    const d=map[tk];
+    if(!d||d.titulos<=0) return;
     const cto=d.titulos>0? d.costoTotal/d.titulos : 0;
     const cells=row.querySelectorAll('td');
     if(cells.length<7) return;
@@ -4022,7 +4061,7 @@ function actualizarTablaPortafolio(){{
     }}
   }});
 
-  // Agregar filas nuevas (posiciones que no estaban en el script)
+  // ── Agregar filas nuevas (posiciones no renderizadas por el servidor) ──
   Object.entries(map).forEach(([tk,d])=>{{
     if(d.titulos<=0) return;
     const exists=[...tbody.querySelectorAll('tr.datarow')].some(r=>r.querySelector('td strong')?.textContent.trim()===tk);
@@ -4032,17 +4071,22 @@ function actualizarTablaPortafolio(){{
     const newRow=document.createElement('tr');
     newRow.className='datarow';
     newRow.setAttribute('onclick',`toggle('${{rid}}')`);
-    newRow.innerHTML=`<td><strong>${{tk}}</strong><br><span class="hint">${{d.origen}} · ${{d.mercado}}</span></td>`
+    newRow.innerHTML=
+      `<td><strong>${{tk}}</strong><br><span class="hint">${{d.origen||'USA'}} · ${{d.mercado||'SIC'}}</span></td>`
       +`<td class="num">${{parseFloat(d.titulos.toFixed(6))}}</td>`
       +`<td class="num">$${{cto.toLocaleString('es-MX',{{minimumFractionDigits:2}})}}</td>`
       +`<td class="num">—</td>`
       +`<td class="num">$${{(cto*d.titulos).toLocaleString('es-MX',{{minimumFractionDigits:2}})}}</td>`
       +`<td class="num">—</td><td class="num">—</td>`
-      +`<td><span class="badge b-none">Sin análisis</span></td><td>—</td>`;
+      +`<td><span class="badge b-none">Sin análisis</span></td>`
+      +`<td><span style="font-size:10px;color:var(--muted)">Actualiza ↺ para ver recomendación</span></td>`
+      +`<td>—</td><td>—</td>`;
     tbody.appendChild(newRow);
     const detRow=document.createElement('tr');
     detRow.className='detail'; detRow.id=rid;
-    detRow.innerHTML='<td colspan="9" style="padding:0"><div class="detail-panel"><p class="hint">Análisis disponible al correr el script de nuevo.</p></div></td>';
+    detRow.innerHTML='<td colspan="11" style="padding:0"><div class="detail-panel">'
+      +'<p class="hint">Presiona ↺ Actualizar para ver el análisis completo de esta posición.</p>'
+      +'</div></td>';
     tbody.appendChild(detRow);
   }});
 }}
