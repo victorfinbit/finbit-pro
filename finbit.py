@@ -702,65 +702,96 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
     }
 
 
-# ── MODO GANGA ────────────────────────────────────────────
-def detectar_ganga(tf_1d: dict, sr: dict, obv_info: dict,
-                   closes: list, volumes: list) -> dict:
+# ── MODO GANGA (señal adicional de precio) ───────────────
+def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float) -> dict:
     """
-    Acumulacion anticipada antes de que la tendencia se alinee.
-    Solo acciones (no ETFs 3x). Necesita >= 3 de 4 criterios.
+    Detecta oportunidad de acumulacion cuando el precio esta lejos de su objetivo
+    y hay un piso confirmado. 3 criterios obligatorios:
+      1. Precio >= 15% por debajo del objetivo calculado
+      2. RSI entre 30-55 (deprimido/neutral, no sobrecomprado)
+      3. Al menos 1 soporte con >= 2 toques debajo del precio actual
+    Solo si los 3 se cumplen aparece el badge — sin piso no hay ganga.
     """
-    if not tf_1d or not tf_1d.get("valido"):
-        return {"es_ganga": False, "criterios_ok": [], "fuerza": 0, "soportes_fuertes": []}
+    if not tf_1d or not tf_1d.get("valido") or not objetivo_mxn:
+        return {"es_ganga": False}
 
-    rsi_val = tf_1d.get("rsi", 50)
-    precio  = tf_1d.get("precio", 0)
-    obv_div = obv_info.get("div_alcista", False)
+    precio_mxn = tf_1d.get("precio", 0) * (1.0)  # precio ya en USD; se pasa objetivo_mxn
+    rsi        = tf_1d.get("rsi", 50)
+    precio     = tf_1d.get("precio", 0)
 
-    soportes_fuertes = [z for z in sr.get("soportes", [])
-                        if z.get("fuerza", 0) >= 3 and z.get("precio", precio+1) < precio]
-    c1 = len(soportes_fuertes) > 0
-    c2 = obv_div
-    c3 = 25 <= rsi_val <= 40
-    c4 = False
-    if closes and volumes and len(closes) >= 6:
-        vols_rojos = [volumes[i] for i in range(len(closes)-5, len(closes))
-                      if closes[i] < closes[i-1]]
-        if len(vols_rojos) >= 2:
-            vol_media = sum(volumes[-20:]) / max(len(volumes[-20:]), 1)
-            c4 = all(v < vol_media * 0.85 for v in vols_rojos)
+    if not precio or not objetivo_mxn:
+        return {"es_ganga": False}
 
-    criterios_ok = []
-    if c1: criterios_ok.append(f"Soporte {soportes_fuertes[0]['fuerza']}x toques en ${soportes_fuertes[0]['precio']:.2f}")
-    if c2: criterios_ok.append("OBV sube mientras precio baja — acumulacion institucional")
-    if c3: criterios_ok.append(f"RSI {rsi_val:.0f} en sobreventa (25-40)")
-    if c4: criterios_ok.append("Volumen bajando en dias rojos — vendedores agotandose")
+    # Criterio 1: margen al objetivo >= 15%
+    margen_pct = (objetivo_mxn - precio) / precio * 100 if precio else 0
+    c1 = margen_pct >= 15.0
 
-    fuerza = len(criterios_ok)
+    # Criterio 2: RSI en zona deprimida/neutral
+    c2 = 30 <= rsi <= 55
+
+    # Criterio 3: soporte con >= 2 toques debajo del precio
+    soportes = [z for z in sr.get("soportes", [])
+                if z.get("fuerza", 0) >= 2 and z.get("precio", precio+1) < precio]
+    c3 = len(soportes) > 0
+
+    es_ganga = c1 and c2 and c3
+
+    soporte_ref = soportes[0] if soportes else None
+
     return {
-        "es_ganga":         fuerza >= 3,
-        "criterios_ok":     criterios_ok,
-        "fuerza":           fuerza,
-        "soportes_fuertes": soportes_fuertes,
+        "es_ganga":    es_ganga,
+        "margen_pct":  round(margen_pct, 1),
+        "rsi":         round(rsi, 1),
+        "soporte":     soporte_ref,
+        "objetivo_mxn": round(objetivo_mxn, 2),
+        "precio":      round(precio, 2),
     }
 
 
-def render_ganga_panel(ganga: dict) -> str:
+def badge_ganga(ganga: dict) -> str:
+    """Badge compacto para la tabla — solo aparece si es_ganga=True."""
     if not ganga or not ganga.get("es_ganga"):
         return ""
-    items = "".join(f'<li style="margin:2px 0">{c}</li>' for c in ganga.get("criterios_ok", []))
-    sops  = ganga.get("soportes_fuertes", [])
-    sop_txt = (f'Soporte clave: <strong>${sops[0]["precio"]:.2f}</strong> ({sops[0]["fuerza"]}x toques)'
-               if sops else "")
+    margen = ganga.get("margen_pct", 0)
+    return (f'<span style="display:inline-flex;padding:2px 7px;border-radius:20px;'
+            f'font-size:9px;font-weight:700;white-space:nowrap;'
+            f'background:#f0fdf4;color:#14532d;border:2px solid #86efac;margin-left:4px">'
+            f'🏷️ Ganga +{margen:.0f}%</span>')
+
+
+def render_ganga_panel(ganga: dict) -> str:
+    """Panel en el detail — explica por qué es ganga y cómo acumular."""
+    if not ganga or not ganga.get("es_ganga"):
+        return ""
+    margen  = ganga.get("margen_pct", 0)
+    rsi     = ganga.get("rsi", 0)
+    sop     = ganga.get("soporte")
+    obj     = ganga.get("objetivo_mxn", 0)
+    precio  = ganga.get("precio", 0)
+    sop_txt = (f'Piso en <strong>${sop["precio"]:.2f}</strong> ({sop["fuerza"]}× toques)'
+               if sop else "Sin soporte definido")
     return (f'<div style="background:#f0fdf4;border:2px solid #86efac;border-radius:8px;'
-            f'padding:11px 14px;margin-bottom:10px;font-size:11px">'
-            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:5px">'
-            f'🏷️ GANGA — acumulacion anticipada</div>'
-            f'<ul style="margin:0 0 6px 14px;color:#166534">{items}</ul>'
-            f'<div style="color:#14532d;font-size:10px">{sop_txt}</div>'
-            f'<div style="margin-top:8px;background:#dcfce7;border-radius:5px;padding:5px 9px;'
-            f'color:#166534;font-size:10px">'
-            f'Entrada escalonada con el plan DCA de abajo. Stop bajo el soporte.</div>'
-            f'</div>')
+            f'padding:12px 14px;margin-bottom:10px">'
+            f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:4px">'
+            f'🏷️ GANGA DE PRECIO — oportunidad de acumulación</div>'
+            f'<div style="font-size:11px;color:#166534;margin-bottom:10px">'
+            f'El precio está <strong>{margen:.1f}%</strong> por debajo de su objetivo calculado '
+            f'(${obj:.2f}) con RSI neutral ({rsi:.0f}) y piso confirmado. '
+            f'Zona ideal para acumular en escalones.</div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">'
+            f'<div style="background:#dcfce7;border-radius:6px;padding:8px;text-align:center">'
+            f'<div style="font-size:10px;color:#166534">Margen al objetivo</div>'
+            f'<div style="font-size:16px;font-weight:700;color:#14532d">+{margen:.1f}%</div></div>'
+            f'<div style="background:#dcfce7;border-radius:6px;padding:8px;text-align:center">'
+            f'<div style="font-size:10px;color:#166534">RSI actual</div>'
+            f'<div style="font-size:16px;font-weight:700;color:#14532d">{rsi:.0f}</div></div>'
+            f'<div style="background:#dcfce7;border-radius:6px;padding:8px;text-align:center">'
+            f'<div style="font-size:10px;color:#166534">Piso</div>'
+            f'<div style="font-size:13px;font-weight:700;color:#14532d">{sop_txt}</div></div></div>'
+            f'<div style="font-size:10px;color:#166534;background:#dcfce7;border-radius:5px;padding:6px 9px">'
+            f'💡 Usa el plan DCA de abajo para entrar en 3 escalones. '
+            f'Stop obligatorio bajo el piso ({sop_txt.replace("<strong>","").replace("</strong>","")}).'
+            f'</div></div>')
 
 
 def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
@@ -2231,16 +2262,14 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 setup["advertencias"].append(
                     f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-            # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
+            # ── GANGA: señal adicional de precio (no cambia el estado) ──
             ganga_info = {}
-            if not etf_peligroso and estado not in ("BUY", "ROCKET", "EXIT"):
-                vals_cache = _get_cached(symbol, "1day", exchange) or []
-                closes_g   = [float(x["close"]) for x in vals_cache]
-                volumes_g  = [float(x.get("volume", 0)) for x in vals_cache]
-                ganga_info = detectar_ganga(tf_1d, an.get("sr", {}),
-                                            tf_1d.get("obv", {}), closes_g, volumes_g)
-                if ganga_info.get("es_ganga"):
-                    estado = "GANGA"
+            if not etf_peligroso:
+                ganga_info = detectar_ganga(
+                    tf_1d,
+                    an.get("sr", {}),
+                    tf_1d.get("objetivo", 0) * tc   # objetivo en MXN
+                )
 
             try:
                 guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
@@ -2285,7 +2314,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
             print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
             continue
 
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
     resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
     return resultados
 
@@ -2359,12 +2388,14 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             setup["advertencias"].append(
                 f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
 
-        # ── GANGA: solo acciones (no ETFs 3x), cuando no es BUY/ROCKET/EXIT ──
+        # ── GANGA: señal adicional de precio (no cambia el estado) ──
         ganga_info_r = {}
-        if not es_etf_apalancado(nombre) and estado not in ("BUY", "ROCKET", "EXIT"):
-            ganga_info_r = detectar_ganga(tf, sr_radar, tf.get("obv", {}), closes, volumes)
-            if ganga_info_r.get("es_ganga"):
-                estado = "GANGA"
+        if not es_etf_apalancado(nombre):
+            ganga_info_r = detectar_ganga(
+                tf,
+                sr_radar,
+                tf.get("objetivo", 0) * tc   # objetivo en MXN
+            )
 
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
         soportes_mxn_r = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_radar.get("soportes", [])]
@@ -2398,7 +2429,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
         })
 
     print(f"  Radar completo: {len(resultados)} de {total} analizadas")
-    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"GANGA":3,"WATCH":4,"LATERAL":5,"SKIP":6,"SHORT":7,"RUPTURA":8,"BLOQUEADO":9}
+    orden = {"ROCKET":0,"BUY":1,"EXIT":2,"WATCH":3,"LATERAL":4,"SKIP":5,"SHORT":6,"RUPTURA":7,"BLOQUEADO":8}
     resultados.sort(key=lambda x:(orden.get(x["estado"],9),-x["pot_alza"]))
     return resultados
 
@@ -2420,7 +2451,6 @@ def badge_estado(s):
     m={
         "ROCKET":   ("b-rocket", "🚀 Explosión"),
         "BUY":      ("b-buy",    "↑ Compra"),
-        "GANGA":    ("b-ganga",  "🏷️ Ganga"),
         "WATCH":    ("b-hold",   "👁 Vigilar"),
         "SKIP":     ("b-none",   "Esperar"),
         "SHORT":    ("b-sell",   "↓ Bajista"),
@@ -2775,6 +2805,7 @@ def render_scan_rows(scanner, tc):
                          if en_cartera>0 else "")
         etf_badge   = badge_etf_apalancado() if etf_peligroso else ""
         setup_badge = badge_setup(tipo_setup) if tipo_setup not in ("—","Bloqueado","Salida urgente") else ""
+        ganga_badge = badge_ganga(r.get("ganga", {}))
 
         score_block    = render_score_badge(score_aj, total_c, senal_1d)
         score_adj_note = ""
@@ -2873,7 +2904,7 @@ def render_scan_rows(scanner, tc):
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{sr_badge}{cartera_badge}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{sr_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -2951,6 +2982,7 @@ def render_radar_rows(radar, tc):
                        if en_cartera>0 else "")
         etf_badge   = badge_etf_apalancado() if etf_peligroso else ""
         setup_badge = badge_setup(tipo_setup) if tipo_setup not in ("—","Bloqueado","Salida urgente") else ""
+        ganga_badge_r = badge_ganga(r.get("ganga", {}))
 
         crit = r.get("criterios",{}); sz = r.get("sizing",{})
         senal_est = ("COMPRAR" if estado in ("ROCKET","BUY") else
@@ -3033,7 +3065,7 @@ def render_radar_rows(radar, tc):
         else:
             sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{sr_badge}{cartera_tag}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
