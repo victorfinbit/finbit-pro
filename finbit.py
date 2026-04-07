@@ -703,39 +703,37 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
 
 
 # ── MODO GANGA (señal adicional de precio) ───────────────
-def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float) -> dict:
+def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float) -> dict:
     """
-    Detecta oportunidad de acumulacion cuando el precio esta lejos de su objetivo
-    y hay un piso confirmado. 3 criterios obligatorios:
-      1. Precio >= 15% por debajo del objetivo calculado
+    Detecta oportunidad de acumulacion cuando el precio esta lejos de su objetivo.
+    Todo en MXN usando el TC del día. 3 criterios obligatorios:
+      1. Precio >= 15% por debajo del objetivo calculado (ambos en MXN)
       2. RSI entre 30-55 (deprimido/neutral, no sobrecomprado)
       3. Al menos 1 soporte con >= 2 toques debajo del precio actual
-    Solo si los 3 se cumplen aparece el badge — sin piso no hay ganga.
+    Solo si los 3 se cumplen aparece el badge.
     """
-    if not tf_1d or not tf_1d.get("valido") or not objetivo_mxn:
+    if not tf_1d or not tf_1d.get("valido") or not objetivo_mxn or not precio_mxn:
         return {"es_ganga": False}
 
-    precio_mxn = tf_1d.get("precio", 0) * (1.0)  # precio ya en USD; se pasa objetivo_mxn
-    rsi        = tf_1d.get("rsi", 50)
-    precio     = tf_1d.get("precio", 0)
+    rsi = tf_1d.get("rsi", 50)
 
-    if not precio or not objetivo_mxn:
+    if objetivo_mxn <= precio_mxn:
         return {"es_ganga": False}
 
-    # Criterio 1: margen al objetivo >= 15%
-    margen_pct = (objetivo_mxn - precio) / precio * 100 if precio else 0
+    # Criterio 1: margen al objetivo >= 15% — ambos en MXN
+    margen_pct = (objetivo_mxn - precio_mxn) / precio_mxn * 100
     c1 = margen_pct >= 15.0
 
     # Criterio 2: RSI en zona deprimida/neutral
     c2 = 30 <= rsi <= 55
 
-    # Criterio 3: soporte con >= 2 toques debajo del precio
+    # Criterio 3: soporte con >= 2 toques debajo del precio (en USD, precio de la vela)
+    precio_usd = tf_1d.get("precio", 0)
     soportes = [z for z in sr.get("soportes", [])
-                if z.get("fuerza", 0) >= 2 and z.get("precio", precio+1) < precio]
+                if z.get("fuerza", 0) >= 2 and z.get("precio", precio_usd + 1) < precio_usd]
     c3 = len(soportes) > 0
 
-    es_ganga = c1 and c2 and c3
-
+    es_ganga    = c1 and c2 and c3
     soporte_ref = soportes[0] if soportes else None
 
     return {
@@ -744,7 +742,7 @@ def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float) -> dict:
         "rsi":         round(rsi, 1),
         "soporte":     soporte_ref,
         "objetivo_mxn": round(objetivo_mxn, 2),
-        "precio":      round(precio, 2),
+        "precio_mxn":  round(precio_mxn, 2),
     }
 
 
@@ -767,16 +765,16 @@ def render_ganga_panel(ganga: dict) -> str:
     rsi     = ganga.get("rsi", 0)
     sop     = ganga.get("soporte")
     obj     = ganga.get("objetivo_mxn", 0)
-    precio  = ganga.get("precio", 0)
-    sop_txt = (f'Piso en <strong>${sop["precio"]:.2f}</strong> ({sop["fuerza"]}× toques)'
+    precio  = ganga.get("precio_mxn", 0)
+    sop_txt = (f'Piso en <strong>${sop["precio"]:.2f} USD</strong> ({sop["fuerza"]}× toques)'
                if sop else "Sin soporte definido")
     return (f'<div style="background:#f0fdf4;border:2px solid #86efac;border-radius:8px;'
             f'padding:12px 14px;margin-bottom:10px">'
             f'<div style="font-weight:700;font-size:13px;color:#14532d;margin-bottom:4px">'
             f'🏷️ GANGA DE PRECIO — oportunidad de acumulación</div>'
             f'<div style="font-size:11px;color:#166534;margin-bottom:10px">'
-            f'El precio está <strong>{margen:.1f}%</strong> por debajo de su objetivo calculado '
-            f'(${obj:.2f}) con RSI neutral ({rsi:.0f}) y piso confirmado. '
+            f'El precio (${precio:,.2f} MXN) está <strong>{margen:.1f}%</strong> por debajo '
+            f'del objetivo calculado (${obj:,.2f} MXN) con RSI neutral ({rsi:.0f}) y piso confirmado. '
             f'Zona ideal para acumular en escalones.</div>'
             f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">'
             f'<div style="background:#dcfce7;border-radius:6px;padding:8px;text-align:center">'
@@ -2268,7 +2266,8 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 ganga_info = detectar_ganga(
                     tf_1d,
                     an.get("sr", {}),
-                    tf_1d.get("objetivo", 0) * tc   # objetivo en MXN
+                    tf_1d.get("objetivo", 0) * tc,   # objetivo en MXN
+                    precio_usd * tc                   # precio en MXN
                 )
 
             try:
@@ -2394,7 +2393,8 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             ganga_info_r = detectar_ganga(
                 tf,
                 sr_radar,
-                tf.get("objetivo", 0) * tc   # objetivo en MXN
+                tf.get("objetivo", 0) * tc,   # objetivo en MXN
+                precio * tc                    # precio en MXN
             )
 
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
