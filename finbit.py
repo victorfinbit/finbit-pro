@@ -4286,7 +4286,34 @@ window.addEventListener('load',()=>{{
   if(cap) document.getElementById('cfg_capital').value=cap;
   if(rie) document.getElementById('cfg_riesgo').value=(parseFloat(rie)*100).toFixed(0);
   if(rr) document.getElementById('cfg_rr').value=rr;
+  // Sincronizar ops del localStorage al servidor (para que el portafolio y las tarjetas funcionen)
+  sincronizarOpsAlServidor();
 }});
+
+function sincronizarOpsAlServidor() {{
+  const ops = JSON.parse(localStorage.getItem('finbit_ops') || '[]');
+  if (!ops.length) return;
+  // Agregar total_mxn si no existe
+  const opsCompletas = ops.map(op => ({{
+    ...op,
+    total_mxn: op.total_mxn || (op.titulos * op.precio_mxn),
+    tc_dia: op.tc_dia || 17.5,
+    origen: op.origen || 'USA',
+    mercado: op.mercado || 'SIC',
+  }}));
+  fetch('/api/operaciones/import', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(opsCompletas)
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if (d.status === 'ok') {{
+      console.log('[finbit] Ops sincronizadas al servidor:', d.importadas);
+    }}
+  }})
+  .catch(e => console.log('[finbit] Sin conexión al servidor para sincronizar ops'));
+}}
 
 // ── Agregar ticker al scanner (guarda en DB via API) ─────────
 function agregarTickerScanner() {{
@@ -4995,16 +5022,49 @@ def api_operaciones():
 
 @app.route("/api/operaciones/import", methods=["POST"])
 def api_ops_import():
+    """
+    Sincroniza las operaciones del localStorage al servidor.
+    Reemplaza TODA la tabla de operaciones y reconstruye el portafolio desde cero.
+    El localStorage es la fuente de verdad — el servidor solo es el motor de análisis.
+    """
     global _dash_html
     try:
-        ops  = flask_req.get_json(force=True) or []
-        tc   = get_tipo_cambio(API_KEY)
-        path = "_tmp_ops_import.json"
-        with open(path, "w") as f:
-            json.dump(ops, f)
-        importar_ops_json(path, tc)
-        os.remove(path)
-        _dash_html = ""
+        ops = flask_req.get_json(force=True) or []
+        tc  = get_tipo_cambio(API_KEY)
+        con = sqlite3.connect(DB_FILE)
+
+        # Limpiar y reimportar operaciones
+        con.execute("DELETE FROM operaciones")
+        con.execute("DELETE FROM portafolio")
+        con.commit()
+
+        for op in sorted(ops, key=lambda x: x.get("fecha", "")):
+            try:
+                total_mxn = op.get("total_mxn") or (op.get("titulos",0) * op.get("precio_mxn",0))
+                con.execute(
+                    "INSERT INTO operaciones (fecha,ticker,tipo,titulos,precio_mxn,total_mxn,tc_dia,origen,mercado,notas) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (op.get("fecha"), op.get("ticker","").upper(), op.get("tipo"),
+                     op.get("titulos"), op.get("precio_mxn"), total_mxn,
+                     op.get("tc_dia", tc), op.get("origen","USA"),
+                     op.get("mercado","SIC"), op.get("notas",""))
+                )
+                con.commit()
+                # Reconstruir portafolio op por op
+                upsert_portafolio_from_op({
+                    "ticker":     op.get("ticker","").upper(),
+                    "tipo":       op.get("tipo"),
+                    "titulos":    op.get("titulos",0),
+                    "precio_mxn": op.get("precio_mxn",0),
+                    "origen":     op.get("origen","USA"),
+                    "mercado":    op.get("mercado","SIC"),
+                })
+            except Exception as e:
+                print(f"  [import] op skip: {e}")
+
+        con.close()
+        # No invalidar _dash_html aquí — la sincronización es silenciosa
+        # Solo se refleja en el próximo ↺ Actualizar
         return jsonify({"status": "ok", "importadas": len(ops)})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
