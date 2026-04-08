@@ -51,6 +51,12 @@ ALERTAR_RADAR_ROCKET = True
 DB_FILE     = "finbit.db"
 OUTPUT_FILE = "dashboard.html"
 
+# ── Sync automático de DB con GitHub ─────────────────────
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO  = "victorfinbit/finbit-pro"   # tu repo
+GITHUB_PATH  = "finbit.db"                  # ruta del archivo en el repo
+GITHUB_BRANCH= "main"
+
 PORTAFOLIO_INICIAL = [
    
   
@@ -72,6 +78,75 @@ UNIVERSO = {**SCANNER_TICKERS, **_UNIVERSO_EXTRA}
 
 
 # ── BASE DE DATOS ─────────────────────────────────────────
+# ── SYNC DB ↔ GITHUB ─────────────────────────────────────
+def _gh_headers():
+    return {"Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"}
+
+def db_restore_from_github():
+    """Al arrancar: descarga finbit.db desde GitHub si existe."""
+    if not GITHUB_TOKEN:
+        print("[github] Sin GITHUB_TOKEN — sync desactivado")
+        return
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
+        r = requests.get(url, headers=_gh_headers(), timeout=15)
+        if r.status_code == 200:
+            import base64
+            data = r.json()
+            content = base64.b64decode(data["content"])
+            with open(DB_FILE, "wb") as f:
+                f.write(content)
+            print(f"[github] ✅ DB restaurada desde GitHub ({len(content)//1024}KB)")
+        elif r.status_code == 404:
+            print("[github] DB no encontrada en GitHub — se usará la DB local (primera vez)")
+        else:
+            print(f"[github] ⚠️ Error al restaurar: {r.status_code}")
+    except Exception as e:
+        print(f"[github] ⚠️ Error de red al restaurar: {e}")
+
+def db_backup_to_github():
+    """Sube finbit.db a GitHub (crea o actualiza el archivo)."""
+    if not GITHUB_TOKEN:
+        return
+    if not os.path.exists(DB_FILE):
+        return
+    try:
+        import base64
+        with open(DB_FILE, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode()
+
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
+        # Obtener SHA actual del archivo (necesario para actualizar)
+        sha = None
+        r = requests.get(url, headers=_gh_headers(), timeout=10)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+
+        payload = {
+            "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": content_b64,
+            "branch":  GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        r = requests.put(url, headers=_gh_headers(), json=payload, timeout=20)
+        if r.status_code in (200, 201):
+            print(f"[github] ✅ DB respaldada en GitHub")
+        else:
+            print(f"[github] ⚠️ Error al respaldar: {r.status_code} {r.text[:100]}")
+    except Exception as e:
+        print(f"[github] ⚠️ Error de red al respaldar: {e}")
+
+def _loop_backup_github():
+    """Hilo que respalda la DB en GitHub cada 60 minutos."""
+    time.sleep(300)   # esperar 5 min después de arrancar
+    while True:
+        db_backup_to_github()
+        time.sleep(3600)  # cada hora
+
+
 def init_db():
     con = sqlite3.connect(DB_FILE)
     con.executescript("""
@@ -5224,15 +5299,17 @@ if __name__ == "__main__":
     print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
     print("="*56)
 
+    # ── Restaurar DB desde GitHub antes de init_db ────────
+    db_restore_from_github()
+
     init_db()
 
-    # ── Cargar dashboard anterior si existe (sin créditos de API,
-    #    mostramos el último dashboard guardado en lugar de pantalla vacía)
+    # ── Cargar dashboard anterior si existe ───────────────
     if os.path.exists(OUTPUT_FILE):
         try:
             with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
                 _cached = f.read()
-            if len(_cached) > 500:   # archivo válido, no vacío
+            if len(_cached) > 500:
                 with _dash_lock:
                     _dash_html = _cached
                 print(f"[server] 📂 Dashboard anterior cargado desde disco ({len(_cached)//1024}KB)")
@@ -5240,8 +5317,9 @@ if __name__ == "__main__":
         except Exception as _e:
             print(f"[server] No se pudo cargar dashboard anterior: {_e}")
 
-    # Lanzar build en segundo plano — Flask responde de inmediato
+    # Lanzar build y backup en segundo plano
     threading.Thread(target=_construir_con_etapas, daemon=True).start()
+    threading.Thread(target=_loop_backup_github, daemon=True).start()
 
     port = int(os.environ.get("PORT", 5000))
     print(f"[server] Puerto: {port}  |  http://localhost:{port}")
