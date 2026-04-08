@@ -4743,7 +4743,6 @@ db_restore_from_github()
 init_db()
 init_score_history()
 threading.Thread(target=_loop_backup_github, daemon=True).start()
-threading.Thread(target=_construir_con_etapas, daemon=True).start()
 
 
 # ── Pantalla de loading profesional ──────────────────────
@@ -5093,6 +5092,9 @@ def _construir_con_etapas():
     finally:
         _refresh_in_progress = False
 
+
+# Lanzar build inicial en segundo plano — aquí _construir_con_etapas ya está definida
+threading.Thread(target=_construir_con_etapas, daemon=True).start()
 
 # ── Actualizar dashboard (botón en el HTML) ───────────────
 @app.route("/update")
