@@ -4738,6 +4738,13 @@ _refresh_in_progress = False
 _build_start_time: float = 0.0   # para mostrar tiempo transcurrido
 _build_error: str = ""           # captura último error de build
 
+# ── Corre siempre al arrancar (python finbit.py Y gunicorn) ──
+db_restore_from_github()
+init_db()
+init_score_history()
+threading.Thread(target=_loop_backup_github, daemon=True).start()
+threading.Thread(target=_construir_con_etapas, daemon=True).start()
+
 
 # ── Pantalla de loading profesional ──────────────────────
 _LOADING_HTML = """<!DOCTYPE html>
