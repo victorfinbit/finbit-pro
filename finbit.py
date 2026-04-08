@@ -1965,7 +1965,7 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     criterios = {
         "emas":   {"ok":emas_ok,  "label":"EMAs 9>21>50",
                    "val":f"${e9*mult:,.2f}/${e21*mult:,.2f}/${e50*mult:,.2f}",
-                   "razon":f"Precio ${precio*mult:,.2f} {'>' if emas_ok else '<'} EMA9 ${e9*mult:,.2f}"},
+                   "razon":f"Precio ${precio*mult:,.2f} {'>' if precio > e9 else '<'} EMA9 ${e9*mult:,.2f}"},
         "ema200": {"ok":e200_ok,  "label":"Precio > EMA200",
                    "val":f"${e200*mult:,.2f}",
                    "razon":(f"EMA200 en ${e200*mult:,.2f} MXN. "
