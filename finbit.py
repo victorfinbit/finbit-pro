@@ -4066,27 +4066,35 @@ function toggle(id){{
 // ── Portafolio live desde localStorage ───────────────────
 function recalcPortafolio(ops){{
   const map={{}};
-  // Partir de la base del script
-  PORT_BASE.forEach(p=>{{
-    map[p.ticker]={{titulos:p.titulos,costoTotal:p.cto_prom_mxn*p.titulos,
-      origen:p.origen,mercado:p.mercado,precio_actual_mxn:p.precio_actual_mxn,
-      pl_mxn:p.pl_mxn,pl_pct:p.pl_pct}};
-  }});
-  // Aplicar operaciones de localStorage encima
-  ops.forEach(op=>{{
-    const t=op.ticker;
-    if(!map[t]) map[t]={{titulos:0,costoTotal:0,origen:op.origen||'USA',mercado:op.mercado||'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
-    if(op.tipo==='COMPRA'){{
-      map[t].costoTotal+=op.titulos*op.precio_mxn;
-      map[t].titulos+=op.titulos;
-    }} else if(op.tipo==='VENTA'){{
-      if(map[t].titulos>0){{
-        const cto=map[t].costoTotal/map[t].titulos;
-        map[t].costoTotal-=op.titulos*cto;
-        map[t].titulos-=op.titulos;
+  if(ops.length > 0){{
+    // Si hay operaciones registradas, calcular portafolio SOLO desde las ops
+    // No usar PORT_BASE para evitar duplicados
+    ops.forEach(op=>{{
+      const t=op.ticker;
+      if(!map[t]) map[t]={{titulos:0,costoTotal:0,origen:op.origen||'USA',mercado:op.mercado||'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
+      if(op.tipo==='COMPRA'){{
+        map[t].costoTotal+=op.titulos*op.precio_mxn;
+        map[t].titulos+=op.titulos;
+      }} else if(op.tipo==='VENTA'){{
+        if(map[t].titulos>0){{
+          const cto=map[t].costoTotal/map[t].titulos;
+          map[t].costoTotal-=op.titulos*cto;
+          map[t].titulos-=op.titulos;
+        }}
       }}
-    }}
-  }});
+    }});
+    // Agregar precio actual desde PORT_BASE si está disponible
+    PORT_BASE.forEach(p=>{{
+      if(map[p.ticker]) map[p.ticker].precio_actual_mxn = p.precio_actual_mxn;
+    }});
+  }} else {{
+    // Sin ops en localStorage, usar PORT_BASE como respaldo
+    PORT_BASE.forEach(p=>{{
+      map[p.ticker]={{titulos:p.titulos,costoTotal:p.cto_prom_mxn*p.titulos,
+        origen:p.origen,mercado:p.mercado,precio_actual_mxn:p.precio_actual_mxn,
+        pl_mxn:p.pl_mxn,pl_pct:p.pl_pct}};
+    }});
+  }}
   return map;
 }}
 
@@ -4727,15 +4735,8 @@ app = Flask(__name__)
 _dash_html: str = ""
 _dash_lock  = threading.Lock()
 _refresh_in_progress = False
-_build_start_time: float = 0.0
-_build_error: str = ""
-
-# ── Inicialización al arrancar (corre con python Y con gunicorn) ──
-db_restore_from_github()   # descargar DB de GitHub antes de init_db
-init_db()
-init_score_history()
-threading.Thread(target=_loop_backup_github, daemon=True).start()
-threading.Thread(target=_construir_con_etapas, daemon=True).start()
+_build_start_time: float = 0.0   # para mostrar tiempo transcurrido
+_build_error: str = ""           # captura último error de build
 
 
 # ── Pantalla de loading profesional ──────────────────────
