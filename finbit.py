@@ -4727,8 +4727,15 @@ app = Flask(__name__)
 _dash_html: str = ""
 _dash_lock  = threading.Lock()
 _refresh_in_progress = False
-_build_start_time: float = 0.0   # para mostrar tiempo transcurrido
-_build_error: str = ""           # captura último error de build
+_build_start_time: float = 0.0
+_build_error: str = ""
+
+# ── Inicialización al arrancar (corre con python Y con gunicorn) ──
+db_restore_from_github()   # descargar DB de GitHub antes de init_db
+init_db()
+init_score_history()
+threading.Thread(target=_loop_backup_github, daemon=True).start()
+threading.Thread(target=_construir_con_etapas, daemon=True).start()
 
 
 # ── Pantalla de loading profesional ──────────────────────
