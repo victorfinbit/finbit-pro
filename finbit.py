@@ -4260,11 +4260,29 @@ function registrarOp(){{
   ops.unshift(op);
   localStorage.setItem('finbit_ops',JSON.stringify(ops));
   renderOpsTable(ops);
-  actualizarTablaPortafolio();   // ← actualiza portafolio en tiempo real
+  actualizarTablaPortafolio();
   document.getElementById('f_msg').innerHTML='<span style="color:var(--green)">✅ Guardado — portafolio actualizado</span>';
   setTimeout(()=>document.getElementById('f_msg').innerHTML='',5000);
   ['f_ticker','f_titulos','f_precio','f_notas'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('f_preview').style.display='none';
+  // ── Sincronizar todas las ops al servidor para persistencia ──
+  _sincronizarOpsServidor(ops);
+}}
+
+function _sincronizarOpsServidor(ops) {{
+  if (!ops || !ops.length) return;
+  const opsCompletas = ops.map(op => ({{
+    ...op,
+    total_mxn: op.total_mxn || (op.titulos * op.precio_mxn),
+    tc_dia:    op.tc_dia    || TC,
+    origen:    op.origen    || 'USA',
+    mercado:   op.mercado   || 'SIC',
+  }}));
+  fetch('/api/operaciones/import', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(opsCompletas)
+  }}).catch(()=>{{}}); // silencioso — no interrumpir al usuario
 }}
 function guardarPosicion(){{
   const pos={{ticker:(document.getElementById('p_ticker').value||'').toUpperCase().trim(),
@@ -4317,6 +4335,7 @@ function delOpLS(idx){{
   let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
   ops.splice(idx,1);localStorage.setItem('finbit_ops',JSON.stringify(ops));renderOpsTable(ops);
   actualizarTablaPortafolio();
+  _sincronizarOpsServidor(ops);
 }}
 function saveEdit(){{
   const idVal=document.getElementById('edit_id').value;
@@ -4332,6 +4351,7 @@ function saveEdit(){{
       ops[idx].fecha=document.getElementById('edit_fecha').value;
       ops[idx].notas=document.getElementById('edit_notas').value;
       localStorage.setItem('finbit_ops',JSON.stringify(ops));renderOpsTable(ops);actualizarTablaPortafolio();
+      _sincronizarOpsServidor(ops);
     }}
   }}
   closeModal();
@@ -4420,7 +4440,7 @@ function buscarRadar(){{
 window.addEventListener('load',()=>{{
   cargarTickersPersonalizados();
   const ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
-  if(ops.length) renderOpsTable(ops);
+  if(ops.length) {{ renderOpsTable(ops); _sincronizarOpsServidor(ops); }}
   actualizarTablaPortafolio();
   const cap=localStorage.getItem('cfg_capital');
   const rie=localStorage.getItem('cfg_riesgo');
