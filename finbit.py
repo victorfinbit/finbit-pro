@@ -5282,8 +5282,13 @@ function selDia(idx) {{
   document.querySelectorAll('.prog-dia').forEach((p,i) => {{
     p.className = 'prog-dia' + (i<idx?' completado':(i===idx?' actual':''));
   }});
+  localStorage.setItem('finbit_curso_dia', idx);
   calcRiesgo();
 }}
+
+// Restaurar día guardado al cargar
+const diaGuardado = parseInt(localStorage.getItem('finbit_curso_dia') || '0');
+if (diaGuardado > 0) selDia(diaGuardado);
 
 window.verificarQuiz = function(dia) {{
   const resp = RESPUESTAS[dia];
