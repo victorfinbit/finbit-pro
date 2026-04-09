@@ -1,4 +1,3 @@
-# v3.2.1
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║          FINBIT PRO  v3.2                                    ║
@@ -141,11 +140,12 @@ def db_backup_to_github():
         print(f"[github] ⚠️ Error de red al respaldar: {e}")
 
 def _loop_backup_github():
-    """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
+    """Hilo que resetea keys a medianoche. El backup de DB a GitHub está desactivado
+    para evitar commits automáticos que disparan deploys innecesarios en Render."""
     time.sleep(300)   # esperar 5 min después de arrancar
     ultimo_dia = datetime.now().day
     while True:
-        db_backup_to_github()
+        # db_backup_to_github() — DESACTIVADO: causaba commits automáticos → deploys en Render
         # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
         dia_actual = datetime.now().day
         if dia_actual != ultimo_dia:
