@@ -26,11 +26,12 @@ from flask import Flask, Response, request as flask_req, jsonify
 # Si no existen, usa el valor hardcodeado (para desarrollo local)
 API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c864e4")
 API_KEY_2   = os.environ.get("TWELVEDATA_API_KEY_2","3c4971fd74eb4363bcbf877edb1616b4")
+API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c52565b847")
 
-# ── Dual-key: KEY_1 cubre los primeros tickers, KEY_2 el resto
-# Cada key tiene 800 calls/día y 8 calls/min en plan Basic.
-# El pool rota automáticamente según el índice del ticker.
-_TD_KEYS    = [k for k in [API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
+# ── Triple-key en cascada: KEY1 primero, KEY2 si se agota KEY1, KEY3 si se agota KEY2
+# Cada key tiene 800 calls/día. Total: 2,400 calls/día.
+# Nunca se usan al mismo tiempo — solo cambia cuando la activa se agota.
+_TD_KEYS    = [k for k in [API_KEY, API_KEY_2, API_KEY_3] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
