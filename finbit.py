@@ -983,15 +983,7 @@ def get_vix() -> float:
             _MACRO_CACHE["vix"] = v
             return v
     except Exception: pass
-    # Fuente 2: serie histórica de TwelveData
-    try:
-        vals = api_timeseries("VIX", "1day", 5, "")
-        if vals:
-            v = float(vals[-1]["close"])
-            _MACRO_CACHE["vix"] = v
-            return v
-    except Exception: pass
-    # Fallback neutro: asumimos VIX moderado para no bloquear todo
+    # Fallback neutro: asumimos VIX moderado para no gastar creditos extra
     _MACRO_CACHE["vix"] = 20.0
     return 20.0
 
@@ -2076,29 +2068,23 @@ _TD_CACHE: dict = {}
 def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
     """
     Devuelve datos del cache.
-    Cache miss → petición individual rotando keys.
-    None en cache (batch falló) → reintenta con cada key antes de rendirse.
+    Cache miss → 1 sola peticion con la siguiente key disponible.
+    None en cache (batch fallo) → devuelve None sin reintentar (ahorra creditos).
     """
     global _TD_CACHE
     key = f"{symbol.upper()}:{interval}"
 
     if key not in _TD_CACHE:
-        print(f"    [cache miss] {symbol} {interval} — petición individual...")
-        result = None
-        for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 50, exchange, key=k)
-            if result:
-                break
+        print(f"    [cache miss] {symbol} {interval} — peticion individual...")
+        try:
+            result = api_timeseries(symbol, interval, 50, exchange)
+        except Exception as e:
+            if "API_KEYS_AGOTADAS" in str(e):
+                print("  Todas las API keys agotadas — deteniendo llamadas")
+            result = None
         _TD_CACHE[key] = result
 
-    elif _TD_CACHE[key] is None:
-        print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
-        for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
-            if result:
-                _TD_CACHE[key] = result
-                break
-
+    # Si ya esta en cache (None o con datos), se devuelve sin reintentar
     return _TD_CACHE[key]
 
 
@@ -2138,7 +2124,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=50, key=key_use)
 
             # Si la key se agotó durante el batch, intentar con la siguiente
             faltantes = [s for s in chunk if s.upper() not in batch]
@@ -2146,7 +2132,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                 key2 = _key_activa()  # puede ser diferente si key_use se marcó agotada
                 if key2 and key2 != key_use:
                     print(f"  [batch] Reintentando {faltantes} con k=…{key2[-4:]}...")
-                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=key2)
+                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=50, key=key2)
                     batch.update(batch2)
 
             # Guardar en cache
