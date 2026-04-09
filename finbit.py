@@ -141,10 +141,18 @@ def db_backup_to_github():
         print(f"[github] ⚠️ Error de red al respaldar: {e}")
 
 def _loop_backup_github():
-    """Hilo que respalda la DB en GitHub cada 60 minutos."""
+    """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
     time.sleep(300)   # esperar 5 min después de arrancar
+    ultimo_dia = datetime.now().day
     while True:
         db_backup_to_github()
+        # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
+        dia_actual = datetime.now().day
+        if dia_actual != ultimo_dia:
+            global _KEYS_AGOTADAS
+            _KEYS_AGOTADAS = set()
+            ultimo_dia = dia_actual
+            print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
         time.sleep(3600)  # cada hora
 
 
@@ -2398,7 +2406,9 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                    vix: float = 20.0, spy: dict | None = None):
     global _TD_CACHE, _KEYS_AGOTADAS, _KEY_IDX
     _TD_CACHE      = {}
-    _KEYS_AGOTADAS = set()   # resetear al inicio de cada corrida
+    # NO resetear _KEYS_AGOTADAS — si KEY1 y KEY2 están agotadas para el día,
+    # no queremos volver a intentarlas y desperdiciar créditos de KEY3
+    # _KEYS_AGOTADAS se resetea solo a medianoche cuando se renuevan los créditos
     _KEY_IDX       = 0
 
     if spy is None: spy = {}
