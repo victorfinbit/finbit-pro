@@ -31,7 +31,7 @@ API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c5256
 # ── Triple-key en cascada: KEY1 primero, KEY2 si se agota KEY1, KEY3 si se agota KEY2
 # Cada key tiene 800 calls/día. Total: 2,400 calls/día.
 # Nunca se usan al mismo tiempo — solo cambia cuando la activa se agota.
-_TD_KEYS    = [k for k in [API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
+_TD_KEYS    = [k for k in [API_KEY, API_KEY_2, API_KEY_3] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
@@ -335,6 +335,18 @@ def upsert_portafolio_from_op(op: dict):
 
 # ── TIPO DE CAMBIO ────────────────────────────────────────
 def get_tipo_cambio(key: str) -> float:
+    # Fuente 1: Frankfurter (gratis, sin créditos)
+    try:
+        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=MXN", timeout=8)
+        return float(r.json()["rates"]["MXN"])
+    except Exception: pass
+    # Fuente 2: Banxico (gratis, sin créditos)
+    try:
+        url = "https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno"
+        r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=8)
+        return float(r.json()["bmx"]["series"][0]["datos"][0]["dato"].replace(",",""))
+    except Exception: pass
+    # Fuente 3: TwelveData (solo si las anteriores fallan — consume créditos)
     if key and key not in ("TU_KEY_AQUI", ""):
         try:
             r = requests.get("https://api.twelvedata.com/exchange_rate",
@@ -342,15 +354,7 @@ def get_tipo_cambio(key: str) -> float:
             d = r.json()
             if "rate" in d: return float(d["rate"])
         except Exception: pass
-    try:
-        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=MXN", timeout=8)
-        return float(r.json()["rates"]["MXN"])
-    except Exception: pass
-    try:
-        url = "https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno"
-        r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=8)
-        return float(r.json()["bmx"]["series"][0]["datos"][0]["dato"].replace(",",""))
-    except Exception: return 17.50
+    return 17.50
 
 
 # ── TELEGRAM ──────────────────────────────────────────────
@@ -6263,24 +6267,6 @@ def _construir_con_etapas():
         radar_data = []
 
         if API_KEY not in ("TU_KEY_AQUI", ""):
-            # ── DIAGNÓSTICO DE API ANTES DE CONSTRUIR ───────────────────────
-            print("[build] 🔍 Verificando conexión a TwelveData...")
-            try:
-                _test_r = requests.get(f"{API_BASE}/time_series",
-                    params={"symbol":"AAPL","interval":"1day","outputsize":"5","apikey":API_KEY},
-                    timeout=10)
-                _test_d = _test_r.json()
-                if "values" in _test_d:
-                    print(f"[build] ✅ TwelveData OK — {len(_test_d['values'])} velas de prueba")
-                elif _test_r.status_code == 429:
-                    print("[build] ⚠️  TwelveData: RATE LIMIT 429 — esperando 15s antes de continuar...")
-                    time.sleep(15)
-                else:
-                    _msg = _test_d.get("message", _test_d.get("code", str(_test_d)[:120]))
-                    print(f"[build] ❌ TwelveData error: {_msg}")
-                    print(f"[build]    status HTTP: {_test_r.status_code}")
-            except Exception as _e:
-                print(f"[build] ❌ TwelveData sin conexión: {_e}")
             print("[build] Obteniendo VIX y SPY...")
             try:
                 vix = get_vix()
@@ -6400,8 +6386,9 @@ def _construir_con_etapas():
         _refresh_in_progress = False
 
 
-# Lanzar build inicial en segundo plano — aquí _construir_con_etapas ya está definida
-threading.Thread(target=_construir_con_etapas, daemon=True).start()
+# Build automático desactivado — solo se construye cuando el usuario presiona ↺ Actualizar
+# Esto evita consumir créditos de API en cada deploy o reinicio del servidor
+print("[server] ⏸️  Build automático desactivado — presiona ↺ Actualizar para cargar datos")
 
 # ── Actualizar dashboard (botón en el HTML) ───────────────
 @app.route("/update")
@@ -6583,24 +6570,10 @@ def api_debug():
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "n_keys":    len(_TD_KEYS),
         "keys":      [f"...{k[-4:]}" for k in _TD_KEYS],
-        "twelvedata_k1": {},
-        "twelvedata_k2": {},
+        "twelvedata_k1": {"nota": "prueba desactivada — ahorra créditos"},
+        "twelvedata_k2": {"nota": "prueba desactivada — ahorra créditos"},
     }
-    for i, test_key in enumerate(_TD_KEYS[:2]):
-        label = f"twelvedata_k{i+1}"
-        try:
-            r = requests.get(f"{API_BASE}/time_series",
-                params={"symbol":"AAPL","interval":"1day","outputsize":"3","apikey":test_key},
-                timeout=12)
-            d = r.json()
-            if "values" in d and d["values"]:
-                resultado[label] = {"ok": True, "http": r.status_code,
-                                    "velas": len(d["values"]),
-                                    "ultimo_close": d["values"][-1].get("close")}
-            else:
-                resultado[label] = {"ok": False, "http": r.status_code, "respuesta": d}
-        except Exception as e:
-            resultado[label] = {"ok": False, "excepcion": str(e)}
+    # No hacer llamadas de prueba a TwelveData — cada una consume créditos
 
     return jsonify(resultado)
 
@@ -6661,8 +6634,7 @@ if __name__ == "__main__":
         except Exception as _e:
             print(f"[server] No se pudo cargar dashboard anterior: {_e}")
 
-    # Lanzar build y backup en segundo plano
-    threading.Thread(target=_construir_con_etapas, daemon=True).start()
+    # Solo lanzar backup — el build se activa manualmente con ↺ Actualizar
     threading.Thread(target=_loop_backup_github, daemon=True).start()
 
     port = int(os.environ.get("PORT", 5000))
