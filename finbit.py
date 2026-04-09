@@ -393,11 +393,9 @@ def _next_key() -> str:
         _KEY_IDX += 1
         if key not in _KEYS_AGOTADAS:
             return key
-    # Todas agotadas — resetear y devolver la primera de todas formas
-    print("  ⚠️  Todas las API keys agotadas — reintentando con KEY_1")
-    _KEYS_AGOTADAS.clear()
-    _KEY_IDX = 0
-    return _TD_KEYS[0] if _TD_KEYS else ""
+    # Todas agotadas — NO resetear, devolver vacío para que falle limpiamente
+    print("  ⚠️  Todas las API keys agotadas por hoy — espera a mañana o agrega más keys")
+    return ""
 
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
