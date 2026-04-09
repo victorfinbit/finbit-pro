@@ -65,9 +65,7 @@ PORTAFOLIO_INICIAL = [
 
 # ── Exchanges vacíos "" = auto-detect TwelveData (más estable) ──
 SCANNER_TICKERS = {
-    "SOXL":("SOXL",""),
     "TSLA":("TSLA",""),
-    "PYPL":("PYPL",""),
 }
 
 # SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
@@ -393,9 +391,9 @@ def _next_key() -> str:
         _KEY_IDX += 1
         if key not in _KEYS_AGOTADAS:
             return key
-    # Todas agotadas — NO resetear, devolver vacío para que falle limpiamente
+    # Todas agotadas — lanzar excepción para detener el sistema limpiamente
     print("  ⚠️  Todas las API keys agotadas por hoy — espera a mañana o agrega más keys")
-    return ""
+    raise Exception("API_KEYS_AGOTADAS")
 
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
@@ -406,6 +404,7 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     Si la key está agotada (créditos), la marca y prueba la siguiente automáticamente.
     """
     global _KEYS_AGOTADAS
+    time.sleep(1)
     out = min(outputsize, 5000)
 
     # Intentar con hasta N keys disponibles
@@ -516,18 +515,30 @@ def ohlcv_to_close(v): return [float(x["close"]) for x in v]
 def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
 
 
-def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
+def get_timeseries(symbol: str, interval: str, outputsize: int = 50,
                    exchange: str = "") -> list | None:
     """
     Fuente única: TwelveData con pool dual-key.
     Si falla con exchange específico, reintenta sin él (auto-detect).
     """
-    result = api_timeseries(symbol, interval, outputsize, exchange)
+    try:
+        result = api_timeseries(symbol, interval, outputsize, exchange)
+    except Exception as e:
+        if "API_KEYS_AGOTADAS" in str(e):
+            print("  🚫 Todas las API keys agotadas — deteniendo llamadas")
+            return None
+        raise
     if result:
         return result
     if exchange:
         print(f"    Reintentando {symbol} sin exchange (auto-detect)...")
-        result = api_timeseries(symbol, interval, outputsize, "")
+        try:
+            result = api_timeseries(symbol, interval, outputsize, "")
+        except Exception as e:
+            if "API_KEYS_AGOTADAS" in str(e):
+                print("  🚫 Todas las API keys agotadas — deteniendo llamadas")
+                return None
+            raise
         if result:
             return result
     print(f"    Sin datos para {symbol} {interval} — continúa con otros")
