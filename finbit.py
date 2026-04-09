@@ -2419,8 +2419,8 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     # ── PRECARGAR CACHE CON BATCH ─────────────────────────────────────────
     # Incluimos los sector ETFs en el batch inicial para que get_sector_estado()
     # no haga requests individuales durante el análisis (evita rate limit silencioso)
-    _sector_etfs = list(set(_SECTOR_MAP.values()))  # SMH, QQQ, XLF, XLY, SPY
-    todos_syms   = list(set([v[0] for v in combinados.values()] + _sector_etfs))
+    _sector_etfs = []  # No precargar sector ETFs — ahorrar créditos de API
+    todos_syms   = list(set([v[0] for v in combinados.values()]))
     _precargar_cache_batch(todos_syms, ["1day", "1week"])
 
     resultados = []
@@ -2526,8 +2526,8 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
     # Precargar TODO el universo del radar + sector ETFs en batch desde el inicio.
     # Antes solo precargaba los "faltantes" pero eso causaba que el cache del scanner
     # no tuviera los sector ETFs → requests individuales durante análisis → rate limit silencioso.
-    _sector_etfs_r = list(set(_SECTOR_MAP.values()))
-    todos_radar    = list(set([v[0] for v in universo_completo.values()] + _sector_etfs_r))
+    _sector_etfs_r = []  # No precargar sector ETFs en radar — ahorrar créditos
+    todos_radar    = list(set([v[0] for v in universo_completo.values()]))
     syms_sin_cache = [s for s in todos_radar if f"{s.upper()}:1day" not in _TD_CACHE]
     if syms_sin_cache:
         print(f"  [Radar batch] Precargando {len(syms_sin_cache)} tickers (incluye sectores)...")
