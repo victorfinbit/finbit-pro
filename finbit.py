@@ -6610,6 +6610,9 @@ if __name__ == "__main__":
     print("\n" + "="*56)
     print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
     print("="*56)
+    print(f"[keys] Pool de API keys cargadas: {len(_TD_KEYS)}")
+    for i, k in enumerate(_TD_KEYS):
+        print(f"[keys]   KEY_{i+1}: ...{k[-4:]}")
 
     # ── Restaurar DB desde GitHub antes de init_db ────────
     db_restore_from_github()
