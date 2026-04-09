@@ -31,7 +31,7 @@ API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c5256
 # ── Triple-key en cascada: KEY1 primero, KEY2 si se agota KEY1, KEY3 si se agota KEY2
 # Cada key tiene 800 calls/día. Total: 2,400 calls/día.
 # Nunca se usan al mismo tiempo — solo cambia cuando la activa se agota.
-_TD_KEYS    = [k for k in [API_KEY, API_KEY_2, API_KEY_3] if k not in ("","TU_KEY_AQUI")]
+_TD_KEYS    = [k for k in [API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
