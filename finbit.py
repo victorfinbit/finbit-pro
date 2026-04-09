@@ -28,10 +28,11 @@ API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c
 API_KEY_2   = os.environ.get("TWELVEDATA_API_KEY_2","3c4971fd74eb4363bcbf877edb1616b4")
 API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c52565b847")
 API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2bacd34")
+API_KEY_5   = os.environ.get("TWELVEDATA_API_KEY_5","82bcd5737e75425f819209e388d8dacf")
 
 # Keys en cascada: KEY4 primero (fresca hoy), luego las demás
-# Cada key tiene 800 calls/día. Total: 3,200 calls/día.
-_TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
+# Cada key tiene 800 calls/día. Total: 4,000 calls/día.
+_TD_KEYS    = [k for k in [API_KEY_4, API_KEY_5, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
