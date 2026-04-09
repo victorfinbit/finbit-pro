@@ -2086,7 +2086,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 50, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
