@@ -3466,6 +3466,126 @@ def render_por_mes(por_mes: dict) -> str:
 
 
 # ── HTML PRINCIPAL ─────────────────────────────────────────
+
+def render_que_hago_hoy(scan_data: list, port_data: list) -> str:
+    """
+    Panel ultra simple — ¿Qué hago hoy?
+    Muestra solo las acciones con decisión clara: COMPRAR, VENDER, ESPERAR.
+    Sin tecnicismos. Solo ticker, acción, cuántas, precio entrada, stop, objetivo.
+    """
+    filas = []
+
+    # ── COMPRAR: scanner con señal COMPRAR, no bloqueado, RR >= 3 ──
+    for r in scan_data:
+        estado  = r.get("estado", "")
+        senal   = r.get("tfs", {}).get("1D", {}).get("senal", "")
+        rr      = r.get("rr", 0)
+        bloq    = estado == "Bloqueado"
+        if senal == "COMPRAR" and not bloq and rr >= 3.0:
+            sz      = r.get("sizing", {})
+            titulos = sz.get("titulos_adicionales", 0) or sz.get("titulos", 0)
+            filas.append({
+                "accion":  "COMPRAR",
+                "emoji":   "🟢",
+                "ticker":  r["nombre"],
+                "titulos": titulos,
+                "precio":  r.get("precio_mxn", 0),
+                "entrada": r.get("entrada_mxn", 0),
+                "stop":    r.get("stop_mxn", 0),
+                "obj":     r.get("obj_mxn", 0),
+                "rr":      rr,
+            })
+
+    # ── VENDER: portafolio con recomendación SALIR o TOMAR GANANCIAS ──
+    for p in port_data:
+        rec = p.get("recomendacion", {})
+        if not rec:
+            continue
+        accion = rec.get("accion", "")
+        if accion in ("SALIR", "TOMAR GANANCIAS"):
+            emoji  = "🔴" if accion == "SALIR" else "💰"
+            filas.append({
+                "accion":  accion,
+                "emoji":   emoji,
+                "ticker":  p["ticker"],
+                "titulos": p.get("titulos", 0),
+                "precio":  p.get("precio_actual_mxn", 0),
+                "entrada": p.get("cto_prom_mxn", 0),
+                "stop":    rec.get("stop", 0),
+                "obj":     rec.get("objetivo", 0),
+                "rr":      0,
+            })
+
+    # ── VIGILAR: scanner con etapa 🟠 A punto ──
+    for r in scan_data:
+        etapa_emoji, etapa_label, _ = calcular_etapa(r)
+        if etapa_label == "A punto":
+            filas.append({
+                "accion":  "VIGILAR",
+                "emoji":   "🟠",
+                "ticker":  r["nombre"],
+                "titulos": "—",
+                "precio":  r.get("precio_mxn", 0),
+                "entrada": r.get("entrada_mxn", 0),
+                "stop":    r.get("stop_mxn", 0),
+                "obj":     r.get("obj_mxn", 0),
+                "rr":      r.get("rr", 0),
+            })
+
+    if not filas:
+        return (
+            '<div style="background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);'
+            'padding:16px 18px;margin-bottom:16px">'
+            '<div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 ¿Qué hago hoy?</div>'
+            '<div style="font-size:12px;color:var(--muted)">Sin acciones claras por ahora — espera mejores setups.</div>'
+            '</div>'
+        )
+
+    # Orden: VENDER primero, luego COMPRAR, luego VIGILAR
+    orden = {"SALIR": 0, "TOMAR GANANCIAS": 1, "COMPRAR": 2, "VIGILAR": 3}
+    filas.sort(key=lambda x: orden.get(x["accion"], 9))
+
+    rows_html = ""
+    for f in filas:
+        titulos_txt = f"{f['titulos']:.2f} tít." if isinstance(f["titulos"], float) else str(f["titulos"])
+        color_accion = {
+            "COMPRAR": "#16a34a", "SALIR": "#dc2626",
+            "TOMAR GANANCIAS": "#d46b08", "VIGILAR": "#b45309"
+        }.get(f["accion"], "var(--text)")
+        rows_html += (
+            f'<tr style="border-bottom:1px solid var(--brd);font-size:12px">'
+            f'<td style="padding:8px 10px;font-weight:700;color:{color_accion}">{f["emoji"]} {f["accion"]}</td>'
+            f'<td style="padding:8px 10px;font-weight:700">{f["ticker"]}</td>'
+            f'<td style="padding:8px 10px;font-family:var(--mono);text-align:right">{titulos_txt}</td>'
+            f'<td style="padding:8px 10px;font-family:var(--mono);text-align:right">{fmt(f["precio"])}</td>'
+            f'<td style="padding:8px 10px;font-family:var(--mono);text-align:right;color:var(--green)">{fmt(f["entrada"])}</td>'
+            f'<td style="padding:8px 10px;font-family:var(--mono);text-align:right;color:var(--red)">{fmt(f["stop"])}</td>'
+            f'<td style="padding:8px 10px;font-family:var(--mono);text-align:right;color:#16a34a">{fmt(f["obj"])}</td>'
+            f'</tr>'
+        )
+
+    return (
+        '<div style="background:var(--surface);border:2px solid var(--brd);border-radius:var(--r2);'
+        'padding:16px 18px;margin-bottom:16px">'
+        '<div style="font-size:14px;font-weight:700;margin-bottom:12px;letter-spacing:-.3px">📋 ¿Qué hago hoy?</div>'
+        '<div style="overflow-x:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        '<thead><tr style="border-bottom:2px solid var(--brd);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">'
+        '<th style="padding:6px 10px;text-align:left">Acción</th>'
+        '<th style="padding:6px 10px;text-align:left">Ticker</th>'
+        '<th style="padding:6px 10px;text-align:right">Títulos</th>'
+        '<th style="padding:6px 10px;text-align:right">Precio actual</th>'
+        '<th style="padding:6px 10px;text-align:right">Entrada</th>'
+        '<th style="padding:6px 10px;text-align:right">Stop</th>'
+        '<th style="padding:6px 10px;text-align:right">Objetivo</th>'
+        '</thead><tbody>'
+        + rows_html +
+        '</tbody></table></div>'
+        '<div style="font-size:10px;color:var(--muted);margin-top:8px">'
+        '⚠️ Solo fines educativos — no es asesoría financiera. Usa siempre stop loss.</div>'
+        '</div>'
+    )
+
 def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct, rr_min,
                  vix: float = 20.0, spy: dict | None = None, regimen: dict | None = None):
     if spy     is None: spy     = {"sobre_ema200": True}
@@ -3496,8 +3616,9 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "sr": (p.get("analisis") or {}).get("sr", {}),
     } for p in port_data], ensure_ascii=False)
 
-    port_rows  = render_port_rows(port_data, tc)
-    scan_rows  = render_scan_rows(scan_data, tc)
+    port_rows       = render_port_rows(port_data, tc)
+    scan_rows       = render_scan_rows(scan_data, tc)
+    que_hago_hoy    = render_que_hago_hoy(scan_data, port_data)
     radar_rows = render_radar_rows(radar_data, tc)
     hist_rows  = render_hist_rows(ops)
 
@@ -3910,6 +4031,7 @@ td strong{{font-size:13px;font-weight:500}}
 
 <!-- ══ SCANNER ══ -->
 <div id="tab-scanner" class="tab active">
+  {que_hago_hoy}
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
     <p class="hint">Muestra <strong>todas</strong> las acciones configuradas · 1D base · 1H+1W si score≥5 · TC ${tc:.4f} · {ts}</p>
