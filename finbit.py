@@ -6476,6 +6476,8 @@ def api_tickers_add():
         if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
             return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
         add_ticker_db(ticker, exchange, origen)
+        # Backup inmediato — evita perder el ticker si Render reinicia antes del backup horario
+        threading.Thread(target=db_backup_to_github, daemon=True).start()
         # NO invalidamos el cache aquí — el ticker aparecerá en la próxima actualización
         # Invalidar el cache causaba que el dashboard quedara en blanco esperando rebuild
         return jsonify({"status": "ok", "ticker": ticker,
@@ -6494,6 +6496,8 @@ def api_tickers_remove():
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
         remove_ticker_db(ticker)
         _dash_html = ""
+        # Backup inmediato — evita perder el cambio si Render reinicia
+        threading.Thread(target=db_backup_to_github, daemon=True).start()
         return jsonify({"status": "ok", "ticker": ticker})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
