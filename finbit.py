@@ -2350,24 +2350,24 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # AGREGAR: señal fuerte de compra con posición existente
-    if senal == "COMPRAR" and score >= 7 and macd_ok and adx >= 20 and pl_pct > -3:
-        return {
-            "accion":   "AGREGAR",
-            "color":    "var(--green)",
-            "icono":    "✅",
-            "mensaje":  f"Señal alcista confirmada. Entrada en {fmt(precio_mxn)}. Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
-            "stop":     stop,
-            "objetivo": obj,
-        }
-
-    # TOMAR GANANCIAS: cerca del objetivo Y con ganancia real
+    # TOMAR GANANCIAS: primero verificar si ya estamos en objetivo (prioridad sobre AGREGAR)
     if obj and precio_mxn >= obj * 0.92 and pl_pct > 3:
         return {
             "accion":   "TOMAR GANANCIAS",
             "color":    "#d46b08",
             "icono":    "💰",
             "mensaje":  f"Precio cerca del objetivo {fmt(obj)} con +{pl_pct:.1f}% de ganancia. Considera cerrar 50-75% de la posición.",
+            "stop":     stop,
+            "objetivo": obj,
+        }
+
+    # AGREGAR: señal fuerte de compra con posición existente (solo si aún hay recorrido al objetivo)
+    if senal == "COMPRAR" and score >= 7 and macd_ok and adx >= 20 and pl_pct > -3:
+        return {
+            "accion":   "AGREGAR",
+            "color":    "var(--green)",
+            "icono":    "✅",
+            "mensaje":  f"Señal alcista confirmada. Entrada en {fmt(precio_mxn)}. Objetivo {fmt(obj)} (+{dist_obj_pct:.1f}%).",
             "stop":     stop,
             "objetivo": obj,
         }
@@ -3041,6 +3041,53 @@ def render_port_rows(posiciones, tc):
     return h
 
 
+
+def calcular_etapa(r: dict) -> tuple[str, str, str]:
+    """
+    Determina en qué etapa del ciclo está el ticker para swing trading.
+    🟡 Preparándose — RSI bajo, ADX tranquilo, sobre soporte. Aún no arranca.
+    🟠 A punto      — RSI 48-65, MACD alcista, score >=6, RR >=1.5. Vigilar.
+    🟢 Entrar       — Score >=7, Señal 1D=COMPRAR, Volumen >=1.5x, RR >=3.0, no bloqueado.
+    🚀 Ya arrancó   — precio >5% sobre EMA9, RSI >65. Tren salió.
+    Retorna (emoji, label, tooltip)
+    """
+    rsi      = r.get("rsi", 50)
+    adx      = r.get("adx", 0)
+    macd_ok  = r.get("macd_ok", False)
+    ema200   = r.get("ema200_ok", False)
+    score    = r.get("score_ajustado", r.get("score", 0))
+    rr       = r.get("rr", 0)
+    precio   = r.get("precio_mxn", 0)
+    entrada  = r.get("entrada_mxn", 0)  # EMA9
+    sr       = r.get("sr", {})
+    soportes = sr.get("soportes", [])
+    senal_1d = r.get("tfs", {}).get("1D", {}).get("senal", "")
+    bloqueado= r.get("estado", "") == "Bloqueado"
+    vol_rel  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0)
+
+    # 🚀 Ya arrancó: precio >5% sobre EMA9, RSI alto — tren salió, no persigas
+    dist_ema9 = ((precio - entrada) / entrada * 100) if entrada else 0
+    if dist_ema9 > 5 and rsi > 65 and score >= 7:
+        return ("🚀", "Ya arrancó", "Ya arrancó — tren salió, no persigas")
+
+    # 🟢 Entrar: todos los criterios cumplidos — este es el momento
+    if (score >= 7 and senal_1d == "COMPRAR" and vol_rel >= 1.5
+            and rr >= 3.0 and not bloqueado):
+        return ("🟢", "Entrar", "✅ Entrar — Score≥7 | Señal=COMPRAR | Vol≥1.5x | RR≥3.0 | No bloqueado")
+
+    # 🟠 A punto: casi listo, vigilar de cerca
+    if 48 <= rsi <= 65 and macd_ok and ema200 and score >= 6 and rr >= 1.5:
+        return ("🟠", "A punto", "A punto — RSI 48-65 | MACD alcista | Score≥6 | RR≥1.5. Vigilar.")
+
+    # 🟡 Preparándose: aún no es momento, acumulando fuerza
+    hay_soporte = any(z.get("fuerza", 0) >= 2 for z in soportes)
+    if rsi < 52 and adx < 30 and hay_soporte and ema200:
+        return ("🟡", "Preparándose", "Preparándose — RSI bajo | ADX tranquilo | Sobre soporte. Aún no.")
+
+    # Default: sin etapa clara
+    return ("⬜", "Sin etapa", "Sin etapa clara definida")
+
+
 def render_scan_rows(scanner, tc):
     h=""
     for r in scanner:
@@ -3160,6 +3207,9 @@ def render_scan_rows(scanner, tc):
                 f'</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
+        etapa_emoji, etapa_label, etapa_tooltip = calcular_etapa(r)
+        etapa_badge = (f'<span title="{etapa_tooltip}" style="display:inline-block;font-size:13px;'
+                       f'margin-left:3px;cursor:help">{etapa_emoji}</span>')
         conf_bar_mini = (f'<div style="width:36px;height:4px;background:var(--brd2);border-radius:2px;margin-top:2px">'
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
@@ -3177,6 +3227,7 @@ def render_scan_rows(scanner, tc):
             f'<td>{sr_cell_html}</td>'
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
+            f'{etapa_badge}'
             f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
