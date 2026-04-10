@@ -28,11 +28,10 @@ API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c
 API_KEY_2   = os.environ.get("TWELVEDATA_API_KEY_2","3c4971fd74eb4363bcbf877edb1616b4")
 API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c52565b847")
 API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2bacd34")
-API_KEY_5   = os.environ.get("TWELVEDATA_API_KEY_5","82bcd5737e75425f819209e388d8dacf")
 
 # Keys en cascada: KEY4 primero (fresca hoy), luego las demás
-# Cada key tiene 800 calls/día. Total: 4,000 calls/día.
-_TD_KEYS    = [k for k in [API_KEY_4, API_KEY_5, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
+# Cada key tiene 800 calls/día. Total: 3,200 calls/día.
+_TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
@@ -66,7 +65,9 @@ PORTAFOLIO_INICIAL = [
 
 # ── Exchanges vacíos "" = auto-detect TwelveData (más estable) ──
 SCANNER_TICKERS = {
+    "SOXL":("SOXL",""),
     "TSLA":("TSLA",""),
+    "PYPL":("PYPL",""),
 }
 
 # SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
@@ -140,12 +141,11 @@ def db_backup_to_github():
         print(f"[github] ⚠️ Error de red al respaldar: {e}")
 
 def _loop_backup_github():
-    """Hilo que resetea keys a medianoche. El backup de DB a GitHub está desactivado
-    para evitar commits automáticos que disparan deploys innecesarios en Render."""
+    """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
     time.sleep(300)   # esperar 5 min después de arrancar
     ultimo_dia = datetime.now().day
     while True:
-        # db_backup_to_github() — DESACTIVADO: causaba commits automáticos → deploys en Render
+        db_backup_to_github()
         # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
         dia_actual = datetime.now().day
         if dia_actual != ultimo_dia:
@@ -337,23 +337,25 @@ def upsert_portafolio_from_op(op: dict):
 def get_tipo_cambio(key: str) -> float:
     # Fuente 1: Frankfurter (gratis, sin créditos)
     try:
-        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=MXN", timeout=8)
+        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=MXN", timeout=4)
         return float(r.json()["rates"]["MXN"])
     except Exception: pass
     # Fuente 2: Banxico (gratis, sin créditos)
     try:
         url = "https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno"
-        r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=8)
+        r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=4)
         return float(r.json()["bmx"]["series"][0]["datos"][0]["dato"].replace(",",""))
     except Exception: pass
-    # Fuente 3: TwelveData (solo si las anteriores fallan — consume créditos)
+    # Fuente 3: TwelveData (solo si las anteriores fallan)
     if key and key not in ("TU_KEY_AQUI", ""):
         try:
             r = requests.get("https://api.twelvedata.com/exchange_rate",
-                params={"symbol":"USD/MXN","apikey":key}, timeout=8)
+                params={"symbol":"USD/MXN","apikey":key}, timeout=4)
             d = r.json()
             if "rate" in d: return float(d["rate"])
         except Exception: pass
+    # Fallback fijo — nunca bloquear el build por el TC
+    print("[TC] ⚠️ Todas las fuentes fallaron — usando TC fijo 17.50")
     return 17.50
 
 
@@ -393,9 +395,9 @@ def _next_key() -> str:
         _KEY_IDX += 1
         if key not in _KEYS_AGOTADAS:
             return key
-    # Todas agotadas — lanzar excepción para detener el sistema limpiamente
+    # Todas agotadas — NO resetear, devolver vacío para que falle limpiamente
     print("  ⚠️  Todas las API keys agotadas por hoy — espera a mañana o agrega más keys")
-    raise Exception("API_KEYS_AGOTADAS")
+    return ""
 
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
@@ -406,7 +408,6 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     Si la key está agotada (créditos), la marca y prueba la siguiente automáticamente.
     """
     global _KEYS_AGOTADAS
-    time.sleep(1)
     out = min(outputsize, 5000)
 
     # Intentar con hasta N keys disponibles
@@ -517,30 +518,18 @@ def ohlcv_to_close(v): return [float(x["close"]) for x in v]
 def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
 
 
-def get_timeseries(symbol: str, interval: str, outputsize: int = 50,
+def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
     """
     Fuente única: TwelveData con pool dual-key.
     Si falla con exchange específico, reintenta sin él (auto-detect).
     """
-    try:
-        result = api_timeseries(symbol, interval, outputsize, exchange)
-    except Exception as e:
-        if "API_KEYS_AGOTADAS" in str(e):
-            print("  🚫 Todas las API keys agotadas — deteniendo llamadas")
-            return None
-        raise
+    result = api_timeseries(symbol, interval, outputsize, exchange)
     if result:
         return result
     if exchange:
         print(f"    Reintentando {symbol} sin exchange (auto-detect)...")
-        try:
-            result = api_timeseries(symbol, interval, outputsize, "")
-        except Exception as e:
-            if "API_KEYS_AGOTADAS" in str(e):
-                print("  🚫 Todas las API keys agotadas — deteniendo llamadas")
-                return None
-            raise
+        result = api_timeseries(symbol, interval, outputsize, "")
         if result:
             return result
     print(f"    Sin datos para {symbol} {interval} — continúa con otros")
@@ -985,7 +974,15 @@ def get_vix() -> float:
             _MACRO_CACHE["vix"] = v
             return v
     except Exception: pass
-    # Fallback neutro: asumimos VIX moderado para no gastar creditos extra
+    # Fuente 2: serie histórica de TwelveData
+    try:
+        vals = api_timeseries("VIX", "1day", 5, "")
+        if vals:
+            v = float(vals[-1]["close"])
+            _MACRO_CACHE["vix"] = v
+            return v
+    except Exception: pass
+    # Fallback neutro: asumimos VIX moderado para no bloquear todo
     _MACRO_CACHE["vix"] = 20.0
     return 20.0
 
@@ -2070,23 +2067,29 @@ _TD_CACHE: dict = {}
 def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
     """
     Devuelve datos del cache.
-    Cache miss → 1 sola peticion con la siguiente key disponible.
-    None en cache (batch fallo) → devuelve None sin reintentar (ahorra creditos).
+    Cache miss → petición individual rotando keys.
+    None en cache (batch falló) → reintenta con cada key antes de rendirse.
     """
     global _TD_CACHE
     key = f"{symbol.upper()}:{interval}"
 
     if key not in _TD_CACHE:
-        print(f"    [cache miss] {symbol} {interval} — peticion individual...")
-        try:
-            result = api_timeseries(symbol, interval, 50, exchange)
-        except Exception as e:
-            if "API_KEYS_AGOTADAS" in str(e):
-                print("  Todas las API keys agotadas — deteniendo llamadas")
-            result = None
+        print(f"    [cache miss] {symbol} {interval} — petición individual...")
+        result = None
+        for k in (_TD_KEYS or [""]):
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            if result:
+                break
         _TD_CACHE[key] = result
 
-    # Si ya esta en cache (None o con datos), se devuelve sin reintentar
+    elif _TD_CACHE[key] is None:
+        print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
+        for k in (_TD_KEYS or [""]):
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            if result:
+                _TD_CACHE[key] = result
+                break
+
     return _TD_CACHE[key]
 
 
@@ -2126,7 +2129,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=50, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
 
             # Si la key se agotó durante el batch, intentar con la siguiente
             faltantes = [s for s in chunk if s.upper() not in batch]
@@ -2134,7 +2137,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                 key2 = _key_activa()  # puede ser diferente si key_use se marcó agotada
                 if key2 and key2 != key_use:
                     print(f"  [batch] Reintentando {faltantes} con k=…{key2[-4:]}...")
-                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=50, key=key2)
+                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=key2)
                     batch.update(batch2)
 
             # Guardar en cache
@@ -6612,9 +6615,6 @@ if __name__ == "__main__":
     print("\n" + "="*56)
     print("   FINBIT PRO  v3.2  — servidor web (non-blocking)")
     print("="*56)
-    print(f"[keys] Pool de API keys cargadas: {len(_TD_KEYS)}")
-    for i, k in enumerate(_TD_KEYS):
-        print(f"[keys]   KEY_{i+1}: ...{k[-4:]}")
 
     # ── Restaurar DB desde GitHub antes de init_db ────────
     db_restore_from_github()
