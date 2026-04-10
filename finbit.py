@@ -6128,6 +6128,17 @@ _LOADING_HTML = """<!DOCTYPE html>
     }
   }
 
+  let buildTriggered = false;
+
+  function triggerBuild(){
+    if(buildTriggered) return;
+    buildTriggered = true;
+    fetch('/refresh', {method:'POST'})
+      .then(r=>r.json())
+      .then(d=>{ console.log('[finbit] build iniciado:', d.status); })
+      .catch(e=>{ console.warn('[finbit] no se pudo iniciar build:', e); });
+  }
+
   function poll(){
     fetch('/status')
       .then(r=>r.json())
@@ -6140,6 +6151,10 @@ _LOADING_HTML = """<!DOCTYPE html>
           // Redirigir automáticamente
           window.location.reload();
         } else {
+          // Si no hay build corriendo, dispararlo automáticamente
+          if(!d.building && !buildTriggered){
+            triggerBuild();
+          }
           // Marcar pasos según etapa reportada
           const stage = d.stage || '';
           if(stage === 'tc_ok') markStep('step-tc');
@@ -6207,11 +6222,12 @@ def status():
     }.get(_build_stage, "Procesando...")
 
     return jsonify({
-        "ready":   ready,
-        "stage":   _build_stage,
-        "msg":     stage_msg,
-        "elapsed": elapsed,
-        "error":   _build_error if _build_stage == "error" else "",
+        "ready":    ready,
+        "building": _refresh_in_progress,
+        "stage":    _build_stage,
+        "msg":      stage_msg,
+        "elapsed":  elapsed,
+        "error":    _build_error if _build_stage == "error" else "",
     })
 
 
