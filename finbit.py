@@ -376,6 +376,12 @@ API_BASE = "https://api.twelvedata.com"
 _KEY_IDX: int = 0
 # Set de keys agotadas en esta corrida (se resetea en cada build)
 _KEYS_AGOTADAS: set = set()
+_CALLS_HOY: int = 0          # contador de llamadas a TwelveData hoy
+_CALLS_DIA: str = ""         # fecha del contador (para reset a medianoche)
+_CALLS_MAX: int = len([k for k in [
+    os.environ.get("TWELVEDATA_API_KEY",""), os.environ.get("TWELVEDATA_API_KEY_2",""),
+    os.environ.get("TWELVEDATA_API_KEY_3",""), os.environ.get("TWELVEDATA_API_KEY_4","")
+] if k not in ("","TU_KEY_AQUI")]) * 800 or 3200
 
 def _es_error_creditos(d: dict) -> bool:
     """Detecta si TwelveData respondió con error de créditos/límite dentro del JSON."""
@@ -439,6 +445,12 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                     break  # salir del loop de intentos, probar siguiente key
                 if "values" in d and d["values"]:
                     print(f"    ✅ TD ({symbol} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
+                    global _CALLS_HOY, _CALLS_DIA
+                    hoy = datetime.now().strftime("%Y-%m-%d")
+                    if _CALLS_DIA != hoy:
+                        _CALLS_HOY = 0
+                        _CALLS_DIA = hoy
+                    _CALLS_HOY += 1
                     return d["values"]
                 print(f"    ❌ TD ({symbol} {interval}): {str(d)[:120]}")
                 return None
@@ -488,6 +500,13 @@ def api_timeseries_batch(symbols: list, interval: str,
                 print(f"    ⚠️  Key …{use_key[-4:]} agotada en batch — cambiando a la siguiente key")
                 _KEYS_AGOTADAS.add(use_key)
                 continue  # probar siguiente key
+            # Contar call exitosa
+            global _CALLS_HOY, _CALLS_DIA
+            hoy = datetime.now().strftime("%Y-%m-%d")
+            if _CALLS_DIA != hoy:
+                _CALLS_HOY = 0
+                _CALLS_DIA = hoy
+            _CALLS_HOY += 1
             resultado = {}
             if len(symbols) == 1:
                 sym = symbols[0].upper()
@@ -3835,9 +3854,24 @@ td strong{{font-size:13px;font-weight:500}}
       <button class="cfg-btn" onclick="saveConfig()">Guardar</button>
     </div>
     <button onclick="actualizarDashboard()" id="btn_update" style="background:var(--green);color:#fff;border:none;border-radius:var(--r);padding:5px 14px;font-size:12px;font-family:var(--sans);cursor:pointer;font-weight:500;white-space:nowrap">↺ Actualizar</button>
+    <span id="calls_chip" title="Calls a TwelveData hoy" style="font-size:11px;color:var(--muted);font-family:var(--mono);cursor:default">…/… calls</span>
     <span style="font-size:11px;color:var(--muted)">{ts}</span>
   </div>
 </div></div>
+<script>
+function _actualizarCalls(){{
+  fetch("/api/calls").then(r=>r.json()).then(d={{
+    const chip = document.getElementById("calls_chip");
+    if(!chip) return;
+    const pct = d.pct || 0;
+    const color = pct >= 80 ? "var(--red)" : pct >= 50 ? "var(--yellow)" : "var(--muted)";
+    chip.style.color = color;
+    chip.textContent = d.calls_hoy + "/" + d.calls_max + " calls";
+  }}).catch(()=>{{}});
+}}
+_actualizarCalls();
+setInterval(_actualizarCalls, 30000);
+</script>
 
 <div class="nav"><div class="nav-inner">
   <button class="nb" onclick="showTab('portafolio',this)">Mi portafolio</button>
@@ -6728,6 +6762,9 @@ def api_ops_import():
                 print(f"  [import] op skip: {e}")
 
         con.close()
+        # Backup inmediato — evita perder operaciones si Render reinicia
+        if ops:
+            threading.Thread(target=db_backup_to_github, daemon=True).start()
         # No invalidar _dash_html aquí — la sincronización es silenciosa
         # Solo se refleja en el próximo ↺ Actualizar
         return jsonify({"status": "ok", "importadas": len(ops)})
@@ -6756,6 +6793,22 @@ def health():
 
 
 # ── API Debug — diagnóstico rápido desde el browser ──────
+@app.route("/api/calls")
+def api_calls():
+    """Retorna el contador de calls a TwelveData de hoy."""
+    global _CALLS_HOY, _CALLS_MAX, _CALLS_DIA
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    if _CALLS_DIA != hoy:
+        _CALLS_HOY = 0
+        _CALLS_DIA = hoy
+    return jsonify({
+        "calls_hoy": _CALLS_HOY,
+        "calls_max": _CALLS_MAX,
+        "pct": round(_CALLS_HOY / _CALLS_MAX * 100, 1) if _CALLS_MAX else 0,
+        "fecha": hoy,
+    })
+
+
 @app.route("/api/debug")
 def api_debug():
     """Prueba ambas keys de TwelveData y muestra estado del sistema."""
