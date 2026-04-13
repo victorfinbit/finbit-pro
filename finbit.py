@@ -2419,14 +2419,12 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     regimen = regimen_mercado(vix, spy)
 
     port_map   = {p["ticker"]: p["titulos"] for p in get_portafolio()}
-    tickers_db = get_tickers_db()
-    combinados: dict = {}
-    combinados.update(SCANNER_TICKERS)
-    combinados.update(tickers_db)
+    # Usar get_all_scanner_tickers() — respeta los tickers desactivados en DB
+    combinados: dict = get_all_scanner_tickers()
     if tickers_extra:
         combinados.update(tickers_extra)
 
-    n_db  = len([k for k in tickers_db if k not in SCANNER_TICKERS])
+    n_db  = len([k for k in combinados if k not in SCANNER_TICKERS])
     n_ext = len([k for k in (tickers_extra or {}) if k not in combinados])
     print(f"  Scanner: {len(combinados)} tickers ({len(SCANNER_TICKERS)} base + {n_db} DB + {n_ext} extra)")
     print(f"  Régimen: {regimen['label']} | VIX={vix:.1f} | SPY {'✅' if spy.get('sobre_ema200') else '❌'} EMA200")
