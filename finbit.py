@@ -106,11 +106,19 @@ def db_restore_from_github():
     except Exception as e:
         print(f"[github] ⚠️ Error de red al restaurar: {e}")
 
+_backup_lock = threading.Lock()
+
 def db_backup_to_github():
-    """Sube finbit.db a GitHub (crea o actualiza el archivo)."""
+    """Sube finbit.db a GitHub (crea o actualiza el archivo).
+    Usa lock para evitar backups simultáneos que causan error 409.
+    Reintenta una vez si hay conflicto de SHA."""
     if not GITHUB_TOKEN:
         return
     if not os.path.exists(DB_FILE):
+        return
+    # Si ya hay un backup en curso, no lanzar otro
+    if not _backup_lock.acquire(blocking=False):
+        print("[github] ⏭️  Backup ya en curso — omitiendo")
         return
     try:
         import base64
@@ -118,27 +126,37 @@ def db_backup_to_github():
             content_b64 = base64.b64encode(f.read()).decode()
 
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
-        # Obtener SHA actual del archivo (necesario para actualizar)
-        sha = None
-        r = requests.get(url, headers=_gh_headers(), timeout=10)
-        if r.status_code == 200:
-            sha = r.json().get("sha")
 
-        payload = {
-            "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "content": content_b64,
-            "branch":  GITHUB_BRANCH,
-        }
-        if sha:
-            payload["sha"] = sha
+        for intento in range(2):  # máximo 2 intentos si hay conflicto de SHA
+            # Obtener SHA fresco en cada intento
+            sha = None
+            r = requests.get(url, headers=_gh_headers(), timeout=10)
+            if r.status_code == 200:
+                sha = r.json().get("sha")
 
-        r = requests.put(url, headers=_gh_headers(), json=payload, timeout=20)
-        if r.status_code in (200, 201):
-            print(f"[github] ✅ DB respaldada en GitHub")
-        else:
-            print(f"[github] ⚠️ Error al respaldar: {r.status_code} {r.text[:100]}")
+            payload = {
+                "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "content": content_b64,
+                "branch":  GITHUB_BRANCH,
+            }
+            if sha:
+                payload["sha"] = sha
+
+            r = requests.put(url, headers=_gh_headers(), json=payload, timeout=20)
+            if r.status_code in (200, 201):
+                print(f"[github] ✅ DB respaldada en GitHub")
+                return
+            elif r.status_code == 409:
+                print(f"[github] ⚠️ Conflicto de SHA (intento {intento+1}/2) — reintentando...")
+                time.sleep(2)
+                continue
+            else:
+                print(f"[github] ⚠️ Error al respaldar: {r.status_code} {r.text[:100]}")
+                return
     except Exception as e:
         print(f"[github] ⚠️ Error de red al respaldar: {e}")
+    finally:
+        _backup_lock.release()
 
 def _loop_backup_github():
     """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
@@ -2149,11 +2167,11 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                 if f"{sym}:{interval}" not in _TD_CACHE:
                     _TD_CACHE[f"{sym}:{interval}"] = None
 
-            # Pausa entre chunks para no saturar el rate limit de la key activa
+            # Pausa entre chunks para respetar rate limit de 8 calls/min del plan básico
             if idx < len(chunks) - 1:
-                time.sleep(4)
+                time.sleep(10)
 
-        time.sleep(3)  # pausa mínima entre intervalos
+        time.sleep(8)  # pausa entre intervalos
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
