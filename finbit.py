@@ -57,6 +57,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO  = "victorfinbit/finbit-pro"   # tu repo
 GITHUB_PATH  = "finbit.db"                  # ruta del archivo en el repo
 GITHUB_BRANCH= "main"
+GITHUB_BRANCH_DB = "db-backup"  # rama separada para DB — Render no la monitorea
 
 PORTAFOLIO_INICIAL = [
    
@@ -91,7 +92,11 @@ def db_restore_from_github():
         return
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
-        r = requests.get(url, headers=_gh_headers(), timeout=15)
+        # Intentar primero desde rama db-backup, luego main como fallback
+        r = requests.get(url + f"?ref={GITHUB_BRANCH_DB}", headers=_gh_headers(), timeout=15)
+        if r.status_code == 404:
+            print("[github] DB no encontrada en db-backup — intentando main...")
+            r = requests.get(url, headers=_gh_headers(), timeout=15)
         if r.status_code == 200:
             import base64
             data = r.json()
@@ -128,16 +133,16 @@ def db_backup_to_github():
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
 
         for intento in range(2):  # máximo 2 intentos si hay conflicto de SHA
-            # Obtener SHA fresco en cada intento
+            # Obtener SHA fresco en cada intento — buscar en rama db-backup
             sha = None
-            r = requests.get(url, headers=_gh_headers(), timeout=10)
+            r = requests.get(url + f"?ref={GITHUB_BRANCH_DB}", headers=_gh_headers(), timeout=10)
             if r.status_code == 200:
                 sha = r.json().get("sha")
 
             payload = {
                 "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                 "content": content_b64,
-                "branch":  GITHUB_BRANCH,
+                "branch":  GITHUB_BRANCH_DB,
             }
             if sha:
                 payload["sha"] = sha
