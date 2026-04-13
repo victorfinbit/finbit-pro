@@ -4175,10 +4175,7 @@ setInterval(_actualizarCalls, 30000);
       </div>
     </div>
     <div style="overflow-x:auto"><table id="scan_table">
-      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
-        <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
-        <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
-        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th>Score</th></tr></thead>
+      <thead><tr><th onclick="sortTable('scan_tbody',0,'str')" style="cursor:pointer" title="Ordenar A-Z">Ticker ⇅</th><th onclick="sortTable('scan_tbody',1,'str')" style="cursor:pointer" title="Ordenar">Estado ⇅</th><th onclick="sortTable('scan_tbody',2,'num')" style="cursor:pointer" title="Ordenar">Precio MXN ⇅</th><th onclick="sortTable('scan_tbody',3,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Entrada EMA9 ⇅</th><th onclick="sortTable('scan_tbody',4,'num')" style="cursor:pointer" title="Ordenar">R:R ⇅</th><th onclick="sortTable('scan_tbody',5,'num')" style="cursor:pointer" title="Ordenar">RSI ⇅</th><th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th><th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th onclick="sortTable('scan_tbody',10,'num')" style="cursor:pointer" title="Ordenar">Score ⇅</th></tr></thead>
       <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
@@ -4252,11 +4249,7 @@ setInterval(_actualizarCalls, 30000);
   <div class="tw">
     <div class="tw-head"><span id="radar_count">Mostrando {n_radar} acciones</span><span class="hint">↓ Clic en fila para análisis completo</span></div>
     <div style="overflow-x:auto"><table id="radar_table">
-      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
-        <th style="color:var(--green)">Entrada EMA9</th><th style="color:var(--green)">Potencial</th>
-        <th>R:R</th><th>RSI</th><th>MACD</th><th>EMA200</th><th>Score</th>
-        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th>
-        <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+      <thead><tr><th onclick="sortTable('radar_body',0,'str')" style="cursor:pointer" title="Ordenar A-Z">Ticker ⇅</th><th onclick="sortTable('radar_body',1,'str')" style="cursor:pointer" title="Ordenar">Estado ⇅</th><th onclick="sortTable('radar_body',2,'num')" style="cursor:pointer" title="Ordenar">Precio MXN ⇅</th><th onclick="sortTable('radar_body',3,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Entrada EMA9 ⇅</th><th onclick="sortTable('radar_body',4,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Potencial ⇅</th><th onclick="sortTable('radar_body',5,'num')" style="cursor:pointer" title="Ordenar">R:R ⇅</th><th onclick="sortTable('radar_body',6,'num')" style="cursor:pointer" title="Ordenar">RSI ⇅</th><th>MACD</th><th>EMA200</th><th onclick="sortTable('radar_body',9,'num')" style="cursor:pointer" title="Ordenar">Score ⇅</th><th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
       <tbody id="radar_body">{radar_rows}</tbody>
     </table></div>
   </div>
@@ -6137,6 +6130,39 @@ function actualizarDashboard() {{
       }}, 3000);
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
+}}
+
+// ── Ordenamiento de tablas ────────────────────────────────
+const _sortState = {{}};
+function sortTable(tbodyId, colIdx, tipo) {{
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  // Alternar asc/desc
+  const key = tbodyId + '_' + colIdx;
+  _sortState[key] = !_sortState[key];
+  const asc = _sortState[key];
+
+  // Separar datarows y sus detail rows
+  const rows = Array.from(tbody.querySelectorAll('tr.datarow'));
+  rows.sort((a, b) => {{
+    const ca = a.cells[colIdx] ? a.cells[colIdx].textContent.trim() : '';
+    const cb = b.cells[colIdx] ? b.cells[colIdx].textContent.trim() : '';
+    if (tipo === 'num') {{
+      const na = parseFloat(ca.replace(/[^0-9.-]/g,'')) || 0;
+      const nb = parseFloat(cb.replace(/[^0-9.-]/g,'')) || 0;
+      return asc ? na - nb : nb - na;
+    }}
+    return asc ? ca.localeCompare(cb) : cb.localeCompare(ca);
+  }});
+
+  // Reinsertar respetando el detail row que sigue a cada datarow
+  rows.forEach(row => {{
+    tbody.appendChild(row);
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains('detail')) {{
+      tbody.appendChild(next);
+    }}
+  }});
 }}
 </script></body></html>"""
 
