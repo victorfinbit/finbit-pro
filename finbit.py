@@ -140,7 +140,7 @@ def db_backup_to_github():
                 sha = r.json().get("sha")
 
             payload = {
-                "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "message": f"finbit.db auto-backup {datetime.now().strftime('%Y-%m-%d %H:%M')} [skip render]",
                 "content": content_b64,
                 "branch":  GITHUB_BRANCH_DB,
             }
