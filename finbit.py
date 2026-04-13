@@ -2174,9 +2174,9 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
 
             # Pausa entre chunks para respetar rate limit de 8 calls/min del plan básico
             if idx < len(chunks) - 1:
-                time.sleep(10)
+                time.sleep(15)
 
-        time.sleep(8)  # pausa entre intervalos
+        time.sleep(10)  # pausa entre intervalos
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
