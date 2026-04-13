@@ -376,12 +376,6 @@ API_BASE = "https://api.twelvedata.com"
 _KEY_IDX: int = 0
 # Set de keys agotadas en esta corrida (se resetea en cada build)
 _KEYS_AGOTADAS: set = set()
-_CALLS_HOY: int = 0          # contador de llamadas a TwelveData hoy
-_CALLS_DIA: str = ""         # fecha del contador (para reset a medianoche)
-_CALLS_MAX: int = len([k for k in [
-    os.environ.get("TWELVEDATA_API_KEY",""), os.environ.get("TWELVEDATA_API_KEY_2",""),
-    os.environ.get("TWELVEDATA_API_KEY_3",""), os.environ.get("TWELVEDATA_API_KEY_4","")
-] if k not in ("","TU_KEY_AQUI")]) * 800 or 3200
 
 def _es_error_creditos(d: dict) -> bool:
     """Detecta si TwelveData respondió con error de créditos/límite dentro del JSON."""
@@ -445,12 +439,6 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                     break  # salir del loop de intentos, probar siguiente key
                 if "values" in d and d["values"]:
                     print(f"    ✅ TD ({symbol} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
-                    global _CALLS_HOY, _CALLS_DIA
-                    hoy = datetime.now().strftime("%Y-%m-%d")
-                    if _CALLS_DIA != hoy:
-                        _CALLS_HOY = 0
-                        _CALLS_DIA = hoy
-                    _CALLS_HOY += 1
                     return d["values"]
                 print(f"    ❌ TD ({symbol} {interval}): {str(d)[:120]}")
                 return None
@@ -500,13 +488,6 @@ def api_timeseries_batch(symbols: list, interval: str,
                 print(f"    ⚠️  Key …{use_key[-4:]} agotada en batch — cambiando a la siguiente key")
                 _KEYS_AGOTADAS.add(use_key)
                 continue  # probar siguiente key
-            # Contar call exitosa
-            global _CALLS_HOY, _CALLS_DIA
-            hoy = datetime.now().strftime("%Y-%m-%d")
-            if _CALLS_DIA != hoy:
-                _CALLS_HOY = 0
-                _CALLS_DIA = hoy
-            _CALLS_HOY += 1
             resultado = {}
             if len(symbols) == 1:
                 sym = symbols[0].upper()
@@ -3854,24 +3835,9 @@ td strong{{font-size:13px;font-weight:500}}
       <button class="cfg-btn" onclick="saveConfig()">Guardar</button>
     </div>
     <button onclick="actualizarDashboard()" id="btn_update" style="background:var(--green);color:#fff;border:none;border-radius:var(--r);padding:5px 14px;font-size:12px;font-family:var(--sans);cursor:pointer;font-weight:500;white-space:nowrap">↺ Actualizar</button>
-    <span id="calls_chip" title="Calls a TwelveData hoy" style="font-size:11px;color:var(--muted);font-family:var(--mono);cursor:default">…/… calls</span>
     <span style="font-size:11px;color:var(--muted)">{ts}</span>
   </div>
 </div></div>
-<script>
-function _actualizarCalls(){{
-  fetch("/api/calls").then(r=>r.json()).then(d={{
-    const chip = document.getElementById("calls_chip");
-    if(!chip) return;
-    const pct = d.pct || 0;
-    const color = pct >= 80 ? "var(--red)" : pct >= 50 ? "var(--yellow)" : "var(--muted)";
-    chip.style.color = color;
-    chip.textContent = d.calls_hoy + "/" + d.calls_max + " calls";
-  }}).catch(()=>{{}});
-}}
-_actualizarCalls();
-setInterval(_actualizarCalls, 30000);
-</script>
 
 <div class="nav"><div class="nav-inner">
   <button class="nb" onclick="showTab('portafolio',this)">Mi portafolio</button>
@@ -4175,7 +4141,10 @@ setInterval(_actualizarCalls, 30000);
       </div>
     </div>
     <div style="overflow-x:auto"><table id="scan_table">
-      <thead><tr><th onclick="sortTable('scan_tbody',0,'str')" style="cursor:pointer" title="Ordenar A-Z">Ticker ⇅</th><th onclick="sortTable('scan_tbody',1,'str')" style="cursor:pointer" title="Ordenar">Estado ⇅</th><th onclick="sortTable('scan_tbody',2,'num')" style="cursor:pointer" title="Ordenar">Precio MXN ⇅</th><th onclick="sortTable('scan_tbody',3,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Entrada EMA9 ⇅</th><th onclick="sortTable('scan_tbody',4,'num')" style="cursor:pointer" title="Ordenar">R:R ⇅</th><th onclick="sortTable('scan_tbody',5,'num')" style="cursor:pointer" title="Ordenar">RSI ⇅</th><th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th><th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th onclick="sortTable('scan_tbody',10,'num')" style="cursor:pointer" title="Ordenar">Score ⇅</th></tr></thead>
+      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
+        <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
+        <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
+        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th>Score</th></tr></thead>
       <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
@@ -4249,7 +4218,11 @@ setInterval(_actualizarCalls, 30000);
   <div class="tw">
     <div class="tw-head"><span id="radar_count">Mostrando {n_radar} acciones</span><span class="hint">↓ Clic en fila para análisis completo</span></div>
     <div style="overflow-x:auto"><table id="radar_table">
-      <thead><tr><th onclick="sortTable('radar_body',0,'str')" style="cursor:pointer" title="Ordenar A-Z">Ticker ⇅</th><th onclick="sortTable('radar_body',1,'str')" style="cursor:pointer" title="Ordenar">Estado ⇅</th><th onclick="sortTable('radar_body',2,'num')" style="cursor:pointer" title="Ordenar">Precio MXN ⇅</th><th onclick="sortTable('radar_body',3,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Entrada EMA9 ⇅</th><th onclick="sortTable('radar_body',4,'num')" style="cursor:pointer;color:var(--green)" title="Ordenar">Potencial ⇅</th><th onclick="sortTable('radar_body',5,'num')" style="cursor:pointer" title="Ordenar">R:R ⇅</th><th onclick="sortTable('radar_body',6,'num')" style="cursor:pointer" title="Ordenar">RSI ⇅</th><th>MACD</th><th>EMA200</th><th onclick="sortTable('radar_body',9,'num')" style="cursor:pointer" title="Ordenar">Score ⇅</th><th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
+        <th style="color:var(--green)">Entrada EMA9</th><th style="color:var(--green)">Potencial</th>
+        <th>R:R</th><th>RSI</th><th>MACD</th><th>EMA200</th><th>Score</th>
+        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th>
+        <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
       <tbody id="radar_body">{radar_rows}</tbody>
     </table></div>
   </div>
@@ -6131,39 +6104,6 @@ function actualizarDashboard() {{
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
-
-// ── Ordenamiento de tablas ────────────────────────────────
-const _sortState = {{}};
-function sortTable(tbodyId, colIdx, tipo) {{
-  const tbody = document.getElementById(tbodyId);
-  if (!tbody) return;
-  // Alternar asc/desc
-  const key = tbodyId + '_' + colIdx;
-  _sortState[key] = !_sortState[key];
-  const asc = _sortState[key];
-
-  // Separar datarows y sus detail rows
-  const rows = Array.from(tbody.querySelectorAll('tr.datarow'));
-  rows.sort((a, b) => {{
-    const ca = a.cells[colIdx] ? a.cells[colIdx].textContent.trim() : '';
-    const cb = b.cells[colIdx] ? b.cells[colIdx].textContent.trim() : '';
-    if (tipo === 'num') {{
-      const na = parseFloat(ca.replace(/[^0-9.-]/g,'')) || 0;
-      const nb = parseFloat(cb.replace(/[^0-9.-]/g,'')) || 0;
-      return asc ? na - nb : nb - na;
-    }}
-    return asc ? ca.localeCompare(cb) : cb.localeCompare(ca);
-  }});
-
-  // Reinsertar respetando el detail row que sigue a cada datarow
-  rows.forEach(row => {{
-    tbody.appendChild(row);
-    const next = row.nextElementSibling;
-    if (next && next.classList.contains('detail')) {{
-      tbody.appendChild(next);
-    }}
-  }});
-}}
 </script></body></html>"""
 
 
@@ -6788,9 +6728,6 @@ def api_ops_import():
                 print(f"  [import] op skip: {e}")
 
         con.close()
-        # Backup inmediato — evita perder operaciones si Render reinicia
-        if ops:
-            threading.Thread(target=db_backup_to_github, daemon=True).start()
         # No invalidar _dash_html aquí — la sincronización es silenciosa
         # Solo se refleja en el próximo ↺ Actualizar
         return jsonify({"status": "ok", "importadas": len(ops)})
@@ -6819,22 +6756,6 @@ def health():
 
 
 # ── API Debug — diagnóstico rápido desde el browser ──────
-@app.route("/api/calls")
-def api_calls():
-    """Retorna el contador de calls a TwelveData de hoy."""
-    global _CALLS_HOY, _CALLS_MAX, _CALLS_DIA
-    hoy = datetime.now().strftime("%Y-%m-%d")
-    if _CALLS_DIA != hoy:
-        _CALLS_HOY = 0
-        _CALLS_DIA = hoy
-    return jsonify({
-        "calls_hoy": _CALLS_HOY,
-        "calls_max": _CALLS_MAX,
-        "pct": round(_CALLS_HOY / _CALLS_MAX * 100, 1) if _CALLS_MAX else 0,
-        "fecha": hoy,
-    })
-
-
 @app.route("/api/debug")
 def api_debug():
     """Prueba ambas keys de TwelveData y muestra estado del sistema."""
