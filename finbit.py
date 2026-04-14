@@ -858,6 +858,107 @@ def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float
     }
 
 
+def detectar_inicio_movimiento(tf_1d: dict) -> dict:
+    """
+    Detecta inicio de movimiento ANTES del breakout.
+    4 condiciones (necesita al menos 3 de 4):
+      1. Precio cerca de EMA200 — dentro de ±7%
+      2. RSI saliendo de sobreventa — entre 28-48 Y subiendo vs vela anterior
+      3. MACD girando — histograma subiendo (aunque aún negativo)
+      4. Volumen empezando a subir — >= 0.8x media (no necesariamente 1.5x)
+    """
+    if not tf_1d or not tf_1d.get("valido"):
+        return {"es_inicio": False}
+
+    precio  = tf_1d.get("precio", 0)
+    e200    = tf_1d.get("ema200", 0)
+    rsi     = tf_1d.get("rsi", 50)
+    rsi_ant = tf_1d.get("rsi_anterior", rsi)   # RSI de la vela anterior
+    mh_v    = tf_1d.get("macd_hist", 0)         # histograma actual
+    mh_ant  = tf_1d.get("macd_hist_ant", mh_v)  # histograma anterior
+    vol_rel = tf_1d.get("vol_rel", 0)           # vol_now / vol_avg
+
+    if not precio or not e200:
+        return {"es_inicio": False}
+
+    # C1: Precio cerca de EMA200 (±7%)
+    dist_e200_pct = (precio - e200) / e200 * 100
+    c1 = abs(dist_e200_pct) <= 7.0
+
+    # C2: RSI saliendo de sobreventa (28-48 Y subiendo)
+    c2 = 28 <= rsi <= 48 and rsi > rsi_ant
+
+    # C3: Histograma MACD girando al alza (subiendo, aunque negativo)
+    c3 = mh_v > mh_ant
+
+    # C4: Volumen empezando a subir (>= 0.8x media)
+    c4 = vol_rel >= 0.8 if vol_rel > 0 else False
+
+    condiciones = [c1, c2, c3, c4]
+    n_cumplidas = sum(condiciones)
+    es_inicio   = n_cumplidas >= 3
+
+    if not es_inicio:
+        return {"es_inicio": False}
+
+    return {
+        "es_inicio":     True,
+        "n_cumplidas":   n_cumplidas,
+        "dist_e200_pct": round(dist_e200_pct, 1),
+        "rsi":           round(rsi, 1),
+        "rsi_subiendo":  c2,
+        "macd_girando":  c3,
+        "vol_subiendo":  c4,
+        "c1": c1, "c2": c2, "c3": c3, "c4": c4,
+    }
+
+
+def badge_inicio_movimiento(inicio: dict) -> str:
+    """Badge naranja para la tabla — aparece antes del breakout."""
+    if not inicio or not inicio.get("es_inicio"):
+        return ""
+    n = inicio.get("n_cumplidas", 0)
+    return (f'<span style="display:inline-flex;padding:2px 7px;border-radius:20px;'
+            f'font-size:9px;font-weight:700;white-space:nowrap;'
+            f'background:#fff7e6;color:#d46b08;border:2px solid #ffd591;margin-left:4px">'
+            f'👆 Inicio mov. {n}/4</span>')
+
+
+def render_inicio_movimiento_panel(inicio: dict) -> str:
+    """Panel en el detail — explica por qué detectó inicio de movimiento."""
+    if not inicio or not inicio.get("es_inicio"):
+        return ""
+    n    = inicio.get("n_cumplidas", 0)
+    d200 = inicio.get("dist_e200_pct", 0)
+    rsi  = inicio.get("rsi", 0)
+    rows = [
+        ("📍 Precio cerca EMA200", inicio.get("c1"), f"{d200:+.1f}% de la EMA200"),
+        ("📈 RSI saliendo sobreventa", inicio.get("c2"), f"RSI {rsi:.0f} subiendo"),
+        ("🔄 MACD girando al alza", inicio.get("c3"), "Histograma en recuperación"),
+        ("📊 Volumen despertando", inicio.get("c4"), f"Vol ≥ 0.8x media"),
+    ]
+    filas_html = ""
+    for label, ok, val in rows:
+        color = "#14532d" if ok else "#6b7280"
+        bg    = "#f0fdf4" if ok else "#f9fafb"
+        icon  = "✅" if ok else "⬜"
+        filas_html += (f'<div style="display:flex;align-items:center;gap:8px;'
+                       f'padding:6px 8px;border-radius:6px;background:{bg};margin-bottom:4px">'
+                       f'<span>{icon}</span>'
+                       f'<span style="flex:1;font-size:11px;color:{color}">{label}</span>'
+                       f'<span style="font-size:10px;color:var(--muted)">{val}</span>'
+                       f'</div>')
+    return (f'<div style="background:#fff7e6;border:2px solid #ffd591;border-radius:8px;'
+            f'padding:12px 14px;margin-bottom:10px">'
+            f'<div style="font-weight:700;font-size:13px;color:#d46b08;margin-bottom:6px">'
+            f'👆 INICIO DE MOVIMIENTO — anticipación al breakout ({n}/4 señales)</div>'
+            f'<div style="font-size:11px;color:#92400e;margin-bottom:10px">'
+            f'El precio muestra señales tempranas de recuperación. '
+            f'Aún no es breakout confirmado — considera entrar en escalones pequeños '
+            f'con stop ajustado.</div>'
+            f'{filas_html}</div>')
+
+
 def badge_ganga(ganga: dict) -> str:
     """Badge compacto para la tabla — solo aparece si es_ganga=True."""
     if not ganga or not ganga.get("es_ganga"):
@@ -1924,7 +2025,9 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
 
     ml,ms,mh = macd(c)
     ml_v=float(ml.iloc[-1]); ms_v=float(ms.iloc[-1]); mh_v=float(mh.iloc[-1])
-    rv = float(rsi(c).iloc[-1])
+    mh_ant = float(mh.iloc[-2]) if len(mh) >= 2 else mh_v   # histograma anterior
+    rv     = float(rsi(c).iloc[-1])
+    rv_ant = float(rsi(c).iloc[-2]) if n >= 2 else rv         # RSI anterior
 
     # ADX — fuerza de tendencia
     adx_val = 0.0
@@ -2069,7 +2172,9 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     return {
         "tf":tf_label,"valido":True,
         "precio":precio,"ema9":e9,"ema21":e21,"ema50":e50,"ema200":e200,
-        "rsi":rv,"macd_alcista":macd_ok,"ml":ml_v,"ms":ms_v,"mh":mh_v,
+        "rsi":rv,"rsi_anterior":rv_ant,"macd_alcista":macd_ok,"ml":ml_v,"ms":ms_v,"mh":mh_v,
+        "macd_hist":mh_v,"macd_hist_ant":mh_ant,
+        "vol_rel":(vol_now/vol_avg if vol_avg > 0 else 0),
         "adx":adx_val,"atr":round(atr_val,4),"trailing_stop":round(stop,4),
         "estructura":estructura_info,
         "obv":obv_info,
@@ -2104,7 +2209,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 60, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -2115,7 +2220,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         for k in (_TD_KEYS or [""]):
             if k in _KEYS_AGOTADAS:
                 continue
-            result = api_timeseries(symbol, interval, 60, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -2148,33 +2253,48 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                 return k
         return _TD_KEYS[0] if _TD_KEYS else ""
 
-    # Plan básico: 8 calls/min = 1 call cada 8 segundos
-    # Hacemos peticiones individuales por símbolo con pausa entre cada una
-    # Así nunca superamos el límite aunque el plan sea gratis
-    _PAUSA_ENTRE_CALLS = 8   # segundos — seguro para plan básico (8/min)
-
     for interval in intervals:
-        print(f"  [batch] {interval} → {', '.join(syms)} (1 call cada {_PAUSA_ENTRE_CALLS}s)")
-        for i, sym in enumerate(syms):
-            key_cache = f"{sym}:{interval}"
-            if key_cache in _TD_CACHE and _TD_CACHE[key_cache]:
-                print(f"  [batch] {sym} {interval} — cache hit, saltando")
-                continue
+        chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
+        for idx, chunk in enumerate(chunks):
             key_use = _key_activa()
             if not key_use:
-                print(f"  [batch] ⚠️ Sin keys — abortando")
+                print(f"  [batch] ⚠️ Sin keys disponibles — abortando batch")
                 break
-            # Pausa ANTES de cada call (excepto el primero del lote)
-            if i > 0:
-                time.sleep(_PAUSA_ENTRE_CALLS)
-            vals = api_timeseries(sym, interval, 60, key=key_use)
-            _TD_CACHE[key_cache] = vals
-            if vals:
-                print(f"  [batch] ✅ {sym} {interval}: {len(vals)} velas")
-            else:
-                print(f"  [batch] ❌ {sym} {interval}: sin datos")
 
-        time.sleep(_PAUSA_ENTRE_CALLS)   # pausa entre intervalos
+            print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
+                  f"k=…{key_use[-4:]} → {', '.join(chunk)}")
+
+            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
+
+            # Reintentar faltantes individualmente — más robusto que batch fallido
+            faltantes = [s for s in chunk if s.upper() not in batch]
+            if faltantes:
+                print(f"  [batch] {len(faltantes)} faltantes — reintentando individualmente...")
+                time.sleep(3)
+                for sym_f in faltantes:
+                    key2 = _key_activa()
+                    if not key2:
+                        break
+                    vals = api_timeseries(sym_f, interval, 150, key=key2)
+                    if vals:
+                        batch[sym_f.upper()] = vals
+                        print(f"  [batch] ✅ Recuperado {sym_f}")
+                    time.sleep(1)
+
+            # Guardar en cache
+            for sym, vals in batch.items():
+                _TD_CACHE[f"{sym}:{interval}"] = vals
+
+            # Marcar como None los que no llegaron
+            for sym in chunk:
+                if f"{sym}:{interval}" not in _TD_CACHE:
+                    _TD_CACHE[f"{sym}:{interval}"] = None
+
+            # Pausa entre chunks — plan Grow: 55+/min, mucho más holgado
+            if idx < len(chunks) - 1:
+                time.sleep(5)
+
+        time.sleep(3)   # pausa entre intervalos — plan Grow aguanta
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
@@ -2266,7 +2386,7 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     if syms_port:
         print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
-        _precargar_cache_batch(list(set(syms_port)), ["1day"])
+        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
 
     resultados = []
 
@@ -2479,7 +2599,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                     "setup": {"estado": "SIN DATOS", "decision_final": "Sin datos de API",
                               "bloqueadores": [], "advertencias": [], "confianza": 0,
                               "tipo_setup": "—"},
-                    "sr": {}, "dca": {}, "ganga": {},
+                    "sr": {}, "dca": {}, "ganga": {}, "inicio": {},
                 })
                 continue
 
@@ -2507,9 +2627,12 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 ganga_info = detectar_ganga(
                     tf_1d,
                     an.get("sr", {}),
-                    tf_1d.get("objetivo", 0) * tc,   # objetivo en MXN
-                    precio_usd * tc                   # precio en MXN
+                    tf_1d.get("objetivo", 0) * tc,
+                    precio_usd * tc
                 )
+
+            # ── INICIO DE MOVIMIENTO: anticipación al breakout ──
+            inicio_info = detectar_inicio_movimiento(tf_1d)
 
             try:
                 guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
@@ -2549,6 +2672,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "sr": an.get("sr", {}),
                 "dca": dca_plan,
                 "ganga": ganga_info,
+                "inicio": inicio_info,
             })
         except Exception as e:
             print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
@@ -2634,9 +2758,12 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             ganga_info_r = detectar_ganga(
                 tf,
                 sr_radar,
-                tf.get("objetivo", 0) * tc,   # objetivo en MXN
-                precio * tc                    # precio en MXN
+                tf.get("objetivo", 0) * tc,
+                precio * tc
             )
+
+        # ── INICIO DE MOVIMIENTO en radar ──
+        inicio_info_r = detectar_inicio_movimiento(tf)
 
         # ── PLAN DCA RADAR ────────────────────────────────────────────────
         soportes_mxn_r = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_radar.get("soportes", [])]
@@ -2666,6 +2793,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "sr":sr_radar,
             "dca":dca_plan_r,
             "ganga":ganga_info_r,
+            "inicio":inicio_info_r,
             "vix":vix,"regimen":regimen_mercado(vix,spy),
         })
 
@@ -3147,7 +3275,8 @@ def render_scan_rows(scanner, tc):
                          if en_cartera>0 else "")
         etf_badge   = badge_etf_apalancado() if etf_peligroso else ""
         setup_badge = badge_setup(tipo_setup) if tipo_setup not in ("—","Bloqueado","Salida urgente") else ""
-        ganga_badge = badge_ganga(r.get("ganga", {}))
+        ganga_badge  = badge_ganga(r.get("ganga", {}))
+        inicio_badge = badge_inicio_movimiento(r.get("inicio", {}))
 
         score_block    = render_score_badge(score_aj, total_c, senal_1d)
         score_adj_note = ""
@@ -3204,6 +3333,7 @@ def render_scan_rows(scanner, tc):
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
                 f'{render_ganga_panel(r.get("ganga", {}))}'
+                f'{render_inicio_movimiento_panel(r.get("inicio", {}))}'
                 f'{decision_html}'
                 f'{etf_warning}'
                 f'{render_conf(conf) if conf else ""}'
@@ -3249,7 +3379,7 @@ def render_scan_rows(scanner, tc):
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{sr_badge}{cartera_badge}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{inicio_badge}{sr_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -3328,7 +3458,8 @@ def render_radar_rows(radar, tc):
                        if en_cartera>0 else "")
         etf_badge   = badge_etf_apalancado() if etf_peligroso else ""
         setup_badge = badge_setup(tipo_setup) if tipo_setup not in ("—","Bloqueado","Salida urgente") else ""
-        ganga_badge_r = badge_ganga(r.get("ganga", {}))
+        ganga_badge_r  = badge_ganga(r.get("ganga", {}))
+        inicio_badge_r = badge_inicio_movimiento(r.get("inicio", {}))
 
         crit = r.get("criterios",{}); sz = r.get("sizing",{})
         senal_est = ("COMPRAR" if estado in ("ROCKET","BUY") else
@@ -3355,6 +3486,7 @@ def render_radar_rows(radar, tc):
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
                 f'{render_ganga_panel(r.get("ganga", {}))}'
+                f'{render_inicio_movimiento_panel(r.get("inicio", {}))}'
                 f'{decision_html}'
                 f'<div class="dp-grid">'
                 f'<div class="dp-sec"><div class="dp-sec-t">Semáforo indicadores 1D</div>'
@@ -3411,7 +3543,7 @@ def render_radar_rows(radar, tc):
         else:
             sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{sr_badge}{cartera_tag}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{inicio_badge_r}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -6496,9 +6628,7 @@ def _construir_con_etapas():
             print("[build] Obteniendo VIX y SPY...")
             try:
                 vix = get_vix()
-                time.sleep(8)   # respetar 8/min — VIX consume 1 crédito
                 spy = get_spy_macro()
-                time.sleep(8)   # SPY consume 1 crédito
             except Exception as e:
                 print(f"[build] Macro error (continuando): {e}")
             regimen = regimen_mercado(vix, spy)
