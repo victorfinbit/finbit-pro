@@ -2104,7 +2104,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 60, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -2115,7 +2115,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         for k in (_TD_KEYS or [""]):
             if k in _KEYS_AGOTADAS:
                 continue
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 60, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -2148,48 +2148,33 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                 return k
         return _TD_KEYS[0] if _TD_KEYS else ""
 
+    # Plan básico: 8 calls/min = 1 call cada 8 segundos
+    # Hacemos peticiones individuales por símbolo con pausa entre cada una
+    # Así nunca superamos el límite aunque el plan sea gratis
+    _PAUSA_ENTRE_CALLS = 8   # segundos — seguro para plan básico (8/min)
+
     for interval in intervals:
-        chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
-        for idx, chunk in enumerate(chunks):
+        print(f"  [batch] {interval} → {', '.join(syms)} (1 call cada {_PAUSA_ENTRE_CALLS}s)")
+        for i, sym in enumerate(syms):
+            key_cache = f"{sym}:{interval}"
+            if key_cache in _TD_CACHE and _TD_CACHE[key_cache]:
+                print(f"  [batch] {sym} {interval} — cache hit, saltando")
+                continue
             key_use = _key_activa()
             if not key_use:
-                print(f"  [batch] ⚠️ Sin keys disponibles — abortando batch")
+                print(f"  [batch] ⚠️ Sin keys — abortando")
                 break
+            # Pausa ANTES de cada call (excepto el primero del lote)
+            if i > 0:
+                time.sleep(_PAUSA_ENTRE_CALLS)
+            vals = api_timeseries(sym, interval, 60, key=key_use)
+            _TD_CACHE[key_cache] = vals
+            if vals:
+                print(f"  [batch] ✅ {sym} {interval}: {len(vals)} velas")
+            else:
+                print(f"  [batch] ❌ {sym} {interval}: sin datos")
 
-            print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
-                  f"k=…{key_use[-4:]} → {', '.join(chunk)}")
-
-            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
-
-            # Reintentar faltantes individualmente — más robusto que batch fallido
-            faltantes = [s for s in chunk if s.upper() not in batch]
-            if faltantes:
-                print(f"  [batch] {len(faltantes)} faltantes — reintentando individualmente...")
-                time.sleep(3)
-                for sym_f in faltantes:
-                    key2 = _key_activa()
-                    if not key2:
-                        break
-                    vals = api_timeseries(sym_f, interval, 150, key=key2)
-                    if vals:
-                        batch[sym_f.upper()] = vals
-                        print(f"  [batch] ✅ Recuperado {sym_f}")
-                    time.sleep(1)
-
-            # Guardar en cache
-            for sym, vals in batch.items():
-                _TD_CACHE[f"{sym}:{interval}"] = vals
-
-            # Marcar como None los que no llegaron
-            for sym in chunk:
-                if f"{sym}:{interval}" not in _TD_CACHE:
-                    _TD_CACHE[f"{sym}:{interval}"] = None
-
-            # Pausa entre chunks — plan Grow: 55+/min, mucho más holgado
-            if idx < len(chunks) - 1:
-                time.sleep(5)
-
-        time.sleep(3)   # pausa entre intervalos — plan Grow aguanta
+        time.sleep(_PAUSA_ENTRE_CALLS)   # pausa entre intervalos
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
@@ -2281,7 +2266,7 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     if syms_port:
         print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
-        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
+        _precargar_cache_batch(list(set(syms_port)), ["1day"])
 
     resultados = []
 
@@ -3256,14 +3241,6 @@ def render_scan_rows(scanner, tc):
                 f'{dca_html}</div></div>'
                 f'</div>')
 
-        # Guard: ticker sin datos — fila simple para no romper el render
-        if r.get("estado") == "SIN DATOS":
-            h+=(f'<tr class="datarow">'
-                f'<td><strong>{r["nombre"]}</strong></td>'
-                f'<td><span class="badge b-none">Sin datos</span></td>'
-                f'<td colspan="9" style="color:var(--muted);font-size:11px">⚠️ Rate limit o símbolo no encontrado</td>'
-                f'</tr>')
-            continue
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         etapa_emoji, etapa_label, etapa_tooltip = calcular_etapa(r)
         etapa_badge = (f'<span title="{etapa_tooltip}" style="display:inline-block;font-size:13px;'
@@ -3274,7 +3251,7 @@ def render_scan_rows(scanner, tc):
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{sr_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
-            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f if r["precio_usd"] else "—"}</span></td>'
+            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
             f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div></td>'
@@ -3433,18 +3410,10 @@ def render_radar_rows(radar, tc):
             sr_cell_r = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_r)}</div>'
         else:
             sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
-        # Guard: ticker sin datos — fila simple
-        if r.get("estado") == "SIN DATOS":
-            h+=(f'<tr class="datarow">'
-                f'<td><strong>{r["nombre"]}</strong></td>'
-                f'<td><span class="badge b-none">Sin datos</span></td>'
-                f'<td colspan="10" style="color:var(--muted);font-size:11px">⚠️ Rate limit o símbolo no encontrado</td>'
-                f'</tr>')
-            continue
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
-            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f if r["precio_usd"] else "—"}</span></td>'
+            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td class="num" style="color:{pot_col};font-weight:{"600" if r["pot_alza"]>=10 else "400"}">{r["pot_alza"]:+.1f}%</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
@@ -6527,7 +6496,9 @@ def _construir_con_etapas():
             print("[build] Obteniendo VIX y SPY...")
             try:
                 vix = get_vix()
+                time.sleep(8)   # respetar 8/min — VIX consume 1 crédito
                 spy = get_spy_macro()
+                time.sleep(8)   # SPY consume 1 crédito
             except Exception as e:
                 print(f"[build] Macro error (continuando): {e}")
             regimen = regimen_mercado(vix, spy)
