@@ -1769,7 +1769,10 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
     nuevo_maximo_20   = precio >= obj * 0.97                 # cerca del máximo de 20 velas
     adx_acelerando    = adx_v >= 25
 
-    if nuevo_maximo_20 and adx_acelerando and vol_ok:
+    # Breakout requiere volumen REAL >= 1.5x media — no aplica si no hay datos o es bajo
+    vol_rel = tf_1d.get("vol_rel", 0)
+    vol_ok_breakout = vol_ok and vol_rel >= 1.5
+    if nuevo_maximo_20 and adx_acelerando and vol_ok_breakout:
         tipo_setup = "Breakout"
         setup_nota = "Ruptura de máximos con volumen y tendencia fuerte. Entrada agresiva válida."
     elif precio_cerca_ema9 and macd_ok and rsi_v < 65:
