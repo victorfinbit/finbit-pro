@@ -2104,7 +2104,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 60, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -2115,7 +2115,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         for k in (_TD_KEYS or [""]):
             if k in _KEYS_AGOTADAS:
                 continue
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 60, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -2159,7 +2159,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=60, key=key_use)
 
             # Reintentar faltantes individualmente — más robusto que batch fallido
             faltantes = [s for s in chunk if s.upper() not in batch]
@@ -2281,7 +2281,7 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     if syms_port:
         print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
-        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
+        _precargar_cache_batch(list(set(syms_port)), ["1day"])
 
     resultados = []
 
@@ -6487,14 +6487,14 @@ def _construir_con_etapas():
         seed_portafolio(tc)
         _build_stage = "tc_ok"
 
-        if os.path.exists("finbit_ops.json"):
-            importar_ops_json("finbit_ops.json", tc)
+        if os.path.exists(os.path.join(_BASE_DIR, "finbit_ops.json")):
+            importar_ops_json(os.path.join(_BASE_DIR, "finbit_ops.json"), tc)
         procesar_borrados()
 
         tickers_extra = {}
-        if os.path.exists("finbit_tickers.json"):
+        if os.path.exists(os.path.join(_BASE_DIR, "finbit_tickers.json")):
             try:
-                with open("finbit_tickers.json") as f:
+                with open(os.path.join(_BASE_DIR, "finbit_tickers.json")) as f:
                     raw = json.load(f)
                 for t, ex in raw.items():
                     tickers_extra[t.upper()] = (t.upper(), ex or "")
@@ -6540,7 +6540,11 @@ def _construir_con_etapas():
                     port_data = []
             _build_stage = "port_ok"
 
-            if not _timeout_exceeded():
+            # Radar: solo si hay créditos suficientes (plan Grow o superior)
+            # Con plan gratis (8/min) el radar dobla el tiempo — se omite
+            _n_keys_activas = len([k for k in _TD_KEYS if k not in _KEYS_AGOTADAS])
+            _skip_radar = len(get_all_scanner_tickers()) > 5  # skip si hay muchos tickers en gratis
+            if not _timeout_exceeded() and not _skip_radar:
                 try:
                     radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
                                               scan_results=scan_data, vix=vix, spy=spy)
@@ -6551,7 +6555,8 @@ def _construir_con_etapas():
                     traceback.print_exc()
                     radar_data = []
             else:
-                print(f"[build] ⚠️  Timeout antes del radar — omitiendo")
+                print(f"[build] ⏭️  Radar omitido — reutilizando datos del scanner")
+                radar_data = scan_data  # reutilizar scanner como radar
             _build_stage = "radar_ok"
         else:
             regimen = regimen_mercado(vix, spy)
