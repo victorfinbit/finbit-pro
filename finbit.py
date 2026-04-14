@@ -7,10 +7,10 @@
 INSTALACIÓN (solo la primera vez):
     pip install requests pandas
 
-API KEY GRATIS (800 calls/día):
-    1. Ve a https://twelvedata.com  → Sign Up (gratis)
+API KEY GRATIS (Finnhub — 60 calls/min, sin límite diario):
+    1. Ve a https://finnhub.io  → Sign Up (gratis)
     2. Dashboard → API Keys → copia tu key
-    3. Pégala abajo en API_KEY
+    3. Pégala en FINNHUB_API_KEY abajo o en Render como variable de entorno
 """
 
 import sqlite3, requests, json, os, webbrowser, time, threading
@@ -22,16 +22,14 @@ from flask import Flask, Response, request as flask_req, jsonify
 # ═══════════════════════════════════════════════════════════
 #   ⚙️  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════
-# API keys: se leen de variables de entorno si existen (recomendado en Render)
-# Si no existen, usa el valor hardcodeado (para desarrollo local)
-API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c864e4")
-API_KEY_2   = os.environ.get("TWELVEDATA_API_KEY_2","3c4971fd74eb4363bcbf877edb1616b4")
-API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c52565b847")
-API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2bacd34")
+# ── Finnhub API (reemplaza TwelveData — 60 calls/min sin límite diario) ──
+# En Render: agrega FINNHUB_API_KEY como variable de entorno
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "d7f87m1r01qpjqqjqtvgd7f87m1r01qpjqqjqu00")
+FINNHUB_BASE    = "https://finnhub.io/api/v1"
 
-# Keys en cascada: KEY4 primero (fresca hoy), luego las demás
-# Cada key tiene 800 calls/día. Total: 3,200 calls/día.
-_TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
+# Compatibilidad: API_KEY sigue usándose en get_tipo_cambio() como fallback
+API_KEY = FINNHUB_API_KEY   # alias — no se usa para stock data, solo TC fallback
+_TD_KEYS = [FINNHUB_API_KEY]  # pool simplificado — Finnhub no necesita rotación
 
 TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
 TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
@@ -72,7 +70,7 @@ SCANNER_TICKERS = {
     "PYPL":("PYPL",""),
 }
 
-# SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
+# Todos los tickers usan Finnhub
 
 
 # Universo para el radar (mismo que scanner — el usuario agrega los que necesite)
@@ -170,13 +168,11 @@ def _loop_backup_github():
     ultimo_dia = datetime.now().day
     while True:
         db_backup_to_github()
-        # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
+        # Nuevo día — solo log (Finnhub no tiene límite diario)
         dia_actual = datetime.now().day
         if dia_actual != ultimo_dia:
-            global _KEYS_AGOTADAS
-            _KEYS_AGOTADAS = set()
             ultimo_dia = dia_actual
-            print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
+            print("[keys] ✅ Nuevo día — Finnhub sin límite diario")
         time.sleep(3600)  # cada hora
 
 
@@ -370,14 +366,14 @@ def get_tipo_cambio(key: str) -> float:
         r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=4)
         return float(r.json()["bmx"]["series"][0]["datos"][0]["dato"].replace(",",""))
     except Exception: pass
-    # Fuente 3: TwelveData (solo si las anteriores fallan)
-    if key and key not in ("TU_KEY_AQUI", ""):
-        try:
-            r = requests.get("https://api.twelvedata.com/exchange_rate",
-                params={"symbol":"USD/MXN","apikey":key}, timeout=4)
-            d = r.json()
-            if "rate" in d: return float(d["rate"])
-        except Exception: pass
+    # Fuente 3: Finnhub forex (solo si las anteriores fallan)
+    try:
+        r = requests.get(f"{FINNHUB_BASE}/forex/rates",
+                         params={"base":"USD","token":FINNHUB_API_KEY}, timeout=4)
+        d = r.json()
+        mxn = d.get("quote",{}).get("MXN")
+        if mxn: return float(mxn)
+    except Exception: pass
     # Fallback fijo — nunca bloquear el build por el TC
     print("[TC] ⚠️ Todas las fuentes fallaron — usando TC fijo 17.50")
     return 17.50
@@ -393,149 +389,138 @@ def tg_send(msg: str) -> bool:
     except Exception: return False
 
 
-# ── API DE DATOS — DUAL KEY ────────────────────────────────
-API_BASE = "https://api.twelvedata.com"
+# ── API DE DATOS — FINNHUB ────────────────────────────────
+# Finnhub: 60 calls/min, sin límite diario. Mucho más confiable que TwelveData.
+# Endpoint candles: /stock/candle?symbol=TSLA&resolution=D&from=...&to=...
+# Intervalos: 1=1min, 5, 15, 30, 60=1h, D=1day, W=1week, M=1month
 
-# Índice global del pool de keys (alterna entre KEY_1 y KEY_2)
-_KEY_IDX: int = 0
-# Set de keys agotadas en esta corrida (se resetea en cada build)
-_KEYS_AGOTADAS: set = set()
+_KEY_IDX: int = 0          # mantenido por compatibilidad interna
+_KEYS_AGOTADAS: set = set()  # mantenido por compatibilidad interna
+
+# Mapa de intervalos: formato interno → formato Finnhub
+_FH_INTERVAL = {
+    "1min": "1", "5min": "5", "15min": "15", "30min": "30",
+    "1h": "60", "1hour": "60",
+    "1day": "D", "1d": "D",
+    "1week": "W", "1w": "W",
+    "1month": "M",
+}
+
+def _fh_resolution(interval: str) -> str:
+    """Convierte intervalo interno al formato de Finnhub."""
+    return _FH_INTERVAL.get(interval.lower(), "D")
+
+def _fh_from_ts(resolution: str, outputsize: int) -> int:
+    """Calcula el timestamp Unix 'from' necesario para obtener N velas."""
+    import time as _time
+    now = int(_time.time())
+    # Segundos por vela según resolución
+    secs = {"1":60,"5":300,"15":900,"30":1800,"60":3600,
+            "D":86400,"W":604800,"M":2592000}.get(resolution, 86400)
+    # Buffer x1.8 para saltar fines de semana y festivos
+    return now - int(outputsize * secs * 1.8)
+
+def _fh_candles_to_ohlcv(d: dict) -> list | None:
+    """
+    Convierte la respuesta de Finnhub /stock/candle al formato OHLCV
+    que usa el resto del código (lista de dicts con open/high/low/close/volume/datetime).
+    """
+    if not isinstance(d, dict): return None
+    if d.get("s") == "no_data": return None
+    closes = d.get("c", [])
+    if not closes: return None
+    opens   = d.get("o", closes)
+    highs   = d.get("h", closes)
+    lows    = d.get("l", closes)
+    volumes = d.get("v", [0]*len(closes))
+    times   = d.get("t", [0]*len(closes))
+    result = []
+    for i in range(len(closes)):
+        from datetime import datetime as _dt
+        try:
+            dt_str = _dt.utcfromtimestamp(times[i]).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            dt_str = str(times[i])
+        result.append({
+            "datetime": dt_str,
+            "open":   str(opens[i]),
+            "high":   str(highs[i]),
+            "low":    str(lows[i]),
+            "close":  str(closes[i]),
+            "volume": str(int(volumes[i])) if volumes[i] else "0",
+        })
+    return result  # ya viene en orden ASC desde Finnhub
 
 def _es_error_creditos(d: dict) -> bool:
-    """Detecta si TwelveData respondió con error de créditos/límite dentro del JSON."""
+    """Detecta errores de rate limit en respuesta Finnhub."""
     if not isinstance(d, dict): return False
-    code = d.get("code", 0)
-    msg  = str(d.get("message", "")).lower()
-    return code in (429, 402) or "run out" in msg or "credits" in msg or "limit" in msg
+    return d.get("s") == "rate_limit" or "rate limit" in str(d.get("error","")).lower()
 
 def _next_key() -> str:
-    """Devuelve la siguiente key disponible del pool, saltando las agotadas."""
-    global _KEY_IDX
-    if not _TD_KEYS:
-        return ""
-    # Intentar cada key hasta encontrar una no agotada
-    for _ in range(len(_TD_KEYS)):
-        key = _TD_KEYS[_KEY_IDX % len(_TD_KEYS)]
-        _KEY_IDX += 1
-        if key not in _KEYS_AGOTADAS:
-            return key
-    # Todas agotadas — NO resetear, devolver vacío para que falle limpiamente
-    print("  ⚠️  Todas las API keys agotadas por hoy — espera a mañana o agrega más keys")
-    return ""
+    """Compatibilidad — Finnhub usa una sola key."""
+    return FINNHUB_API_KEY
 
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "", key: str = "") -> list | None:
     """
-    Petición individual a TwelveData.
-    Si no se pasa key, toma la siguiente del pool dual-key.
-    Si la key está agotada (créditos), la marca y prueba la siguiente automáticamente.
+    Petición individual a Finnhub /stock/candle.
+    Finnhub: 60 calls/min — sin límite diario. Rate limit casi imposible de alcanzar.
+    El parámetro exchange se ignora (Finnhub auto-detecta el mercado).
     """
-    global _KEYS_AGOTADAS
-    out = min(outputsize, 5000)
+    use_key    = key or FINNHUB_API_KEY
+    resolution = _fh_resolution(interval)
+    from_ts    = _fh_from_ts(resolution, min(outputsize, 5000))
+    import time as _time
+    to_ts      = int(_time.time())
 
-    # Intentar con hasta N keys disponibles
-    keys_a_probar = [key] if key else [_next_key()]
-    # Si hay más keys en el pool, agregarlas como fallback
-    if not key and len(_TD_KEYS) > 1:
-        for k in _TD_KEYS:
-            if k not in keys_a_probar:
-                keys_a_probar.append(k)
+    for intento in range(3):
+        try:
+            r = requests.get(
+                f"{FINNHUB_BASE}/stock/candle",
+                params={"symbol": symbol.upper(), "resolution": resolution,
+                        "from": from_ts, "to": to_ts, "token": use_key},
+                timeout=15
+            )
+            if r.status_code == 429:
+                print(f"    ⏳ FH rate limit ({symbol}) — esperando 5s...")
+                time.sleep(5)
+                continue
+            d = r.json()
+            result = _fh_candles_to_ohlcv(d)
+            if result:
+                print(f"    ✅ FH ({symbol} {interval}): {len(result)} velas")
+                return result
+            print(f"    ❌ FH ({symbol} {interval}): {str(d)[:120]}")
+            return None
+        except requests.exceptions.Timeout:
+            print(f"    ⏱️  FH Timeout ({symbol}) intento {intento+1}/3")
+            time.sleep(3)
+        except Exception as e:
+            print(f"    ❌ FH exception ({symbol}): {e}")
+            time.sleep(2)
 
-    for use_key in keys_a_probar:
-        if not use_key or use_key in _KEYS_AGOTADAS:
-            continue
-        params = {"symbol": symbol, "interval": interval, "outputsize": out,
-                  "apikey": use_key, "order": "ASC"}
-        if exchange:
-            params["exchange"] = exchange
-        for intento in range(2):
-            try:
-                r = requests.get(f"{API_BASE}/time_series", params=params, timeout=15)
-                if r.status_code == 429:
-                    print(f"    ⏳ Rate limit HTTP ({symbol}) key …{use_key[-4:]} — esperando 15s...")
-                    time.sleep(15)
-                    continue
-                d = r.json()
-                if _es_error_creditos(d):
-                    print(f"    ⚠️  Key …{use_key[-4:]} agotada — cambiando a la siguiente key")
-                    _KEYS_AGOTADAS.add(use_key)
-                    break  # salir del loop de intentos, probar siguiente key
-                if "values" in d and d["values"]:
-                    print(f"    ✅ TD ({symbol} {interval}) k={use_key[-4:]}: {len(d['values'])} velas")
-                    return d["values"]
-                print(f"    ❌ TD ({symbol} {interval}): {str(d)[:120]}")
-                return None
-            except requests.exceptions.Timeout:
-                print(f"    ⏱️  TD Timeout ({symbol}) intento {intento+1}/2")
-                time.sleep(3)
-            except Exception as e:
-                print(f"    ❌ TD exception ({symbol}): {e}")
-                time.sleep(3)
-
-    print(f"    ❌ TD ({symbol}): todas las keys fallaron o agotadas")
+    print(f"    ❌ FH ({symbol}): falló después de 3 intentos")
     return None
 
 
 def api_timeseries_batch(symbols: list, interval: str,
                           outputsize: int = 100, key: str = "") -> dict:
     """
-    Llama TwelveData con hasta 8 símbolos en UNA sola request.
-    Si la key está agotada, cambia a la siguiente automáticamente.
+    Finnhub no tiene endpoint batch — hacemos N requests individuales.
+    Con 60 calls/min esto es completamente viable para 15-30 tickers.
+    Sin sleeps artificiales entre símbolos — Finnhub aguanta el ritmo.
     """
-    global _KEYS_AGOTADAS
     if not symbols:
         return {}
-    out = min(outputsize, 5000)
-    sym_str = ",".join(s.upper() for s in symbols)
-
-    # Keys a probar en orden
-    keys_a_probar = [key] if key else [_next_key()]
-    if len(_TD_KEYS) > 1:
-        for k in _TD_KEYS:
-            if k not in keys_a_probar:
-                keys_a_probar.append(k)
-
-    for use_key in keys_a_probar:
-        if not use_key or use_key in _KEYS_AGOTADAS:
-            continue
-        params = {"symbol": sym_str, "interval": interval, "outputsize": out,
-                  "apikey": use_key, "order": "ASC"}
-        try:
-            r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
-            if r.status_code == 429:
-                print(f"    ⏳ Rate limit batch HTTP k=…{use_key[-4:]} — esperando 15s...")
-                time.sleep(15)
-                r = requests.get(f"{API_BASE}/time_series", params=params, timeout=30)
-            d = r.json()
-            if _es_error_creditos(d):
-                print(f"    ⚠️  Key …{use_key[-4:]} agotada en batch — cambiando a la siguiente key")
-                _KEYS_AGOTADAS.add(use_key)
-                continue  # probar siguiente key
-            resultado = {}
-            if len(symbols) == 1:
-                sym = symbols[0].upper()
-                if "values" in d and d["values"]:
-                    resultado[sym] = d["values"]
-                    print(f"    ✅ TD ({sym} {interval}) k=…{use_key[-4:]}: {len(d['values'])} velas")
-                else:
-                    print(f"    ❌ TD ({sym}): {str(d)[:80]}")
-            else:
-                for sym in symbols:
-                    sym_up = sym.upper()
-                    entry  = d.get(sym_up, {})
-                    vals   = entry.get("values", []) if isinstance(entry, dict) else []
-                    if vals:
-                        resultado[sym_up] = vals
-                        print(f"    ✅ TD ({sym_up} {interval}) k=…{use_key[-4:]}: {len(vals)} velas")
-                    else:
-                        err = entry.get("message","") if isinstance(entry, dict) else str(entry)[:60]
-                        print(f"    ❌ TD ({sym_up}): {err or 'sin valores'}")
-            return resultado
-        except Exception as e:
-            print(f"    ❌ TD batch exception k=…{use_key[-4:]}: {e}")
-
-    return {}
+    resultado = {}
+    for sym in symbols:
+        vals = api_timeseries(sym, interval, outputsize, key=key)
+        if vals:
+            resultado[sym.upper()] = vals
+        # Pausa mínima para no superar 60/min (1 seg entre calls = max 60/min)
+        time.sleep(1)
+    return resultado
 
 
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
@@ -545,7 +530,7 @@ def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
 def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
     """
-    Fuente única: TwelveData con pool dual-key.
+    Fuente única: Finnhub con reintentos.
     Si falla con exchange específico, reintenta sin él (auto-detect).
     """
     result = api_timeseries(symbol, interval, outputsize, exchange)
@@ -989,24 +974,28 @@ def get_vix() -> float:
     global _MACRO_CACHE
     if "vix" in _MACRO_CACHE:
         return _MACRO_CACHE["vix"]
-    # Fuente 1: TwelveData
+    # Fuente 1: Finnhub quote
     try:
-        r = requests.get(f"{API_BASE}/quote", params={"symbol":"VIX","apikey":API_KEY}, timeout=8)
+        r = requests.get(f"{FINNHUB_BASE}/quote",
+                         params={"symbol":"VIX","token":FINNHUB_API_KEY}, timeout=8)
         d = r.json()
-        if "close" in d:
-            v = float(d["close"])
+        if d.get("c") and float(d["c"]) > 0:
+            v = float(d["c"])
             _MACRO_CACHE["vix"] = v
+            print(f"  [macro] VIX={v:.1f} (Finnhub quote)")
             return v
     except Exception: pass
-    # Fuente 2: serie histórica de TwelveData
+    # Fuente 2: candles históricos de VIX via Finnhub
     try:
-        vals = api_timeseries("VIX", "1day", 5, "")
+        vals = api_timeseries("VIX", "1day", 5)
         if vals:
             v = float(vals[-1]["close"])
             _MACRO_CACHE["vix"] = v
+            print(f"  [macro] VIX={v:.1f} (Finnhub candles)")
             return v
     except Exception: pass
-    # Fallback neutro: asumimos VIX moderado para no bloquear todo
+    # Fallback neutro
+    print("  [macro] VIX fallback 20.0")
     _MACRO_CACHE["vix"] = 20.0
     return 20.0
 
@@ -2110,77 +2099,40 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         _TD_CACHE[key] = result
 
     elif _TD_CACHE[key] is None:
-        print(f"    [retry] {symbol} {interval} — reintentando con keys disponibles...")
-        for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
-            if result:
-                _TD_CACHE[key] = result
-                break
+        print(f"    [retry] {symbol} {interval} — esperando 3s y reintentando...")
+        time.sleep(3)
+        result = api_timeseries(symbol, interval, 150, exchange)
+        if result:
+            _TD_CACHE[key] = result
 
     return _TD_CACHE[key]
 
 
 def _precargar_cache_batch(symbols: list, intervals: list = None):
     """
-    Precarga el cache con batches de hasta 8 símbolos.
-    Usa KEY_1 para TODO. Solo cambia a KEY_2 si KEY_1 se agota.
-    No alterna por chunk — eso gastaba ambas keys al mismo tiempo.
+    Precarga el cache con datos de Finnhub.
+    Finnhub: 60 calls/min — sin límite diario. 1 call por símbolo por intervalo.
+    Para 15 tickers × 2 intervalos = 30 calls = ~30s. Mucho más rápido que antes.
     """
-    global _TD_CACHE, _KEY_IDX, _KEYS_AGOTADAS
+    global _TD_CACHE
     if intervals is None:
         intervals = ["1day", "1week"]
 
     syms = [s.upper() for s in symbols if s]
     seen = set(); syms = [s for s in syms if not (s in seen or seen.add(s))]
-    CHUNK  = 8
-    n_keys = len(_TD_KEYS)
 
-    print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos | "
-          f"{n_keys} key(s) disponibles | chunks de {CHUNK}")
-
-    def _key_activa() -> str:
-        """Devuelve la primera key no agotada."""
-        for k in _TD_KEYS:
-            if k not in _KEYS_AGOTADAS:
-                return k
-        return _TD_KEYS[0] if _TD_KEYS else ""
+    print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos — Finnhub 60/min")
 
     for interval in intervals:
-        chunks = [syms[i:i+CHUNK] for i in range(0, len(syms), CHUNK)]
-        for idx, chunk in enumerate(chunks):
-            key_use = _key_activa()
-            if not key_use:
-                print(f"  [batch] ⚠️ Sin keys disponibles — abortando batch")
-                break
-
-            print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
-                  f"k=…{key_use[-4:]} → {', '.join(chunk)}")
-
-            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
-
-            # Si la key se agotó durante el batch, intentar con la siguiente
-            faltantes = [s for s in chunk if s.upper() not in batch]
-            if faltantes:
-                key2 = _key_activa()  # puede ser diferente si key_use se marcó agotada
-                if key2 and key2 != key_use:
-                    print(f"  [batch] Reintentando {faltantes} con k=…{key2[-4:]}...")
-                    batch2 = api_timeseries_batch(faltantes, interval, outputsize=150, key=key2)
-                    batch.update(batch2)
-
-            # Guardar en cache
-            for sym, vals in batch.items():
-                _TD_CACHE[f"{sym}:{interval}"] = vals
-
-            # Marcar como None los que no llegaron
-            for sym in chunk:
-                if f"{sym}:{interval}" not in _TD_CACHE:
-                    _TD_CACHE[f"{sym}:{interval}"] = None
-
-            # Pausa entre chunks para respetar rate limit de 8 calls/min del plan básico
-            if idx < len(chunks) - 1:
-                time.sleep(15)
-
-        time.sleep(10)  # pausa entre intervalos
+        print(f"  [batch] {interval} → {', '.join(syms)}")
+        for sym in syms:
+            key_cache = f"{sym}:{interval}"
+            if key_cache in _TD_CACHE and _TD_CACHE[key_cache]:
+                continue  # ya tenemos datos frescos, no desperdiciar call
+            vals = api_timeseries(sym, interval, 150)
+            _TD_CACHE[key_cache] = vals  # None si falló — _get_cached lo reintentará
+            time.sleep(1)  # 1s entre calls = 60/min máximo
+        time.sleep(2)  # pausa mínima entre intervalos
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
@@ -2446,9 +2398,8 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     regimen = regimen_mercado(vix, spy)
 
     port_map   = {p["ticker"]: p["titulos"] for p in get_portafolio()}
-    # Leer tickers FRESH desde la DB en este momento exacto del build
     tickers_db = get_tickers_db()
-    combinados: dict = get_all_scanner_tickers()   # incluye hardcoded + DB activos
+    combinados: dict = get_all_scanner_tickers()
     if tickers_extra:
         combinados.update(tickers_extra)
 
@@ -6011,7 +5962,7 @@ function agregarTickerScanner() {{
     if (d.status === 'ok') {{
       const srcBadge = d.source === 'serpapi'
         ? '<span style="background:#f5f3ff;border:1px solid #ddd6fe;color:#7c3aed;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:4px">SerpApi</span>'
-        : '<span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:4px">TwelveData</span>';
+        : '<span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:4px">Finnhub</span>';
       msg.innerHTML = '<span style="color:var(--green)">✅ ' + ticker + ' guardado' + (srcBadge||'') + ' — actualiza para analizarlo.</span>';
       document.getElementById('add_ticker_input').value = '';
       cargarTickersPersonalizados();
@@ -6786,15 +6737,15 @@ def health():
 # ── API Debug — diagnóstico rápido desde el browser ──────
 @app.route("/api/debug")
 def api_debug():
-    """Prueba ambas keys de TwelveData y muestra estado del sistema."""
+    """Diagnóstico rápido del sistema — Finnhub + DB."""
     resultado = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "n_keys":    len(_TD_KEYS),
-        "keys":      [f"...{k[-4:]}" for k in _TD_KEYS],
-        "twelvedata_k1": {"nota": "prueba desactivada — ahorra créditos"},
-        "twelvedata_k2": {"nota": "prueba desactivada — ahorra créditos"},
+        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "api":        "Finnhub",
+        "key_suffix": f"...{FINNHUB_API_KEY[-6:]}",
+        "rate_limit": "60 calls/min — sin límite diario",
+        "nota":       "Finnhub activo — rate limit muy generoso",
     }
-    # No hacer llamadas de prueba a TwelveData — cada una consume créditos
+    # No hacer llamadas de prueba innecesarias
 
     return jsonify(resultado)
 
@@ -6802,21 +6753,17 @@ def api_debug():
 # ── API Test — prueba todos los tickers del scanner ──────
 @app.route("/api/test")
 def api_test():
-    """Prueba TwelveData para cada ticker del scanner y reporta cuáles funcionan."""
+    """Prueba Finnhub para cada ticker del scanner y reporta cuáles funcionan."""
     tickers = list(get_all_scanner_tickers().keys())
     resultados = {}
     for sym in tickers:
         try:
-            r = requests.get(f"{API_BASE}/time_series",
-                params={"symbol":sym,"interval":"1day","outputsize":"5","apikey":API_KEY},
-                timeout=10)
-            d = r.json()
-            if "values" in d and d["values"]:
-                resultados[sym] = {"ok": True, "velas": len(d["values"]),
-                                   "precio": d["values"][-1]["close"]}
+            vals = api_timeseries(sym, "1day", 5)
+            if vals:
+                resultados[sym] = {"ok": True, "velas": len(vals),
+                                   "precio": vals[-1]["close"]}
             else:
-                resultados[sym] = {"ok": False, "http": r.status_code,
-                                   "error": str(d)[:300]}
+                resultados[sym] = {"ok": False, "error": "sin datos"}
         except Exception as e:
             resultados[sym] = {"ok": False, "error": str(e)}
         time.sleep(0.3)  # no saturar
