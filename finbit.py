@@ -49,8 +49,9 @@ ALERTAR_WATCH        = False
 ALERTAR_PORTAFOLIO   = True
 ALERTAR_RADAR_ROCKET = True
 
-DB_FILE     = "finbit.db"
-OUTPUT_FILE = "dashboard.html"
+_BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+DB_FILE     = os.path.join(_BASE_DIR, "finbit.db")
+OUTPUT_FILE = os.path.join(_BASE_DIR, "dashboard.html")
 
 # ── Sync automático de DB con GitHub ─────────────────────
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -2445,10 +2446,9 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     regimen = regimen_mercado(vix, spy)
 
     port_map   = {p["ticker"]: p["titulos"] for p in get_portafolio()}
+    # Leer tickers FRESH desde la DB en este momento exacto del build
     tickers_db = get_tickers_db()
-    combinados: dict = {}
-    combinados.update(SCANNER_TICKERS)
-    combinados.update(tickers_db)
+    combinados: dict = get_all_scanner_tickers()   # incluye hardcoded + DB activos
     if tickers_extra:
         combinados.update(tickers_extra)
 
@@ -6159,11 +6159,13 @@ def procesar_borrados():
     con.commit(); con.close(); os.remove(path)
     print(f"  {len(ids)} operaciones borradas")
 
+_CONFIG_FILE = os.path.join(_BASE_DIR, "finbit_config.json")
+
 def cargar_config() -> dict:
     defaults={"capital":CAPITAL_TOTAL,"riesgo":RIESGO_POR_TRADE,"rr_min":RR_MINIMO}
-    if not os.path.exists("finbit_config.json"): return defaults
+    if not os.path.exists(_CONFIG_FILE): return defaults
     try:
-        with open("finbit_config.json") as f: return {**defaults,**json.load(f)}
+        with open(_CONFIG_FILE) as f: return {**defaults,**json.load(f)}
     except Exception: return defaults
 
 
@@ -6628,7 +6630,7 @@ def set_tf(tf: str):
     try:
         cfg = cargar_config()
         cfg["timeframe"] = tf_code
-        with open("finbit_config.json", "w") as f:
+        with open(_CONFIG_FILE, "w") as f:
             json.dump(cfg, f, indent=2)
     except Exception as e:
         print(f"[server] set_tf error: {e}")
@@ -6767,7 +6769,7 @@ def api_config():
     global _dash_html
     try:
         data = flask_req.get_json(force=True) or {}
-        with open("finbit_config.json", "w") as f:
+        with open(_CONFIG_FILE, "w") as f:
             json.dump(data, f, indent=2)
         _dash_html = ""
         return jsonify({"status": "ok"})
