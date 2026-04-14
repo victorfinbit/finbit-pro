@@ -2104,7 +2104,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 60, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -2115,7 +2115,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         for k in (_TD_KEYS or [""]):
             if k in _KEYS_AGOTADAS:
                 continue
-            result = api_timeseries(symbol, interval, 60, exchange, key=k)
+            result = api_timeseries(symbol, interval, 150, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -2159,7 +2159,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=60, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
 
             # Reintentar faltantes individualmente — más robusto que batch fallido
             faltantes = [s for s in chunk if s.upper() not in batch]
@@ -2281,7 +2281,7 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     if syms_port:
         print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
-        _precargar_cache_batch(list(set(syms_port)), ["1day"])
+        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
 
     resultados = []
 
@@ -3256,6 +3256,14 @@ def render_scan_rows(scanner, tc):
                 f'{dca_html}</div></div>'
                 f'</div>')
 
+        # Guard: ticker sin datos — fila simple para no romper el render
+        if r.get("estado") == "SIN DATOS":
+            h+=(f'<tr class="datarow">'
+                f'<td><strong>{r["nombre"]}</strong></td>'
+                f'<td><span class="badge b-none">Sin datos</span></td>'
+                f'<td colspan="9" style="color:var(--muted);font-size:11px">⚠️ Rate limit o símbolo no encontrado</td>'
+                f'</tr>')
+            continue
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         etapa_emoji, etapa_label, etapa_tooltip = calcular_etapa(r)
         etapa_badge = (f'<span title="{etapa_tooltip}" style="display:inline-block;font-size:13px;'
@@ -3266,7 +3274,7 @@ def render_scan_rows(scanner, tc):
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{sr_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
-            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
+            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f if r["precio_usd"] else "—"}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
             f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div></td>'
@@ -3425,10 +3433,18 @@ def render_radar_rows(radar, tc):
             sr_cell_r = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_r)}</div>'
         else:
             sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
+        # Guard: ticker sin datos — fila simple
+        if r.get("estado") == "SIN DATOS":
+            h+=(f'<tr class="datarow">'
+                f'<td><strong>{r["nombre"]}</strong></td>'
+                f'<td><span class="badge b-none">Sin datos</span></td>'
+                f'<td colspan="10" style="color:var(--muted);font-size:11px">⚠️ Rate limit o símbolo no encontrado</td>'
+                f'</tr>')
+            continue
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
-            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f}</span></td>'
+            f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {r["precio_usd"]:.2f if r["precio_usd"] else "—"}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td class="num" style="color:{pot_col};font-weight:{"600" if r["pot_alza"]>=10 else "400"}">{r["pot_alza"]:+.1f}%</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
@@ -6487,14 +6503,14 @@ def _construir_con_etapas():
         seed_portafolio(tc)
         _build_stage = "tc_ok"
 
-        if os.path.exists(os.path.join(_BASE_DIR, "finbit_ops.json")):
-            importar_ops_json(os.path.join(_BASE_DIR, "finbit_ops.json"), tc)
+        if os.path.exists("finbit_ops.json"):
+            importar_ops_json("finbit_ops.json", tc)
         procesar_borrados()
 
         tickers_extra = {}
-        if os.path.exists(os.path.join(_BASE_DIR, "finbit_tickers.json")):
+        if os.path.exists("finbit_tickers.json"):
             try:
-                with open(os.path.join(_BASE_DIR, "finbit_tickers.json")) as f:
+                with open("finbit_tickers.json") as f:
                     raw = json.load(f)
                 for t, ex in raw.items():
                     tickers_extra[t.upper()] = (t.upper(), ex or "")
@@ -6540,11 +6556,7 @@ def _construir_con_etapas():
                     port_data = []
             _build_stage = "port_ok"
 
-            # Radar: solo si hay créditos suficientes (plan Grow o superior)
-            # Con plan gratis (8/min) el radar dobla el tiempo — se omite
-            _n_keys_activas = len([k for k in _TD_KEYS if k not in _KEYS_AGOTADAS])
-            _skip_radar = len(get_all_scanner_tickers()) > 5  # skip si hay muchos tickers en gratis
-            if not _timeout_exceeded() and not _skip_radar:
+            if not _timeout_exceeded():
                 try:
                     radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min,
                                               scan_results=scan_data, vix=vix, spy=spy)
@@ -6555,8 +6567,7 @@ def _construir_con_etapas():
                     traceback.print_exc()
                     radar_data = []
             else:
-                print(f"[build] ⏭️  Radar omitido — reutilizando datos del scanner")
-                radar_data = scan_data  # reutilizar scanner como radar
+                print(f"[build] ⚠️  Timeout antes del radar — omitiendo")
             _build_stage = "radar_ok"
         else:
             regimen = regimen_mercado(vix, spy)
