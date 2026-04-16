@@ -2292,9 +2292,9 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
 
             # Pausa entre chunks — plan Grow: 55+/min, mucho más holgado
             if idx < len(chunks) - 1:
-                time.sleep(5)
+                time.sleep(1)
 
-        time.sleep(3)   # pausa entre intervalos — plan Grow aguanta
+        time.sleep(1)   # pausa entre intervalos — plan Grow aguanta
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
