@@ -6058,9 +6058,18 @@ function editOp(id,ticker,tipo,titulos,precio,fecha,notas){{
 }}
 function delOp(id,ticker){{
   if(!confirm('¿Borrar operación #'+id+' de '+ticker+'?'))return;
-  let del=JSON.parse(localStorage.getItem('finbit_del_ids')||'[]');del.push(id);
-  localStorage.setItem('finbit_del_ids',JSON.stringify(del));
-  alert('Marcada para borrar. Al correr el script se eliminará de la DB.');
+  fetch('/api/operaciones/delete',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{id:id}})
+  }}).then(r=>r.json()).then(d=>{{
+    if(d.status==='ok'){{
+      alert('Operación borrada correctamente.');
+      location.reload();
+    }} else {{
+      alert('Error al borrar: '+d.error);
+    }}
+  }}).catch(e=>alert('Error de red: '+e));
 }}
 function closeModal(){{document.getElementById('editModal').classList.remove('open');}}
 document.getElementById('editModal').addEventListener('click',function(e){{if(e.target===this)closeModal();}});
@@ -6635,14 +6644,14 @@ def _construir_con_etapas():
         seed_portafolio(tc)
         _build_stage = "tc_ok"
 
-        if os.path.exists("finbit_ops.json"):
-            importar_ops_json("finbit_ops.json", tc)
+        if os.path.exists(os.path.join(_BASE_DIR,"finbit_ops.json")):
+            importar_ops_json(os.path.join(_BASE_DIR,"finbit_ops.json"), tc)
         procesar_borrados()
 
         tickers_extra = {}
-        if os.path.exists("finbit_tickers.json"):
+        if os.path.exists(os.path.join(_BASE_DIR,"finbit_tickers.json")):
             try:
-                with open("finbit_tickers.json") as f:
+                with open(os.path.join(_BASE_DIR,"finbit_tickers.json")) as f:
                     raw = json.load(f)
                 for t, ex in raw.items():
                     tickers_extra[t.upper()] = (t.upper(), ex or "")
@@ -6883,6 +6892,44 @@ def api_operaciones():
         return jsonify(get_operaciones())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/operaciones/delete", methods=["POST"])
+def api_ops_delete():
+    """Borra una operación por ID y reconstruye el portafolio."""
+    global _dash_html
+    try:
+        data = flask_req.get_json(force=True) or {}
+        oid  = data.get("id")
+        if not oid:
+            return jsonify({"status": "error", "error": "id requerido"}), 400
+        con = sqlite3.connect(DB_FILE)
+        con.execute("DELETE FROM operaciones WHERE id=?", (int(oid),))
+        con.commit()
+        con.close()
+        # Reconstruir portafolio desde cero con las operaciones restantes
+        ops = get_operaciones()
+        con2 = sqlite3.connect(DB_FILE)
+        con2.execute("DELETE FROM portafolio")
+        con2.commit()
+        con2.close()
+        tc = get_tipo_cambio(API_KEY)
+        for op in sorted(ops, key=lambda x: x.get("fecha","")):
+            try:
+                upsert_portafolio_from_op({
+                    "ticker":     op.get("ticker","").upper(),
+                    "tipo":       op.get("tipo"),
+                    "titulos":    op.get("titulos",0),
+                    "precio_mxn": op.get("precio_mxn",0),
+                    "origen":     op.get("origen","USA"),
+                    "mercado":    op.get("mercado","SIC"),
+                })
+            except Exception: pass
+        threading.Thread(target=db_backup_to_github, daemon=True).start()
+        _dash_html = ""
+        return jsonify({"status": "ok", "id": oid})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.route("/api/operaciones/import", methods=["POST"])
