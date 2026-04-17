@@ -2689,6 +2689,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "stop_mxn": tf_1d.get("stop", 0) * tc, "obj_mxn": tf_1d.get("objetivo", 0) * tc,
                 "rsi": tf_1d["rsi"], "rr": tf_1d["rr"], "macd_ok": tf_1d["macd_alcista"],
                 "ema200_ok": c.get("ema200", False),
+                "ema200_mxn": round(tf_1d.get("ema200", 0) * tc, 2),
                 "score": score, "score_ajustado": score_ajustado,
                 "total_criterios": tf_1d.get("total_criterios", 11),
                 "criterios": tf_1d["criterios"], "sizing": tf_1d.get("sizing", {}),
@@ -2813,6 +2814,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "stop_mxn":stop*tc,"obj_mxn":objetivo*tc,
             "rsi":tf["rsi"],"rr":tf["rr"],"macd_ok":tf["macd_alcista"],
             "ema200_ok":tf["criterios"].get("ema200",{}).get("ok",False),
+            "ema200_mxn":round(tf.get("ema200",0)*tc,2),
             "score":score,"score_ajustado":setup.get("score_ajustado",score),
             "total_criterios":total_c,
             "pot_alza":pot_alza,"criterios":tf["criterios"],"sizing":tf.get("sizing",{}),
@@ -3142,19 +3144,28 @@ def render_port_rows(posiciones, tc):
         stop_sr_port = sr_port.get("stop_sr")
         obj_sr_port  = sr_port.get("objetivo_sr")
         precio_ref   = pos.get("precio_actual_mxn") or pos["cto_prom_mxn"]
+        ema200_port  = round(tf_1d.get("ema200", 0) * tc, 2) if tf_1d.get("valido") else 0
         # Celda S/R inline: "S $X (-Y%) / R $X (+Z%)"
-        if stop_sr_port or obj_sr_port:
-            s_txt = (f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px;font-weight:600">S</span> '
+        lines_port = []
+        if stop_sr_port:
+            lines_port.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px;font-weight:600">S</span> '
                      f'<span style="color:var(--green);font-family:var(--mono);font-size:11px">{fmt(stop_sr_port)}</span>'
-                     f'<span style="color:var(--muted);font-size:9px"> ({(stop_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>'
-                     if stop_sr_port else "")
-            r_txt = (f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px;font-weight:600">R</span> '
+                     f'<span style="color:var(--muted);font-size:9px"> ({(stop_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>')
+        if obj_sr_port:
+            lines_port.append(f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px;font-weight:600">R</span> '
                      f'<span style="color:var(--red);font-family:var(--mono);font-size:11px">{fmt(obj_sr_port)}</span>'
-                     f'<span style="color:var(--muted);font-size:9px"> (+{(obj_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>'
-                     if obj_sr_port else "")
-            sr_inline_port = f'<div style="font-size:10px;line-height:1.9">{s_txt}{r_txt}</div>'
-        else:
-            sr_inline_port = '<span class="hint" style="font-size:10px">—</span>'
+                     f'<span style="color:var(--muted);font-size:9px"> (+{(obj_sr_port-precio_ref)/precio_ref*100:.1f}%)</span></div>')
+        if ema200_port and ema200_port > 0 and precio_ref > 0:
+            e200_pct_p = (ema200_port - precio_ref) / precio_ref * 100
+            if e200_pct_p >= 0:
+                lines_port.append(f'<div style="white-space:nowrap"><span style="color:#ff7875;font-size:9px;font-style:italic">R EMA200</span> '
+                         f'<span style="color:#ff7875;font-family:var(--mono);font-size:11px">{fmt(ema200_port)}</span>'
+                         f'<span style="color:var(--muted);font-size:9px"> (+{e200_pct_p:.1f}%)</span></div>')
+            else:
+                lines_port.append(f'<div style="white-space:nowrap"><span style="color:#73d13d;font-size:9px;font-style:italic">S EMA200</span> '
+                         f'<span style="color:#73d13d;font-family:var(--mono);font-size:11px">{fmt(ema200_port)}</span>'
+                         f'<span style="color:var(--muted);font-size:9px"> ({e200_pct_p:.1f}%)</span></div>')
+        sr_inline_port = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_port)}</div>' if lines_port else '<span class="hint" style="font-size:10px">—</span>'
 
         # ── GESTIÓN DE POSICIÓN ABIERTA ─────────────────────────────────
         gestion_info = {}
@@ -3328,18 +3339,32 @@ def render_scan_rows(scanner, tc):
         # ── CELDA S/R INLINE ─────────────────────────────────────────────
         stop_sr_mxn  = sr.get("stop_sr")
         obj_sr_mxn   = sr.get("objetivo_sr")
-        if stop_sr_mxn or obj_sr_mxn:
-            down_pct = ((stop_sr_mxn - r["precio_mxn"]) / r["precio_mxn"] * 100) if stop_sr_mxn else None
-            up_pct   = ((obj_sr_mxn  - r["precio_mxn"]) / r["precio_mxn"] * 100) if obj_sr_mxn  else None
-            lines = []
-            if stop_sr_mxn:
-                lines.append(f'<div><span style="color:var(--green);font-size:9px">S</span> '
-                             f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn)}</span>'
-                             f'<span style="color:var(--muted);font-size:9px"> ({down_pct:.1f}%)</span></div>')
-            if obj_sr_mxn:
-                lines.append(f'<div><span style="color:var(--red);font-size:9px">R</span> '
-                             f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn)}</span>'
-                             f'<span style="color:var(--muted);font-size:9px"> (+{up_pct:.1f}%)</span></div>')
+        ema200_mxn   = r.get("ema200_mxn", 0)
+        precio_ref   = r["precio_mxn"]
+        lines = []
+        if stop_sr_mxn:
+            down_pct = (stop_sr_mxn - precio_ref) / precio_ref * 100
+            lines.append(f'<div><span style="color:var(--green);font-size:9px">S</span> '
+                         f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn)}</span>'
+                         f'<span style="color:var(--muted);font-size:9px"> ({down_pct:.1f}%)</span></div>')
+        if obj_sr_mxn:
+            up_pct = (obj_sr_mxn - precio_ref) / precio_ref * 100
+            lines.append(f'<div><span style="color:var(--red);font-size:9px">R</span> '
+                         f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn)}</span>'
+                         f'<span style="color:var(--muted);font-size:9px"> (+{up_pct:.1f}%)</span></div>')
+        if ema200_mxn and ema200_mxn > 0:
+            e200_pct = (ema200_mxn - precio_ref) / precio_ref * 100
+            if e200_pct >= 0:
+                # EMA200 arriba → resistencia
+                lines.append(f'<div><span style="color:#ff7875;font-size:9px;font-style:italic">R EMA200</span> '
+                             f'<span style="color:#ff7875;font-family:var(--mono)">{fmt(ema200_mxn)}</span>'
+                             f'<span style="color:var(--muted);font-size:9px"> (+{e200_pct:.1f}%)</span></div>')
+            else:
+                # EMA200 abajo → soporte
+                lines.append(f'<div><span style="color:#73d13d;font-size:9px;font-style:italic">S EMA200</span> '
+                             f'<span style="color:#73d13d;font-family:var(--mono)">{fmt(ema200_mxn)}</span>'
+                             f'<span style="color:var(--muted);font-size:9px"> ({e200_pct:.1f}%)</span></div>')
+        if lines:
             sr_cell_html = f'<div style="font-size:10px;line-height:1.9;white-space:nowrap">{"".join(lines)}</div>'
         else:
             sr_cell_html = '<span class="hint" style="font-size:10px">—</span>'
@@ -3557,22 +3582,30 @@ def render_radar_rows(radar, tc):
         # ── CELDA S/R INLINE radar ──────────────────────────────────
         stop_sr_mxn_r  = sr.get("stop_sr")
         obj_sr_mxn_r   = sr.get("objetivo_sr")
-        sr_cell_r = ""
-        if stop_sr_mxn_r or obj_sr_mxn_r:
-            d_pct = ((stop_sr_mxn_r - r["precio_mxn"]) / r["precio_mxn"] * 100) if stop_sr_mxn_r else None
-            u_pct = ((obj_sr_mxn_r  - r["precio_mxn"]) / r["precio_mxn"] * 100) if obj_sr_mxn_r  else None
-            lines_r = []
-            if stop_sr_mxn_r:
-                lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px">S</span> '
-                               f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn_r)}</span>'
-                               f'<span style="color:var(--muted);font-size:9px"> ({d_pct:.1f}%)</span></div>')
-            if obj_sr_mxn_r:
-                lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px">R</span> '
-                               f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn_r)}</span>'
-                               f'<span style="color:var(--muted);font-size:9px"> (+{u_pct:.1f}%)</span></div>')
-            sr_cell_r = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_r)}</div>'
-        else:
-            sr_cell_r = '<span class="hint" style="font-size:10px">—</span>'
+        ema200_mxn_r   = r.get("ema200_mxn", 0)
+        precio_ref_r   = r["precio_mxn"]
+        lines_r = []
+        if stop_sr_mxn_r:
+            d_pct = (stop_sr_mxn_r - precio_ref_r) / precio_ref_r * 100
+            lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px">S</span> '
+                           f'<span style="color:var(--green);font-family:var(--mono)">{fmt(stop_sr_mxn_r)}</span>'
+                           f'<span style="color:var(--muted);font-size:9px"> ({d_pct:.1f}%)</span></div>')
+        if obj_sr_mxn_r:
+            u_pct = (obj_sr_mxn_r - precio_ref_r) / precio_ref_r * 100
+            lines_r.append(f'<div style="white-space:nowrap"><span style="color:var(--red);font-size:9px">R</span> '
+                           f'<span style="color:var(--red);font-family:var(--mono)">{fmt(obj_sr_mxn_r)}</span>'
+                           f'<span style="color:var(--muted);font-size:9px"> (+{u_pct:.1f}%)</span></div>')
+        if ema200_mxn_r and ema200_mxn_r > 0:
+            e200_pct_r = (ema200_mxn_r - precio_ref_r) / precio_ref_r * 100
+            if e200_pct_r >= 0:
+                lines_r.append(f'<div style="white-space:nowrap"><span style="color:#ff7875;font-size:9px;font-style:italic">R EMA200</span> '
+                               f'<span style="color:#ff7875;font-family:var(--mono)">{fmt(ema200_mxn_r)}</span>'
+                               f'<span style="color:var(--muted);font-size:9px"> (+{e200_pct_r:.1f}%)</span></div>')
+            else:
+                lines_r.append(f'<div style="white-space:nowrap"><span style="color:#73d13d;font-size:9px;font-style:italic">S EMA200</span> '
+                               f'<span style="color:#73d13d;font-family:var(--mono)">{fmt(ema200_mxn_r)}</span>'
+                               f'<span style="color:var(--muted);font-size:9px"> ({e200_pct_r:.1f}%)</span></div>')
+        sr_cell_r = f'<div style="font-size:10px;line-height:1.9">{"".join(lines_r)}</div>' if lines_r else '<span class="hint" style="font-size:10px">—</span>'
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
             f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge_r}{inicio_badge_r}{sr_badge}{cartera_tag}</td>'
             f'<td>{badge_estado(estado)}</td>'
