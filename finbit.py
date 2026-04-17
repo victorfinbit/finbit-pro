@@ -860,68 +860,88 @@ def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float
 
 def detectar_inicio_movimiento(tf_1d: dict) -> dict:
     """
-    Detecta inicio de movimiento ANTES del breakout.
-    4 condiciones (necesita al menos 3 de 4):
-      1. Precio cerca de EMA200 — dentro de ±7%
-      2. RSI saliendo de sobreventa — entre 28-48 Y subiendo vs vela anterior
-      3. MACD girando — histograma subiendo (aunque aún negativo)
-      4. Volumen empezando a subir — >= 0.8x media (no necesariamente 1.5x)
+    Detector de ACUMULACIÓN — 3 niveles de señal:
+    - "acumulacion"  : 3/5 señales — zona de acumulación temprana
+    - "pre_breakout" : 4/5 señales — pre-breakout inminente
+    - "listo"        : 5/5 señales — listo para entrar
+
+    5 condiciones (sin importar EMA200 — detecta ANTES de recuperarla):
+      1. RSI saliendo de sobreventa — entre 25-50 Y subiendo
+      2. MACD histograma girando al alza (aunque negativo)
+      3. Precio sobre soporte clave (no rompió el piso)
+      4. Volumen empezando — >= 0.7x media
+      5. Estructura HH/HL — mínimos más altos (precio acumulando)
     """
     if not tf_1d or not tf_1d.get("valido"):
         return {"es_inicio": False}
 
-    precio  = tf_1d.get("precio", 0)
-    e200    = tf_1d.get("ema200", 0)
-    rsi     = tf_1d.get("rsi", 50)
-    rsi_ant = tf_1d.get("rsi_anterior", rsi)   # RSI de la vela anterior
-    mh_v    = tf_1d.get("macd_hist", 0)         # histograma actual
-    mh_ant  = tf_1d.get("macd_hist_ant", mh_v)  # histograma anterior
-    vol_rel = tf_1d.get("vol_rel", 0)           # vol_now / vol_avg
+    rsi      = tf_1d.get("rsi", 50)
+    rsi_ant  = tf_1d.get("rsi_anterior", rsi)
+    mh_v     = tf_1d.get("macd_hist", 0)
+    mh_ant   = tf_1d.get("macd_hist_ant", mh_v)
+    vol_rel  = tf_1d.get("vol_rel", 0)
+    precio   = tf_1d.get("precio", 0)
+    soporte  = tf_1d.get("soporte", 0)
+    struct   = tf_1d.get("estructura", {})
 
-    if not precio or not e200:
+    if not precio:
         return {"es_inicio": False}
 
-    # C1: Precio cerca de EMA200 (±7%)
-    dist_e200_pct = (precio - e200) / e200 * 100
-    c1 = abs(dist_e200_pct) <= 7.0
+    # C1: RSI saliendo de zona débil (25-50 Y subiendo)
+    c1 = 25 <= rsi <= 50 and rsi > rsi_ant
 
-    # C2: RSI saliendo de sobreventa (28-48 Y subiendo)
-    c2 = 28 <= rsi <= 48 and rsi > rsi_ant
+    # C2: MACD histograma girando al alza (puede ser negativo)
+    c2 = mh_v > mh_ant
 
-    # C3: Histograma MACD girando al alza (subiendo, aunque negativo)
-    c3 = mh_v > mh_ant
+    # C3: Precio sobre soporte — no rompió el piso
+    c3 = precio > soporte if soporte else False
 
-    # C4: Volumen empezando a subir (>= 0.8x media)
-    c4 = vol_rel >= 0.8 if vol_rel > 0 else False
+    # C4: Volumen despertando (>= 0.7x — umbral bajo para detectar temprano)
+    c4 = vol_rel >= 0.7 if vol_rel > 0 else False
 
-    condiciones = [c1, c2, c3, c4]
-    n_cumplidas = sum(condiciones)
-    es_inicio   = n_cumplidas >= 3
+    # C5: Estructura HH/HL — mínimos más altos (acumulación confirmada)
+    estructura = struct.get("estructura", "") if isinstance(struct, dict) else ""
+    c5 = estructura == "alcista" or struct.get("hl", False) if isinstance(struct, dict) else False
 
-    if not es_inicio:
+    condiciones  = [c1, c2, c3, c4, c5]
+    n_cumplidas  = sum(condiciones)
+
+    if n_cumplidas < 3:
         return {"es_inicio": False}
+
+    # Nivel de señal
+    if n_cumplidas >= 5:
+        nivel = "listo"
+    elif n_cumplidas >= 4:
+        nivel = "pre_breakout"
+    else:
+        nivel = "acumulacion"
 
     return {
-        "es_inicio":     True,
-        "n_cumplidas":   n_cumplidas,
-        "dist_e200_pct": round(dist_e200_pct, 1),
-        "rsi":           round(rsi, 1),
-        "rsi_subiendo":  c2,
-        "macd_girando":  c3,
-        "vol_subiendo":  c4,
-        "c1": c1, "c2": c2, "c3": c3, "c4": c4,
+        "es_inicio":    True,
+        "nivel":        nivel,
+        "n_cumplidas":  n_cumplidas,
+        "rsi":          round(rsi, 1),
+        "c1": c1, "c2": c2, "c3": c3, "c4": c4, "c5": c5,
     }
 
 
 def badge_inicio_movimiento(inicio: dict) -> str:
-    """Badge naranja para la tabla — aparece antes del breakout."""
+    """Badge con 3 niveles de acumulación."""
     if not inicio or not inicio.get("es_inicio"):
         return ""
-    n = inicio.get("n_cumplidas", 0)
+    nivel = inicio.get("nivel", "acumulacion")
+    n     = inicio.get("n_cumplidas", 0)
+    cfg = {
+        "acumulacion":  ("🟡 Acumulación 3/5",  "#fff7e6", "#d46b08", "#ffd591"),
+        "pre_breakout": ("🟠 Pre-breakout 4/5",  "#fff3e0", "#b45309", "#fdba74"),
+        "listo":        ("🟢 Listo entrar 5/5",  "#f0fdf4", "#15803d", "#86efac"),
+    }
+    label, bg, color, brd = cfg.get(nivel, cfg["acumulacion"])
     return (f'<span style="display:inline-flex;padding:2px 7px;border-radius:20px;'
             f'font-size:9px;font-weight:700;white-space:nowrap;'
-            f'background:#fff7e6;color:#d46b08;border:2px solid #ffd591;margin-left:4px">'
-            f'👆 Inicio mov. {n}/4</span>')
+            f'background:{bg};color:{color};border:2px solid {brd};margin-left:4px">'
+            f'{label}</span>')
 
 
 def render_inicio_movimiento_panel(inicio: dict) -> str:
@@ -932,10 +952,11 @@ def render_inicio_movimiento_panel(inicio: dict) -> str:
     d200 = inicio.get("dist_e200_pct", 0)
     rsi  = inicio.get("rsi", 0)
     rows = [
-        ("📍 Precio cerca EMA200", inicio.get("c1"), f"{d200:+.1f}% de la EMA200"),
-        ("📈 RSI saliendo sobreventa", inicio.get("c2"), f"RSI {rsi:.0f} subiendo"),
-        ("🔄 MACD girando al alza", inicio.get("c3"), "Histograma en recuperación"),
-        ("📊 Volumen despertando", inicio.get("c4"), f"Vol ≥ 0.8x media"),
+        ("📈 RSI saliendo zona débil",  inicio.get("c1"), f"RSI {rsi:.0f} subiendo"),
+        ("🔄 MACD histograma girando",  inicio.get("c2"), "Histograma recuperándose"),
+        ("🛡️ Precio sobre soporte",     inicio.get("c3"), "Piso no roto"),
+        ("📊 Volumen despertando",       inicio.get("c4"), "Vol ≥ 0.7x media"),
+        ("📐 Estructura HH/HL",         inicio.get("c5"), "Mínimos más altos"),
     ]
     filas_html = ""
     for label, ok, val in rows:
@@ -948,14 +969,24 @@ def render_inicio_movimiento_panel(inicio: dict) -> str:
                        f'<span style="flex:1;font-size:11px;color:{color}">{label}</span>'
                        f'<span style="font-size:10px;color:var(--muted)">{val}</span>'
                        f'</div>')
-    return (f'<div style="background:#fff7e6;border:2px solid #ffd591;border-radius:8px;'
+    nivel   = inicio.get("nivel", "acumulacion")
+    cfg_n = {
+        "acumulacion":  ("#fff7e6","#ffd591","#d46b08",
+                         "🟡 ACUMULACIÓN — zona de entrada temprana (3/5)",
+                         "Señales tempranas de recuperación. Entra con 30-50% del tamaño normal. Stop ajustado."),
+        "pre_breakout": ("#fff3e0","#fdba74","#b45309",
+                         "🟠 PRE-BREAKOUT — movimiento inminente (4/5)",
+                         "Alta probabilidad de movimiento. Puedes entrar con 50-75% del tamaño. Stop dinámico."),
+        "listo":        ("#f0fdf4","#86efac","#15803d",
+                         "🟢 LISTO PARA ENTRAR — todas las señales alineadas (5/5)",
+                         "Entrada completa válida. Usa el tamaño sugerido por Finbit con stop en EMA9."),
+    }
+    bg, brd, col, titulo, msg = cfg_n.get(nivel, cfg_n["acumulacion"])
+    return (f'<div style="background:{bg};border:2px solid {brd};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:10px">'
-            f'<div style="font-weight:700;font-size:13px;color:#d46b08;margin-bottom:6px">'
-            f'👆 INICIO DE MOVIMIENTO — anticipación al breakout ({n}/4 señales)</div>'
-            f'<div style="font-size:11px;color:#92400e;margin-bottom:10px">'
-            f'El precio muestra señales tempranas de recuperación. '
-            f'Aún no es breakout confirmado — considera entrar en escalones pequeños '
-            f'con stop ajustado.</div>'
+            f'<div style="font-weight:700;font-size:13px;color:{col};margin-bottom:6px">'
+            f'{titulo}</div>'
+            f'<div style="font-size:11px;color:{col};opacity:.85;margin-bottom:10px">{msg}</div>'
             f'{filas_html}</div>')
 
 
@@ -2209,7 +2240,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         print(f"    [cache miss] {symbol} {interval} — petición individual...")
         result = None
         for k in (_TD_KEYS or [""]):
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 200, exchange, key=k)
             if result:
                 break
         _TD_CACHE[key] = result
@@ -2220,7 +2251,7 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
         for k in (_TD_KEYS or [""]):
             if k in _KEYS_AGOTADAS:
                 continue
-            result = api_timeseries(symbol, interval, 150, exchange, key=k)
+            result = api_timeseries(symbol, interval, 200, exchange, key=k)
             if result:
                 _TD_CACHE[key] = result
                 break
@@ -2264,7 +2295,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=150, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=200, key=key_use)
 
             # Reintentar faltantes individualmente — más robusto que batch fallido
             faltantes = [s for s in chunk if s.upper() not in batch]
@@ -2275,7 +2306,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                     key2 = _key_activa()
                     if not key2:
                         break
-                    vals = api_timeseries(sym_f, interval, 150, key=key2)
+                    vals = api_timeseries(sym_f, interval, 200, key=key2)
                     if vals:
                         batch[sym_f.upper()] = vals
                         print(f"  [batch] ✅ Recuperado {sym_f}")
