@@ -6064,8 +6064,12 @@ function delOp(id,ticker){{
     body:JSON.stringify({{id:id}})
   }}).then(r=>r.json()).then(d=>{{
     if(d.status==='ok'){{
-      alert('Operación borrada correctamente.');
-      location.reload();
+      // Eliminar la fila directamente sin recargar la página
+      const btn = document.querySelector('button[onclick*="delOp('+id+',"]');
+      if(btn){{
+        const row = btn.closest('tr');
+        if(row) row.remove();
+      }}
     }} else {{
       alert('Error al borrar: '+d.error);
     }}
