@@ -2107,18 +2107,32 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     stop       = max(trailing_stop, float(c.rolling(min(5,n)).min().iloc[-1]) * 0.97)
     riesgo_acc = precio - stop
 
-    # ── OBJETIVO REALISTA POR ATR ─────────────────────────────────────────
-    # En lugar del máximo de 20 velas (que queda obsoleto tras caídas fuertes),
-    # proyectamos cuánto puede moverse el activo en ~10 días según su volatilidad real.
-    # Multiplicador: 3x ATR para swing de 5-10 días (conservador pero realista).
-    # Si el máximo histórico está más cercano → usarlo como techo (resistencia real).
+    # ── OBJETIVO REALISTA POR ATR + EMA50/EMA200 ─────────────────────────
+    # 1. Calculamos objetivo base por ATR (3x volatilidad real de 10 días)
+    # 2. Si ese objetivo queda por debajo o muy cerca del precio → escalamos a EMA50
+    # 3. Si EMA50 también está por debajo del precio → escalamos a EMA200
+    # 4. Guardamos la fuente del objetivo para mostrarlo en el semáforo
     if atr_val > 0:
         objetivo_atr = precio + (atr_val * 3.0)
-        # Si hay resistencia histórica más cercana que la proyección ATR, usarla como techo
-        # Esto evita proyectar "a través" de resistencias fuertes
         objetivo = min(objetivo_atr, max_20) if max_20 < objetivo_atr else objetivo_atr
     else:
         objetivo = max_20   # fallback si no hay ATR
+
+    _objetivo_fuente = "ATR"  # fuente por defecto
+
+    # Si el objetivo ATR queda al nivel del precio o por debajo → usar EMA50
+    if objetivo <= precio * 1.005 and e50 > precio:
+        objetivo = e50
+        _objetivo_fuente = "EMA50"
+    # Si EMA50 también está por debajo del precio → usar EMA200
+    elif objetivo <= precio * 1.005 and e50 <= precio and e200 > precio:
+        objetivo = e200
+        _objetivo_fuente = "EMA200"
+    # Caso especial: objetivo ATR es válido pero EMA50 está más lejos y arriba → preferir EMA50
+    # Solo si EMA50 representa un objetivo técnico más significativo (>5% más lejos)
+    elif e50 > precio and e50 > objetivo * 1.05:
+        objetivo = e50
+        _objetivo_fuente = "EMA50"
 
     rr_val = (objetivo - precio) / riesgo_acc if riesgo_acc > 0 else 0
 
@@ -2161,8 +2175,8 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
                    "razon":("Sin datos de volumen — criterio omitido." if _sin_volumen
                             else f"Vol {vol_now:,.0f} vs media {vol_avg:,.0f}. {'✅ Confirmado (≥1.5x) — movimiento institucional.' if vol_ok else '⚠️ Insuficiente — posible falso movimiento.'}")},
         "rr":     {"ok":rr_ok,    "label":f"R:R>={rr_min:.0f}x",
-                   "val":f"{rr_val:.1f}x",
-                   "razon":(f"Stop ${stop*mult:,.2f} MXN · Objetivo ${objetivo*mult:,.2f} MXN · "
+                   "val":f"{rr_val:.1f}x ({_objetivo_fuente})",
+                   "razon":(f"Stop ${stop*mult:,.2f} MXN · Objetivo ${objetivo*mult:,.2f} MXN [{_objetivo_fuente}] · "
                             f"R:R {rr_val:.1f}x {'✅ válido.' if rr_ok else '❌ insuficiente — el riesgo supera la recompensa.'}")},
         "soporte":{"ok":sop_ok,   "label":"Sobre soporte",
                    "val":f"${soporte*mult:,.2f}",
@@ -2209,7 +2223,7 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         "adx":adx_val,"atr":round(atr_val,4),"trailing_stop":round(stop,4),
         "estructura":estructura_info,
         "obv":obv_info,
-        "rr":rr_val,"stop":stop,"objetivo":objetivo,"soporte":soporte,"vol_ok":vol_ok,
+        "rr":rr_val,"stop":stop,"objetivo":objetivo,"objetivo_fuente":_objetivo_fuente,"soporte":soporte,"vol_ok":vol_ok,
         "score":score,"total_criterios":total_criterios,"senal":senal,"explosion":explosion,
         "criterios":criterios,
         "entrada_sugerida":round(e9,4),
@@ -2815,6 +2829,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
             "rsi":tf["rsi"],"rr":tf["rr"],"macd_ok":tf["macd_alcista"],
             "ema200_ok":tf["criterios"].get("ema200",{}).get("ok",False),
             "ema200_mxn":round(tf.get("ema200",0)*tc,2),
+            "objetivo_fuente":tf.get("objetivo_fuente","ATR"),
             "score":score,"score_ajustado":setup.get("score_ajustado",score),
             "total_criterios":total_c,
             "pot_alza":pot_alza,"criterios":tf["criterios"],"sizing":tf.get("sizing",{}),
@@ -3440,7 +3455,8 @@ def render_scan_rows(scanner, tc):
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {(r["precio_usd"] or 0):.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
-            f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div></td>'
+            f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div>'
+            f'<div style="font-size:8px;color:var(--muted);margin-top:1px">{r.get("objetivo_fuente","ATR")}</div></td>'
             f'<td style="color:{rsi_col(r["rsi"])};font-weight:600;font-family:var(--mono)">{r["rsi"]:.0f}</td>'
             f'<td>{"<span style=color:var(--green)>▲</span>" if r["macd_ok"] else "<span style=color:var(--red)>▼</span>"}</td>'
             f'<td>{"<span style=color:var(--green)>↑</span>" if r["ema200_ok"] else "<span style=color:var(--red)>↓</span>"}</td>'
@@ -3613,7 +3629,8 @@ def render_radar_rows(radar, tc):
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
             f'<td class="num" style="color:{pot_col};font-weight:{"600" if r["pot_alza"]>=10 else "400"}">{r["pot_alza"]:+.1f}%</td>'
             f'<td><div class="rrw"><div class="rrb"><div class="rrf" style="width:{rr_pct:.0f}%;background:{rr_col}"></div></div>'
-            f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div></td>'
+            f'<span style="color:{rr_col};font-family:var(--mono);font-size:11px">{r["rr"]:.1f}x</span></div>'
+            f'<div style="font-size:8px;color:var(--muted);margin-top:1px">{r.get("objetivo_fuente","ATR")}</div></td>'
             f'<td style="color:{rsi_col(r["rsi"])};font-weight:600;font-family:var(--mono)">{r["rsi"]:.0f}</td>'
             f'<td>{"<span style=color:var(--green)>▲</span>" if r["macd_ok"] else "<span style=color:var(--red)>▼</span>"}</td>'
             f'<td>{"<span style=color:var(--green)>↑</span>" if r["ema200_ok"] else "<span style=color:var(--red)>↓</span>"}</td>'
