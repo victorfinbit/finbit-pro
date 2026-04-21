@@ -262,7 +262,7 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
     ticker = ticker.upper().strip()
     # Validar: solo letras y puntos (TLEVISA.CPO), longitud razonable
     import re as _re
-    if not ticker or not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
+    if not ticker or not _re.match(r'^[A-Z0-9./]{1,15}$', ticker):
         print(f"  ⚠️  Ticker inválido: '{ticker}'")
         return
     con = sqlite3.connect(DB_FILE)
@@ -6909,7 +6909,7 @@ def api_tickers_add():
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
         # Validar formato
         import re as _re
-        if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
+        if not _re.match(r'^[A-Z0-9./]{1,15}$', ticker):
             return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
         add_ticker_db(ticker, exchange, origen)
         # Backup inmediato — evita perder el ticker si Render reinicia antes del backup horario
