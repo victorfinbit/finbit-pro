@@ -4417,10 +4417,17 @@ td strong{{font-size:13px;font-weight:500}}
       </div>
     </div>
     <div style="overflow-x:auto"><table id="scan_table">
-      <thead><tr><th>Ticker</th><th>Estado</th><th>Precio MXN</th>
-        <th style="color:var(--green)">Entrada EMA9</th><th>R:R</th><th>RSI</th>
+      <thead><tr>
+        <th onclick="sortScanner(0,'str')" style="cursor:pointer;user-select:none" title="Ordenar A-Z">Ticker <span id="srt0">⇅</span></th>
+        <th>Estado</th>
+        <th onclick="sortScanner(2,'num')" style="cursor:pointer;user-select:none" title="Ordenar por precio">Precio MXN <span id="srt2">⇅</span></th>
+        <th style="color:var(--green)">Entrada EMA9</th>
+        <th onclick="sortScanner(4,'num')" style="cursor:pointer;user-select:none" title="Ordenar por R:R">R:R <span id="srt4">⇅</span></th>
+        <th onclick="sortScanner(5,'num')" style="cursor:pointer;user-select:none" title="Ordenar por RSI">RSI <span id="srt5">⇅</span></th>
         <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
-        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th><th>Score</th></tr></thead>
+        <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th>
+        <th onclick="sortScanner(10,'num')" style="cursor:pointer;user-select:none" title="Ordenar por Score">Score <span id="srt10">⇅</span></th>
+      </tr></thead>
       <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
@@ -5991,6 +5998,48 @@ function filtrarScanner(){{
     tr.style.display=show?'':'none';
     const next=tr.nextElementSibling;
     if(next&&next.classList.contains('detail'))next.style.display=show?'':'none';
+  }});
+}}
+
+// ── Sorting de columnas del scanner ─────────────────────
+let _scanSortCol=-1, _scanSortAsc=true;
+function sortScanner(colIdx, tipo){{
+  _scanSortAsc = (_scanSortCol===colIdx) ? !_scanSortAsc : true;
+  _scanSortCol = colIdx;
+  // Actualizar iconos
+  [0,2,4,5,10].forEach(i=>{{
+    const el=document.getElementById('srt'+i);
+    if(el) el.textContent = i===colIdx ? (_scanSortAsc?'↑':'↓') : '⇅';
+  }});
+  const tbody = document.getElementById('scan_tbody');
+  // Recopilar pares [datarow, detailrow]
+  const pares = [];
+  let rows = Array.from(tbody.querySelectorAll('tr.datarow'));
+  rows.forEach(tr=>{{
+    const detail = tr.nextElementSibling;
+    pares.push({{data: tr, detail: (detail&&detail.classList.contains('detail'))?detail:null}});
+  }});
+  pares.sort((a,b)=>{{
+    const tdA = a.data.querySelectorAll('td')[colIdx];
+    const tdB = b.data.querySelectorAll('td')[colIdx];
+    const rawA = tdA ? (tdA.querySelector('strong')?.textContent || tdA.textContent) : '';
+    const rawB = tdB ? (tdB.querySelector('strong')?.textContent || tdB.textContent) : '';
+    let valA, valB;
+    if(tipo==='num'){{
+      valA = parseFloat(rawA.replace(/[^0-9.-]/g,'')) || 0;
+      valB = parseFloat(rawB.replace(/[^0-9.-]/g,'')) || 0;
+    }} else {{
+      valA = rawA.trim().toLowerCase();
+      valB = rawB.trim().toLowerCase();
+    }}
+    if(valA < valB) return _scanSortAsc ? -1 : 1;
+    if(valA > valB) return _scanSortAsc ? 1 : -1;
+    return 0;
+  }});
+  // Reordenar DOM
+  pares.forEach(p=>{{
+    tbody.appendChild(p.data);
+    if(p.detail) tbody.appendChild(p.detail);
   }});
 }}
 
