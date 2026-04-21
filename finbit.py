@@ -262,7 +262,7 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
     ticker = ticker.upper().strip()
     # Validar: solo letras y puntos (TLEVISA.CPO), longitud razonable
     import re as _re
-    if not ticker or not _re.match(r'^[A-Z0-9./]{1,15}$', ticker):
+    if not ticker or not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
         print(f"  ⚠️  Ticker inválido: '{ticker}'")
         return
     con = sqlite3.connect(DB_FILE)
@@ -2616,11 +2616,26 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     print(f"  Régimen: {regimen['label']} | VIX={vix:.1f} | SPY {'✅' if spy.get('sobre_ema200') else '❌'} EMA200")
 
     # ── PRECARGAR CACHE CON BATCH ─────────────────────────────────────────
-    # Incluimos los sector ETFs en el batch inicial para que get_sector_estado()
-    # no haga requests individuales durante el análisis (evita rate limit silencioso)
+    # Tickers USA → batch normal (rápido)
+    # Tickers BMV → llamada individual con exchange=BMV (TwelveData no los encuentra en batch)
     _sector_etfs = []  # No precargar sector ETFs — ahorrar créditos de API
-    todos_syms   = list(set([v[0] for v in combinados.values()]))
-    _precargar_cache_batch(todos_syms, ["1day", "1week"])
+    syms_usa = list(set([v[0] for v in combinados.values() if v[1] != "BMV"]))
+    syms_bmv = [(v[0], v[1]) for v in combinados.values() if v[1] == "BMV"]
+    _precargar_cache_batch(syms_usa, ["1day", "1week"])
+    # Cargar tickers BMV individualmente con exchange explícito
+    if syms_bmv:
+        print(f"  [batch] {len(syms_bmv)} tickers BMV — cargando individualmente con exchange=BMV")
+        for sym_bmv, exch_bmv in syms_bmv:
+            for interval in ["1day", "1week"]:
+                cache_key = f"{sym_bmv.upper()}:{interval}"
+                if cache_key not in _TD_CACHE or _TD_CACHE[cache_key] is None:
+                    vals = api_timeseries(sym_bmv, interval, 200, exchange=exch_bmv)
+                    _TD_CACHE[cache_key] = vals
+                    if vals:
+                        print(f"  [batch] ✅ BMV {sym_bmv} {interval} — {len(vals)} velas")
+                    else:
+                        print(f"  [batch] ❌ BMV {sym_bmv} {interval} — sin datos")
+                    time.sleep(1)
 
     resultados = []
     for nombre, (symbol, exchange) in combinados.items():
@@ -2749,9 +2764,22 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
     _sector_etfs_r = []  # No precargar sector ETFs en radar — ahorrar créditos
     todos_radar    = list(set([v[0] for v in universo_completo.values()]))
     syms_sin_cache = [s for s in todos_radar if f"{s.upper()}:1day" not in _TD_CACHE]
-    if syms_sin_cache:
-        print(f"  [Radar batch] Precargando {len(syms_sin_cache)} tickers (incluye sectores)...")
-        _precargar_cache_batch(syms_sin_cache, ["1day"])
+    # Separar USA vs BMV — BMV necesita exchange explícito
+    syms_sin_cache_usa = [s for s in syms_sin_cache
+                          if universo_completo.get(s, ("", ""))[1] != "BMV"]
+    syms_sin_cache_bmv = [(s, universo_completo[s][1]) for s in syms_sin_cache
+                          if universo_completo.get(s, ("", ""))[1] == "BMV"]
+    if syms_sin_cache_usa:
+        print(f"  [Radar batch] Precargando {len(syms_sin_cache_usa)} tickers USA...")
+        _precargar_cache_batch(syms_sin_cache_usa, ["1day"])
+    if syms_sin_cache_bmv:
+        print(f"  [Radar batch] {len(syms_sin_cache_bmv)} tickers BMV — individualmente...")
+        for sym_b, exch_b in syms_sin_cache_bmv:
+            cache_key = f"{sym_b.upper()}:1day"
+            if cache_key not in _TD_CACHE or _TD_CACHE[cache_key] is None:
+                vals = api_timeseries(sym_b, "1day", 200, exchange=exch_b)
+                _TD_CACHE[cache_key] = vals
+                time.sleep(1)
 
     resultados = []
     for i, (nombre, (symbol, exchange)) in enumerate(universo_completo.items()):
@@ -6909,7 +6937,7 @@ def api_tickers_add():
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
         # Validar formato
         import re as _re
-        if not _re.match(r'^[A-Z0-9./]{1,15}$', ticker):
+        if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
             return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
         add_ticker_db(ticker, exchange, origen)
         # Backup inmediato — evita perder el ticker si Render reinicia antes del backup horario
