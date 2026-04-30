@@ -259,61 +259,90 @@ def _formatear_alerta_prebreakout(r: dict, nivel: str) -> str:
     )
 
 def _loop_alertas_telegram():
-    """Hilo que monitorea el scanner y manda alertas Telegram en horario de mercado."""
+    """Hilo autónomo — analiza tickers directamente cada 30 min en horario de mercado.
+    NO depende del ↺ Actualizar manual."""
     global _scan_resultados
-    print("[alertas] 🔔 Hilo de alertas Telegram iniciado")
-    time.sleep(10)  # esperar 10 seg al arrancar
+    print("[alertas] 🔔 Hilo de alertas Telegram iniciado — modo autónomo")
+    time.sleep(30)  # esperar 30 seg al arrancar para que la DB esté lista
+
     while True:
         try:
             if not _en_horario_mercado():
-                print("[alertas] 💤 Fuera de horario de mercado")
+                print("[alertas] 💤 Fuera de horario de mercado — durmiendo 5 min")
                 time.sleep(300)
                 continue
 
-            # Obtener resultados del scanner en memoria
-            resultados = _scan_resultados  # variable global directa
-            print(f"[alertas] 🔍 Revisando {len(resultados)} tickers...")
-            if not resultados:
-                print("[alertas] ⚠️ Sin resultados — esperar ↺ Actualizar")
+            print("[alertas] 🔄 Iniciando análisis autónomo...")
+
+            # Obtener TC y parámetros básicos
+            try:
+                tc = obtener_tipo_cambio()
+            except Exception:
+                tc = 17.5
+
+            capital    = CAPITAL_TOTAL
+            riesgo_pct = RIESGO_POR_TRADE
+            rr_min     = RR_MINIMO
+
+            # Obtener VIX y SPY básico (sin crashear si falla)
+            vix = 20.0
+            spy = {}
+            try:
+                vix_vals = api_timeseries("VIX", "1day", 5)
+                if vix_vals:
+                    vix = float(vix_vals[0].get("close", 20.0))
+            except Exception:
+                pass
+
+            # Correr scanner autónomamente
+            try:
+                resultados = correr_scanner(tc, capital, riesgo_pct, rr_min, vix=vix, spy=spy)
+                # Actualizar _scan_resultados para que el dashboard también los use
+                _scan_resultados = resultados or []
+                print(f"[alertas] ✅ Scanner autónomo: {len(_scan_resultados)} tickers analizados")
+            except Exception as e:
+                print(f"[alertas] ❌ Error en scanner autónomo: {e}")
                 time.sleep(1800)
                 continue
 
-            for r in resultados:
-                nombre  = r.get("nombre", "")
-                rr      = r.get("rr", 0)
-                ganga_d = r.get("ganga", {})
+            # Revisar alertas
+            alertas = 0
+            for r in _scan_resultados:
+                nombre   = r.get("nombre", "")
+                rr       = r.get("rr", 0)
+                ganga_d  = r.get("ganga", {})
                 inicio_d = r.get("inicio", {})
+
                 print(f"[alertas] {nombre} | rr={rr:.1f} | ganga={ganga_d.get('es_ganga',False)} | inicio={inicio_d.get('nivel','')}")
 
-                # Solo alertar si R:R >= 3x
-                if rr < 3.0:
+                # Solo alertar si R:R >= mínimo
+                if rr < rr_min:
                     continue
 
-                # Alerta Ganga — usa campo "ganga" del dict
+                # Alerta Ganga
                 es_ganga = isinstance(ganga_d, dict) and ganga_d.get("es_ganga", False)
                 if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
                     msg = _formatear_alerta_ganga(r)
                     if tg_send(msg):
                         print(f"[alertas] ✅ Ganga enviada — {nombre}")
-                    else:
-                        print(f"[alertas] ❌ Error enviando Ganga — {nombre}")
+                        alertas += 1
 
-                # Alerta Pre-breakout 4/5 y Listo 5/5
-                es_inicio  = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
-                nivel_str  = inicio_d.get("nivel", "") if es_inicio else ""
+                # Alerta Pre-breakout 4/5 o Listo 5/5
+                es_inicio = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
+                nivel_str = inicio_d.get("nivel", "") if es_inicio else ""
                 if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
                     label = "4/5" if nivel_str == "pre_breakout" else "5/5"
                     msg = _formatear_alerta_prebreakout(r, label)
                     if tg_send(msg):
                         print(f"[alertas] ✅ Pre-breakout {label} enviada — {nombre}")
-                    else:
-                        print(f"[alertas] ❌ Error enviando Pre-breakout — {nombre}")
+                        alertas += 1
 
-            time.sleep(300)  # revisar cada 5 minutos en horario de mercado
+            print(f"[alertas] 📊 Ciclo completo — {alertas} alertas enviadas")
+            time.sleep(1800)  # revisar cada 30 minutos
 
         except Exception as e:
             import traceback
-            print(f"[alertas] ❌ Error: {e}")
+            print(f"[alertas] ❌ Error general: {e}")
             traceback.print_exc()
             time.sleep(600)
 
