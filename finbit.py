@@ -266,11 +266,12 @@ def _loop_alertas_telegram():
     """Hilo que monitorea el scanner y manda alertas Telegram en horario de mercado."""
     global _scan_resultados
     print("[alertas] 🔔 Hilo de alertas Telegram iniciado")
-    time.sleep(120)  # esperar 2 min al arrancar para que el dashboard cargue
+    time.sleep(10)  # esperar 10 seg al arrancar
     while True:
         try:
             if not _en_horario_mercado():
-                time.sleep(300)  # fuera de horario, revisar cada 5 min
+                print("[alertas] 💤 Fuera de horario de mercado")
+                time.sleep(300)
                 continue
 
             # Obtener resultados del scanner en memoria
@@ -312,7 +313,7 @@ def _loop_alertas_telegram():
                     else:
                         print(f"[alertas] ❌ Error enviando Pre-breakout — {nombre}")
 
-            time.sleep(1800)  # revisar cada 30 minutos en horario de mercado
+            time.sleep(300)  # revisar cada 5 minutos en horario de mercado
 
         except Exception as e:
             import traceback
