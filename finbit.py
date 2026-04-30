@@ -184,23 +184,19 @@ def _loop_backup_github():
 _alertas_enviadas: dict = {}  # {ticker: {"ganga": timestamp, "pre4": timestamp, "pre5": timestamp}}
 
 def _en_horario_mercado() -> bool:
-    """Verifica si estamos en horario de mercado USA (9:30-16:00 ET, lunes-viernes)."""
-    try:
-        import pytz
-        et = pytz.timezone("America/New_York")
-        ahora = datetime.now(et)
-        if ahora.weekday() >= 5:  # sábado=5, domingo=6
-            return False
-        apertura = ahora.replace(hour=9, minute=30, second=0, microsecond=0)
-        cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
-        return apertura <= ahora <= cierre
-    except Exception:
-        # Si no hay pytz, usar hora UTC-5 (ET aproximado)
-        ahora = datetime.utcnow()
-        hora_et = (ahora.hour - 5) % 24
-        if ahora.weekday() >= 5:
-            return False
-        return 9 <= hora_et < 16
+    """Verifica si estamos en horario de mercado USA (9:30-16:00 ET, lunes-viernes).
+    Usa UTC-4 (EDT activo abril-noviembre)."""
+    ahora_utc = datetime.utcnow()
+    minutos_utc = ahora_utc.hour * 60 + ahora_utc.minute
+    # EDT = UTC-4: apertura 9:30 ET = 13:30 UTC, cierre 16:00 ET = 20:00 UTC
+    apertura_utc = 13 * 60 + 30
+    cierre_utc   = 20 * 60
+    dia = ahora_utc.weekday()  # 0=lunes, 6=domingo
+    if dia >= 5:
+        return False
+    en_horario = apertura_utc <= minutos_utc <= cierre_utc
+    print(f"[alertas] ⏰ UTC {ahora_utc.strftime('%H:%M')} | dia={dia} | en_mercado={en_horario}")
+    return en_horario
 
 def _puede_enviar_alerta(ticker: str, tipo: str, minutos: int = 120) -> bool:
     """Evita spam — solo manda la misma alerta cada X minutos."""
