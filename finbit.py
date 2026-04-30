@@ -274,41 +274,50 @@ def _loop_alertas_telegram():
                 continue
 
             # Obtener resultados del scanner en memoria
-            resultados = _scan_resultados if "_scan_resultados" in dir() else []
+            resultados = _scan_resultados  # variable global directa
+            print(f"[alertas] 🔍 Revisando {len(resultados)} tickers...")
             if not resultados:
+                print("[alertas] ⚠️ Sin resultados — esperar ↺ Actualizar")
                 time.sleep(1800)
                 continue
 
             for r in resultados:
                 nombre  = r.get("nombre", "")
                 rr      = r.get("rr", 0)
+                ganga_d = r.get("ganga", {})
+                inicio_d = r.get("inicio", {})
+                print(f"[alertas] {nombre} | rr={rr:.1f} | ganga={ganga_d.get('es_ganga',False)} | inicio={inicio_d.get('nivel','')}")
 
                 # Solo alertar si R:R >= 3x
                 if rr < 3.0:
                     continue
 
                 # Alerta Ganga — usa campo "ganga" del dict
-                ganga_data = r.get("ganga", {})
-                es_ganga = isinstance(ganga_data, dict) and ganga_data.get("es_ganga", False)
+                es_ganga = isinstance(ganga_d, dict) and ganga_d.get("es_ganga", False)
                 if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
                     msg = _formatear_alerta_ganga(r)
                     if tg_send(msg):
                         print(f"[alertas] ✅ Ganga enviada — {nombre}")
+                    else:
+                        print(f"[alertas] ❌ Error enviando Ganga — {nombre}")
 
-                # Alerta Pre-breakout 4/5 y Listo 5/5 — usa campo "inicio" del dict
-                inicio_data = r.get("inicio", {})
-                es_inicio   = isinstance(inicio_data, dict) and inicio_data.get("es_inicio", False)
-                nivel_str   = inicio_data.get("nivel", "") if es_inicio else ""
+                # Alerta Pre-breakout 4/5 y Listo 5/5
+                es_inicio  = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
+                nivel_str  = inicio_d.get("nivel", "") if es_inicio else ""
                 if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
                     label = "4/5" if nivel_str == "pre_breakout" else "5/5"
                     msg = _formatear_alerta_prebreakout(r, label)
                     if tg_send(msg):
                         print(f"[alertas] ✅ Pre-breakout {label} enviada — {nombre}")
+                    else:
+                        print(f"[alertas] ❌ Error enviando Pre-breakout — {nombre}")
 
             time.sleep(1800)  # revisar cada 30 minutos en horario de mercado
 
         except Exception as e:
+            import traceback
             print(f"[alertas] ❌ Error: {e}")
+            traceback.print_exc()
             time.sleep(600)
 
 
