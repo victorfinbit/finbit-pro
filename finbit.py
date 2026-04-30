@@ -281,26 +281,29 @@ def _loop_alertas_telegram():
 
             for r in resultados:
                 nombre  = r.get("nombre", "")
-                badges  = r.get("badges", [])
                 rr      = r.get("rr", 0)
 
                 # Solo alertar si R:R >= 3x
                 if rr < 3.0:
                     continue
 
-                # Alerta Ganga
-                es_ganga = any("ganga" in str(b).lower() for b in badges)
+                # Alerta Ganga — usa campo "ganga" del dict
+                ganga_data = r.get("ganga", {})
+                es_ganga = isinstance(ganga_data, dict) and ganga_data.get("es_ganga", False)
                 if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
                     msg = _formatear_alerta_ganga(r)
                     if tg_send(msg):
                         print(f"[alertas] ✅ Ganga enviada — {nombre}")
 
-                # Alerta Pre-breakout 4/5
-                es_pre4 = any("4/5" in str(b) for b in badges) and any("pre" in str(b).lower() or "breakout" in str(b).lower() for b in badges)
-                if es_pre4 and _puede_enviar_alerta(nombre, "pre4", 120):
-                    msg = _formatear_alerta_prebreakout(r, "4/5")
+                # Alerta Pre-breakout 4/5 y Listo 5/5 — usa campo "inicio" del dict
+                inicio_data = r.get("inicio", {})
+                es_inicio   = isinstance(inicio_data, dict) and inicio_data.get("es_inicio", False)
+                nivel_str   = inicio_data.get("nivel", "") if es_inicio else ""
+                if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
+                    label = "4/5" if nivel_str == "pre_breakout" else "5/5"
+                    msg = _formatear_alerta_prebreakout(r, label)
                     if tg_send(msg):
-                        print(f"[alertas] ✅ Pre-breakout 4/5 enviada — {nombre}")
+                        print(f"[alertas] ✅ Pre-breakout {label} enviada — {nombre}")
 
             time.sleep(1800)  # revisar cada 30 minutos en horario de mercado
 
