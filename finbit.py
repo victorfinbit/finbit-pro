@@ -33,8 +33,8 @@ API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2b
 # Cada key tiene 800 calls/día. Total: 3,200 calls/día.
 _TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8514110077:AAF2r4SnE5iAXJ8dju99IViUihI6gwNa-NI")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8682852732")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ACTIVO  = True
 
 CAPITAL_TOTAL    = 15_000
