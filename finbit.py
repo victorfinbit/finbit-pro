@@ -33,9 +33,9 @@ API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2b
 # Cada key tiene 800 calls/día. Total: 3,200 calls/día.
 _TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
-TELEGRAM_TOKEN   = "TU_TOKEN_AQUI"
-TELEGRAM_CHAT_ID = "TU_CHAT_ID_AQUI"
-TELEGRAM_ACTIVO  = False
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8514110077:AAF2r4SnE5iAXJ8dju99IViUihI6gwNa-NI")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8682852732")
+TELEGRAM_ACTIVO  = True
 
 CAPITAL_TOTAL    = 15_000
 RIESGO_POR_TRADE = 0.01
@@ -178,6 +178,135 @@ def _loop_backup_github():
             ultimo_dia = dia_actual
             print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
         time.sleep(3600)  # cada hora
+
+
+# ── ALERTAS TELEGRAM — monitoreo automático ────────────────
+_alertas_enviadas: dict = {}  # {ticker: {"ganga": timestamp, "pre4": timestamp, "pre5": timestamp}}
+
+def _en_horario_mercado() -> bool:
+    """Verifica si estamos en horario de mercado USA (9:30-16:00 ET, lunes-viernes)."""
+    try:
+        import pytz
+        et = pytz.timezone("America/New_York")
+        ahora = datetime.now(et)
+        if ahora.weekday() >= 5:  # sábado=5, domingo=6
+            return False
+        apertura = ahora.replace(hour=9, minute=30, second=0, microsecond=0)
+        cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
+        return apertura <= ahora <= cierre
+    except Exception:
+        # Si no hay pytz, usar hora UTC-5 (ET aproximado)
+        ahora = datetime.utcnow()
+        hora_et = (ahora.hour - 5) % 24
+        if ahora.weekday() >= 5:
+            return False
+        return 9 <= hora_et < 16
+
+def _puede_enviar_alerta(ticker: str, tipo: str, minutos: int = 120) -> bool:
+    """Evita spam — solo manda la misma alerta cada X minutos."""
+    global _alertas_enviadas
+    key = f"{ticker}:{tipo}"
+    ahora = time.time()
+    ultimo = _alertas_enviadas.get(key, 0)
+    if ahora - ultimo > minutos * 60:
+        _alertas_enviadas[key] = ahora
+        return True
+    return False
+
+def _formatear_alerta_ganga(r: dict) -> str:
+    """Formatea mensaje Telegram para badge Ganga."""
+    nombre = r.get("nombre", "")
+    precio = r.get("precio_mxn", 0)
+    rr     = r.get("rr", 0)
+    rsi    = r.get("rsi", 0)
+    score  = r.get("score_ajustado", r.get("score", 0))
+    total  = r.get("total_criterios", 11)
+    stop   = r.get("stop_mxn", 0)
+    obj    = r.get("obj_mxn", 0)
+    fuente = r.get("objetivo_fuente", "ATR")
+    return (
+        f"🟡 <b>GANGA DETECTADA — {nombre}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 Precio:  <b>${precio:,.2f} MXN</b>\n"
+        f"📊 RSI:     {rsi:.0f}\n"
+        f"⭐ Score:   {score}/{total}\n"
+        f"🛑 Stop:    ${stop:,.2f} MXN\n"
+        f"🎯 Obj:     ${obj:,.2f} MXN ({fuente})\n"
+        f"📈 R:R:     <b>{rr:.1f}x</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"⏰ {datetime.now().strftime('%H:%M')} ET"
+    )
+
+def _formatear_alerta_prebreakout(r: dict, nivel: str) -> str:
+    """Formatea mensaje Telegram para Pre-breakout 4/5."""
+    nombre = r.get("nombre", "")
+    precio = r.get("precio_mxn", 0)
+    rr     = r.get("rr", 0)
+    rsi    = r.get("rsi", 0)
+    score  = r.get("score_ajustado", r.get("score", 0))
+    total  = r.get("total_criterios", 11)
+    stop   = r.get("stop_mxn", 0)
+    obj    = r.get("obj_mxn", 0)
+    fuente = r.get("objetivo_fuente", "ATR")
+    emoji  = "🟠" if nivel == "4/5" else "🟢"
+    return (
+        f"{emoji} <b>PRE-BREAKOUT {nivel} — {nombre}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 Precio:  <b>${precio:,.2f} MXN</b>\n"
+        f"📊 RSI:     {rsi:.0f}\n"
+        f"⭐ Score:   {score}/{total}\n"
+        f"🛑 Stop:    ${stop:,.2f} MXN\n"
+        f"🎯 Obj:     ${obj:,.2f} MXN ({fuente})\n"
+        f"📈 R:R:     <b>{rr:.1f}x</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"⏰ {datetime.now().strftime('%H:%M')} ET"
+    )
+
+def _loop_alertas_telegram():
+    """Hilo que monitorea el scanner y manda alertas Telegram en horario de mercado."""
+    global _scan_resultados
+    print("[alertas] 🔔 Hilo de alertas Telegram iniciado")
+    time.sleep(120)  # esperar 2 min al arrancar para que el dashboard cargue
+    while True:
+        try:
+            if not _en_horario_mercado():
+                time.sleep(300)  # fuera de horario, revisar cada 5 min
+                continue
+
+            # Obtener resultados del scanner en memoria
+            resultados = _scan_resultados if "_scan_resultados" in dir() else []
+            if not resultados:
+                time.sleep(1800)
+                continue
+
+            for r in resultados:
+                nombre  = r.get("nombre", "")
+                badges  = r.get("badges", [])
+                rr      = r.get("rr", 0)
+
+                # Solo alertar si R:R >= 3x
+                if rr < 3.0:
+                    continue
+
+                # Alerta Ganga
+                es_ganga = any("ganga" in str(b).lower() for b in badges)
+                if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
+                    msg = _formatear_alerta_ganga(r)
+                    if tg_send(msg):
+                        print(f"[alertas] ✅ Ganga enviada — {nombre}")
+
+                # Alerta Pre-breakout 4/5
+                es_pre4 = any("4/5" in str(b) for b in badges) and any("pre" in str(b).lower() or "breakout" in str(b).lower() for b in badges)
+                if es_pre4 and _puede_enviar_alerta(nombre, "pre4", 120):
+                    msg = _formatear_alerta_prebreakout(r, "4/5")
+                    if tg_send(msg):
+                        print(f"[alertas] ✅ Pre-breakout 4/5 enviada — {nombre}")
+
+            time.sleep(1800)  # revisar cada 30 minutos en horario de mercado
+
+        except Exception as e:
+            print(f"[alertas] ❌ Error: {e}")
+            time.sleep(600)
 
 
 def init_db():
@@ -6558,6 +6687,7 @@ def construir_dashboard() -> str:
 app = Flask(__name__)
 _dash_html: str = ""
 _dash_lock  = threading.Lock()
+_scan_resultados: list = []  # últimos resultados del scanner para alertas Telegram
 _refresh_in_progress = False
 _build_start_time: float = 0.0   # para mostrar tiempo transcurrido
 _build_error: str = ""           # captura último error de build
@@ -6810,6 +6940,9 @@ def _construir_con_etapas():
                     scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                                vix=vix, spy=spy)
                     print(f"[build] Scanner: {len(scan_data)} tickers procesados")
+                    # Guardar para alertas Telegram
+                    global _scan_resultados
+                    _scan_resultados = scan_data or []
                 except Exception as e:
                     import traceback
                     print(f"[build] Scanner error: {e}")
@@ -7207,6 +7340,8 @@ if __name__ == "__main__":
 
     # Solo lanzar backup — el build se activa manualmente con ↺ Actualizar
     threading.Thread(target=_loop_backup_github, daemon=True).start()
+    threading.Thread(target=_loop_alertas_telegram, daemon=True).start()
+    print("[alertas] 🔔 Monitoreo Telegram activo — Ganga y Pre-breakout 4/5 en horario de mercado")
 
     port = int(os.environ.get("PORT", 5000))
     print(f"[server] Puerto: {port}  |  http://localhost:{port}")
