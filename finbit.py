@@ -305,36 +305,123 @@ def _loop_alertas_telegram():
                 time.sleep(1800)
                 continue
 
-            # Revisar alertas
+            # Revisar alertas de ENTRADA
             alertas = 0
+            port_tickers = {p["ticker"].upper() for p in get_portafolio()}
+
             for r in _scan_resultados:
                 nombre   = r.get("nombre", "")
                 rr       = r.get("rr", 0)
                 ganga_d  = r.get("ganga", {})
                 inicio_d = r.get("inicio", {})
+                rsi      = r.get("rsi", 0)
+                precio   = r.get("precio_mxn", 0)
+                stop     = r.get("stop_mxn", 0)
+                score    = r.get("score_ajustado", r.get("score", 0))
+                ema200   = r.get("ema200_mxn", 0)
+                en_cartera = nombre.upper() in port_tickers
 
-                print(f"[alertas] {nombre} | rr={rr:.1f} | ganga={ganga_d.get('es_ganga',False)} | inicio={inicio_d.get('nivel','')}")
+                print(f"[alertas] {nombre} | rr={rr:.1f} | ganga={ganga_d.get('es_ganga',False)} | inicio={inicio_d.get('nivel','')} | cartera={en_cartera}")
 
-                # Solo alertar si R:R >= mínimo
-                if rr < rr_min:
+                # ── ALERTAS DE ENTRADA ──────────────────────────────────
+                if rr >= rr_min:
+                    # Alerta Ganga
+                    es_ganga = isinstance(ganga_d, dict) and ganga_d.get("es_ganga", False)
+                    if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
+                        msg = _formatear_alerta_ganga(r)
+                        if tg_send(msg):
+                            print(f"[alertas] ✅ Ganga enviada — {nombre}")
+                            alertas += 1
+
+                    # Alerta Pre-breakout 4/5 o Listo 5/5
+                    es_inicio = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
+                    nivel_str = inicio_d.get("nivel", "") if es_inicio else ""
+                    if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
+                        label = "4/5" if nivel_str == "pre_breakout" else "5/5"
+                        msg = _formatear_alerta_prebreakout(r, label)
+                        if tg_send(msg):
+                            print(f"[alertas] ✅ Pre-breakout {label} enviada — {nombre}")
+                            alertas += 1
+
+                # ── ALERTAS DE SALIDA (solo posiciones en cartera) ──────
+                if not en_cartera:
                     continue
 
-                # Alerta Ganga
-                es_ganga = isinstance(ganga_d, dict) and ganga_d.get("es_ganga", False)
-                if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
-                    msg = _formatear_alerta_ganga(r)
+                # 1. Score Drop severo — aviso temprano
+                try:
+                    sd = analizar_score_drop(nombre, score)
+                    if sd["severidad"] in ("alert", "critical") and _puede_enviar_alerta(nombre, "score_drop", 240):
+                        emoji = "🚨" if sd["severidad"] == "critical" else "⚠️"
+                        msg = (f"{emoji} <b>SCORE DROP — {nombre}</b>\n"
+                               f"━━━━━━━━━━━━━━━\n"
+                               f"📉 {sd['desc']}\n"
+                               f"⭐ Score actual: {score}/11\n"
+                               f"💰 Precio: ${precio:,.2f} MXN\n"
+                               f"🛑 Stop: ${stop:,.2f} MXN\n"
+                               f"━━━━━━━━━━━━━━━\n"
+                               f"👀 Revisar posición\n"
+                               f"⏰ {datetime.now().strftime('%H:%M')} ET")
+                        if tg_send(msg):
+                            print(f"[alertas] ✅ Score Drop enviada — {nombre}")
+                            alertas += 1
+                except Exception:
+                    pass
+
+                # 2. EXIT YA en posición tuya
+                señal_d = r.get("señal", {})
+                es_exit = r.get("nivel_señal", "") == "exit" or (isinstance(señal_d, dict) and señal_d.get("nivel") == "exit")
+                if es_exit and _puede_enviar_alerta(nombre, "exit_ya", 120):
+                    msg = (f"🔴 <b>EXIT YA — {nombre}</b>\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"⚠️ Múltiples señales de deterioro\n"
+                           f"💰 Precio: ${precio:,.2f} MXN\n"
+                           f"🛑 Stop dinámico: ${stop:,.2f} MXN\n"
+                           f"⭐ Score: {score}/11\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"❗ Considera salir de la posición\n"
+                           f"⏰ {datetime.now().strftime('%H:%M')} ET")
                     if tg_send(msg):
-                        print(f"[alertas] ✅ Ganga enviada — {nombre}")
+                        print(f"[alertas] ✅ EXIT YA enviada — {nombre}")
                         alertas += 1
 
-                # Alerta Pre-breakout 4/5 o Listo 5/5
-                es_inicio = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
-                nivel_str = inicio_d.get("nivel", "") if es_inicio else ""
-                if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
-                    label = "4/5" if nivel_str == "pre_breakout" else "5/5"
-                    msg = _formatear_alerta_prebreakout(r, label)
+                # 3. Stop Loss tocado
+                if stop > 0 and precio > 0 and precio <= stop * 1.005 and _puede_enviar_alerta(nombre, "stop", 60):
+                    msg = (f"🚨 <b>STOP TOCADO — {nombre}</b>\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"💰 Precio actual: ${precio:,.2f} MXN\n"
+                           f"🛑 Stop dinámico: ${stop:,.2f} MXN\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"❗ VENDER — respetar el stop\n"
+                           f"⏰ {datetime.now().strftime('%H:%M')} ET")
                     if tg_send(msg):
-                        print(f"[alertas] ✅ Pre-breakout {label} enviada — {nombre}")
+                        print(f"[alertas] ✅ Stop tocado enviada — {nombre}")
+                        alertas += 1
+
+                # 4. RSI sobrecomprado en posición tuya
+                if rsi >= 72 and _puede_enviar_alerta(nombre, "rsi_alto", 240):
+                    msg = (f"📈 <b>RSI SOBRECOMPRADO — {nombre}</b>\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"📊 RSI: {rsi:.0f} — zona de sobrecompra\n"
+                           f"💰 Precio: ${precio:,.2f} MXN\n"
+                           f"🎯 Objetivo EMA200: ${ema200:,.2f} MXN\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"💡 Considera tomar parciales\n"
+                           f"⏰ {datetime.now().strftime('%H:%M')} ET")
+                    if tg_send(msg):
+                        print(f"[alertas] ✅ RSI alto enviada — {nombre}")
+                        alertas += 1
+
+                # 5. Precio llegó a objetivo EMA200
+                if ema200 > 0 and precio >= ema200 * 0.995 and _puede_enviar_alerta(nombre, "objetivo", 480):
+                    msg = (f"🎯 <b>OBJETIVO EMA200 — {nombre}</b>\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"💰 Precio: ${precio:,.2f} MXN\n"
+                           f"✅ EMA200: ${ema200:,.2f} MXN — llegaste\n"
+                           f"━━━━━━━━━━━━━━━\n"
+                           f"💡 Considera tomar 50% de la posición\n"
+                           f"⏰ {datetime.now().strftime('%H:%M')} ET")
+                    if tg_send(msg):
+                        print(f"[alertas] ✅ Objetivo EMA200 enviada — {nombre}")
                         alertas += 1
 
             print(f"[alertas] 📊 Ciclo completo — {alertas} alertas enviadas")
