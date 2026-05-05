@@ -15,7 +15,7 @@ API KEY GRATIS (800 calls/día):
 
 import sqlite3, requests, json, os, webbrowser, time, threading
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from collections import defaultdict
 from flask import Flask, Response, request as flask_req, jsonify
 
