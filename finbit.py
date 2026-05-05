@@ -1353,6 +1353,131 @@ def render_inicio_movimiento_panel(inicio: dict) -> str:
             f'{filas_html}</div>')
 
 
+def detectar_capitulacion(tf_1d: dict, values_raw: list) -> dict:
+    """
+    Detecta capitulación — el momento exacto donde el cuchillo se detiene.
+    Requiere los 3 elementos juntos:
+      1. Volumen de capitulación: último día >= 3x el promedio de 20 días
+      2. Patrón de vela de reversión: martillo, envolvente alcista o estrella mañana
+      3. Divergencia RSI alcista: precio baja más pero RSI no confirma
+    Los 3 juntos = señal de alta convicción. 2/3 = señal moderada.
+    """
+    if not tf_1d or not tf_1d.get("valido") or not values_raw:
+        return {"es_capitulacion": False, "nivel": 0, "desc": "", "criterios": []}
+
+    vol_rel   = tf_1d.get("vol_rel", 0)
+    div_rsi   = tf_1d.get("div_rsi", {}) or {}
+    patron    = tf_1d.get("patron_velas", {}) or {}
+    rsi       = tf_1d.get("rsi", 50)
+    obv_info  = tf_1d.get("obv", {}) or {}
+
+    criterios = []
+
+    # ── Criterio 1: Volumen de capitulación ───────────────────────────────
+    vol_cap = vol_rel >= 3.0
+    vol_mod = vol_rel >= 2.0 and not vol_cap
+    if vol_cap:
+        criterios.append(f"🔥 Volumen {vol_rel:.1f}x — capitulación extrema, vendedores agotados")
+    elif vol_mod:
+        criterios.append(f"⚡ Volumen {vol_rel:.1f}x — actividad inusual significativa")
+
+    # ── Criterio 2: Patrón de vela de reversión ───────────────────────────
+    tiene_patron = patron.get("ok", False)
+    if tiene_patron:
+        criterios.append(patron.get("desc", "Patrón de reversión alcista"))
+
+    # ── Criterio 3: Divergencia RSI alcista ───────────────────────────────
+    tiene_div_rsi = div_rsi.get("alcista", False)
+    if tiene_div_rsi:
+        criterios.append("📈 Divergencia RSI alcista — precio baja pero RSI sube")
+
+    # ── Criterio 4 (bonus): OBV divergencia alcista ───────────────────────
+    tiene_div_obv = obv_info.get("div_alcista", False)
+    if tiene_div_obv:
+        criterios.append("💡 Divergencia OBV — institucionales acumulando en silencio")
+
+    # ── Criterio 5 (bonus): RSI en zona de sobreventa ─────────────────────
+    rsi_sobreventa = rsi <= 35
+    if rsi_sobreventa:
+        criterios.append(f"📉 RSI {rsi:.0f} — sobreventa, presión vendedora casi agotada")
+
+    # Contar criterios principales (vol + patron + div_rsi)
+    principales = sum([vol_cap or vol_mod, tiene_patron, tiene_div_rsi])
+
+    if principales == 3 and vol_cap:
+        nivel = 3
+        desc  = "🔔 Capitulación confirmada — los 3 elementos presentes con volumen extremo"
+    elif principales == 3:
+        nivel = 2
+        desc  = "🔔 Capitulación probable — volumen + patrón + divergencia RSI"
+    elif principales == 2 and vol_cap:
+        nivel = 2
+        desc  = "⚠️ Posible capitulación — volumen extremo + señal técnica"
+    elif principales == 2:
+        nivel = 1
+        desc  = "👁 Señal moderada — 2 de 3 elementos de capitulación presentes"
+    else:
+        return {"es_capitulacion": False, "nivel": 0, "desc": "", "criterios": criterios}
+
+    return {
+        "es_capitulacion": True,
+        "nivel":           nivel,
+        "desc":            desc,
+        "criterios":       criterios,
+        "vol_rel":         vol_rel,
+        "tiene_patron":    tiene_patron,
+        "tiene_div_rsi":   tiene_div_rsi,
+        "tiene_div_obv":   tiene_div_obv,
+        "rsi_sobreventa":  rsi_sobreventa,
+    }
+
+
+def badge_capitulacion(cap: dict) -> str:
+    """Badge compacto para la tabla del scanner."""
+    if not cap or not cap.get("es_capitulacion"):
+        return ""
+    nivel = cap.get("nivel", 0)
+    if nivel == 3:
+        return ('<span style="display:inline-flex;padding:2px 8px;border-radius:20px;'
+                'font-size:9px;font-weight:700;white-space:nowrap;'
+                'background:#1e1b4b;color:#a5b4fc;border:2px solid #6366f1;margin-left:4px">'
+                '🔔 Capitulación</span>')
+    elif nivel == 2:
+        return ('<span style="display:inline-flex;padding:2px 8px;border-radius:20px;'
+                'font-size:9px;font-weight:700;white-space:nowrap;'
+                'background:#fdf4ff;color:#7e22ce;border:2px solid #d8b4fe;margin-left:4px">'
+                '🔔 Cap. probable</span>')
+    else:
+        return ('<span style="display:inline-flex;padding:2px 8px;border-radius:20px;'
+                'font-size:9px;font-weight:700;white-space:nowrap;'
+                'background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;margin-left:4px">'
+                '👁 Cap. moderada</span>')
+
+
+def render_capitulacion_panel(cap: dict) -> str:
+    """Panel detallado en el detail del scanner."""
+    if not cap or not cap.get("es_capitulacion"):
+        return ""
+    nivel   = cap.get("nivel", 0)
+    desc    = cap.get("desc", "")
+    crits   = cap.get("criterios", [])
+    color_bg  = "#1e1b4b" if nivel == 3 else "#fdf4ff" if nivel == 2 else "#f5f3ff"
+    color_brd = "#6366f1" if nivel == 3 else "#d8b4fe" if nivel == 2 else "#ddd6fe"
+    color_txt = "#a5b4fc" if nivel == 3 else "#7e22ce" if nivel == 2 else "#6d28d9"
+
+    crits_html = "".join(f'<div style="margin-top:4px;font-size:11px">• {c}</div>' for c in crits)
+
+    return (f'<div style="background:{color_bg};border:2px solid {color_brd};border-radius:10px;'
+            f'padding:14px 16px;margin-bottom:10px">'
+            f'<div style="font-weight:700;font-size:13px;color:{color_txt};margin-bottom:6px">'
+            f'🔔 {desc}</div>'
+            f'<div style="color:{color_txt}">{crits_html}</div>'
+            f'<div style="margin-top:10px;font-size:11px;color:{color_txt};opacity:0.8">'
+            f'⚠️ Usa siempre stop loss. La capitulación puede ser falsa si hay problemas fundamentales. '
+            f'Confirma con el precio del día siguiente antes de entrar.</div>'
+            f'</div>')
+
+
 def badge_ganga(ganga: dict) -> str:
     """Badge compacto para la tabla — solo aparece si es_ganga=True."""
     if not ganga or not ganga.get("es_ganga"):
@@ -3260,6 +3385,10 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
             # ── INICIO DE MOVIMIENTO: anticipación al breakout ──
             inicio_info = detectar_inicio_movimiento(tf_1d)
 
+            # ── CAPITULACIÓN: cuchillo que se detiene ──────────────────────
+            values_raw = _get_cached(symbol, "1day", exchange) or []
+            cap_info = detectar_capitulacion(tf_1d, values_raw)
+
             try:
                 guardar_score(nombre, score, tf_1d.get("senal", "—"), vix, precio_usd, estado)
             except Exception: pass
@@ -3300,6 +3429,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "dca": dca_plan,
                 "ganga": ganga_info,
                 "inicio": inicio_info,
+                "capitulacion": cap_info,
             })
         except Exception as e:
             print(f"  [scanner] ❌ Error procesando {nombre}: {e}")
@@ -3916,10 +4046,26 @@ def _puntuacion_top(r: dict) -> float:
     rr     = r.get("rr", 0)
     ganga  = r.get("ganga", {})
     inicio = r.get("inicio", {})
+    cap    = r.get("capitulacion", {})
 
     es_ganga  = isinstance(ganga, dict) and ganga.get("es_ganga", False)
     nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
-    bonus = 2 if es_ganga else 1.5 if nivel_str == "pre_breakout" else 0.5 if nivel_str == "listo" else 0
+    es_cap    = isinstance(cap, dict) and cap.get("es_capitulacion", False)
+    nivel_cap = cap.get("nivel", 0) if es_cap else 0
+
+    # Bonus: Ganga=2, Capitulación nivel 3=2.5, nivel 2=1.8, Pre-breakout=1.5, Listo=0.5
+    if es_cap and nivel_cap == 3:
+        bonus = 2.5
+    elif es_cap and nivel_cap == 2:
+        bonus = 1.8
+    elif es_ganga:
+        bonus = 2.0
+    elif nivel_str == "pre_breakout":
+        bonus = 1.5
+    elif nivel_str == "listo":
+        bonus = 0.5
+    else:
+        bonus = 0
 
     score_pct = (score / total) if total > 0 else 0
     rr_norm   = min(rr / 10.0, 1.0)
@@ -3978,7 +4124,8 @@ def actualizar_top_diario(scan_data: list) -> None:
             es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
             es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
             nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
-            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion")):
+            es_cap_r = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
+            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r):
                 continue
             ticker = r.get("nombre", "")
             if not ticker:
@@ -4817,7 +4964,8 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
         es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
         es_inicio = isinstance(inicio, dict) and inicio.get("es_inicio", False)
         nivel_str = inicio.get("nivel", "") if es_inicio else ""
-        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion")
+        es_cap    = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
+        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion") or es_cap
         if not tiene_setup:
             continue
         puntuacion = _puntuacion_top(r)
@@ -5018,6 +5166,7 @@ def render_scan_rows(scanner, tc):
         setup_badge = badge_setup(tipo_setup) if tipo_setup not in ("—","Bloqueado","Salida urgente") else ""
         ganga_badge  = badge_ganga(r.get("ganga", {}))
         inicio_badge = badge_inicio_movimiento(r.get("inicio", {}))
+        cap_badge    = badge_capitulacion(r.get("capitulacion", {}))
 
         # Badge volumen inusual
         vol_rel_val  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0) or 0
@@ -5101,6 +5250,7 @@ def render_scan_rows(scanner, tc):
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
                 f'{render_ganga_panel(r.get("ganga", {}))}'
+                f'{render_capitulacion_panel(r.get("capitulacion", {}))}'
                 f'{render_inicio_movimiento_panel(r.get("inicio", {}))}'
                 f'{decision_html}'
                 f'{etf_warning}'
@@ -5147,7 +5297,7 @@ def render_scan_rows(scanner, tc):
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{inicio_badge}{sr_badge}{vol_badge}{dist_badge}{cartera_badge}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{inicio_badge}{sr_badge}{vol_badge}{dist_badge}{cap_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {(r["precio_usd"] or 0):.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
