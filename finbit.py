@@ -168,6 +168,7 @@ def _loop_backup_github():
     """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
     time.sleep(300)   # esperar 5 min después de arrancar
     ultimo_dia = datetime.now().day
+    ultimo_reset_top = -1   # hora del último reset del top diario
     while True:
         db_backup_to_github()
         # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
@@ -177,6 +178,18 @@ def _loop_backup_github():
             _KEYS_AGOTADAS = set()
             ultimo_dia = dia_actual
             print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
+        # Reset del Top Diario a las 8:00 AM CDMX (una vez por hora 8)
+        hora_cdmx = _hora_cdmx()
+        if hora_cdmx == 8 and ultimo_reset_top != dia_actual:
+            try:
+                con = sqlite3.connect(DB_FILE)
+                con.execute("DELETE FROM top_diario_acumulado")
+                con.commit()
+                con.close()
+                ultimo_reset_top = dia_actual
+                print("[top_diario] 🔄 Reset a las 8:00 AM CDMX — Top del Día limpiado")
+            except Exception as e:
+                print(f"[top_diario] ⚠️ Error en reset: {e}")
         time.sleep(3600)  # cada hora
 
 
@@ -290,7 +303,7 @@ def _loop_alertas_telegram():
             try:
                 vix_vals = api_timeseries("VIX", "1day", 5)
                 if vix_vals:
-                    vix = float(vix_vals[0].get("close", 20.0))
+                    vix = float(vix_vals[-1].get("close", 20.0))  # [-1] = vela más reciente
             except Exception:
                 pass
 
@@ -450,6 +463,12 @@ def init_db():
         mercado TEXT DEFAULT 'SIC', activo INTEGER DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS top_diario_acumulado (
+        ticker      TEXT PRIMARY KEY,
+        fecha       TEXT NOT NULL,
+        puntuacion  REAL NOT NULL,
+        datos_json  TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS tickers (
         id       INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker   TEXT UNIQUE NOT NULL,
@@ -938,57 +957,115 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
                       stop_mxn: float, objetivo_mxn: float,
                       titulos: float) -> dict:
     """
-    Panel de gestión activa para posiciones abiertas.
-    Calcula: breakeven, nivel de parciales, cuándo agregar, estado de la operación.
+    Estrategia de salida escalonada para swing trading:
+      Nivel 1 (+8-10%)  → vender 25% (1 titulo si tienes 4, etc.)
+      Nivel 2 (+15%)    → vender 25% adicional
+      Nivel 3 (EMA200)  → vender 25% adicional
+      Nivel 4           → dejar correr con trailing stop al 97%
+    Stop loss siempre — sin excepciones.
     """
     if not precio_entrada_mxn or precio_entrada_mxn <= 0:
         return {}
 
-    ganancia_pct  = (precio_actual_mxn - precio_entrada_mxn) / precio_entrada_mxn * 100
-    riesgo_orig   = precio_entrada_mxn - stop_mxn if stop_mxn else 0
-    objetivo_pct  = (objetivo_mxn - precio_entrada_mxn) / precio_entrada_mxn * 100 if objetivo_mxn else 0
+    ganancia_pct = (precio_actual_mxn - precio_entrada_mxn) / precio_entrada_mxn * 100
+    riesgo_orig  = precio_entrada_mxn - stop_mxn if stop_mxn else 0
+    objetivo_pct = (objetivo_mxn - precio_entrada_mxn) / precio_entrada_mxn * 100 if objetivo_mxn else 0
 
-    # Breakeven: stop se mueve a precio de entrada + comisión (~0.3%)
-    breakeven     = precio_entrada_mxn * 1.003
+    # Breakeven: stop se mueve a entrada + comision GBM (~0.3%)
+    breakeven = precio_entrada_mxn * 1.003
 
-    # Nivel de parciales: 50% del camino al objetivo
-    parciales_50  = precio_entrada_mxn + (objetivo_mxn - precio_entrada_mxn) * 0.5 if objetivo_mxn else None
+    # Niveles de la estrategia escalonada
+    nivel1_precio = precio_entrada_mxn * 1.09   # +9% — punto medio de 8-10%
+    nivel2_precio = precio_entrada_mxn * 1.15   # +15%
+    nivel3_precio = objetivo_mxn or (precio_entrada_mxn * 1.25)  # EMA200 u objetivo
 
-    # Estado de la operación
-    if ganancia_pct >= objetivo_pct * 0.9:
-        estado_op   = "🎯 En objetivo"
-        accion      = "Considera cerrar posición completa o tomar 75% de ganancias"
-        color       = "var(--green)"
-    elif ganancia_pct >= objetivo_pct * 0.5:
-        estado_op   = "✅ En zona de parciales"
-        accion      = f"Toma 50% de la posición ({titulos/2:.2f} tít). Mueve stop a breakeven {fmt(breakeven)}"
-        color       = "var(--green)"
-    elif ganancia_pct >= 3.0:
-        estado_op   = "📈 Posición con ganancia"
-        accion      = f"Mueve stop a breakeven ({fmt(breakeven)}). Dejar correr."
-        color       = "var(--green)"
-    elif ganancia_pct >= -1.0:
-        estado_op   = "〰️ En breakeven"
-        accion      = "Mantener. Si cae al stop original, salir sin dudar."
-        color       = "var(--yellow)"
-    elif ganancia_pct >= -5.0:
-        estado_op   = "⚠️ En pérdida controlada"
-        accion      = f"Stop en {fmt(stop_mxn)}. NO promediar a la baja."
-        color       = "var(--yellow)"
+    tit_vender_n1 = max(1, round(titulos * 0.25))
+    tit_vender_n2 = max(1, round(titulos * 0.25))
+    tit_vender_n3 = max(1, round(titulos * 0.25))
+
+    # Trailing stop: 3% debajo del precio actual (protege ganancia en Nivel 4)
+    trailing_stop = precio_actual_mxn * 0.97
+
+    # Determinar en qué nivel estamos
+    if ganancia_pct < -8:
+        nivel_actual = "stop"
+        estado_op    = "🔴 Stop loss — SALIR YA"
+        accion       = f"Precio {ganancia_pct:.1f}% abajo de tu entrada. SALIR en {fmt(stop_mxn or precio_actual_mxn)} MXN. El stop existe para proteger tu capital."
+        color        = "var(--red)"
+        urgente      = True
+
+    elif ganancia_pct < -3:
+        nivel_actual = "vigilar"
+        estado_op    = "⚠️ En pérdida — vigilar stop"
+        accion       = f"Pérdida de {ganancia_pct:.1f}%. Stop en {fmt(stop_mxn)} MXN. NO promediar a la baja. Si toca el stop, salir sin dudar."
+        color        = "var(--yellow)"
+        urgente      = False
+
+    elif ganancia_pct < 0:
+        nivel_actual = "breakeven"
+        estado_op    = "〰️ Cerca de entrada"
+        accion       = f"Pérdida pequeña ({ganancia_pct:.1f}%). Mantener stop en {fmt(stop_mxn)}. Esperar que el setup se active."
+        color        = "var(--yellow)"
+        urgente      = False
+
+    elif ganancia_pct < 8:
+        nivel_actual = "0"
+        estado_op    = "📈 En ganancia — aún no vender"
+        accion       = (f"Ganancia de +{ganancia_pct:.1f}%. Mueve el stop a breakeven ({fmt(breakeven)}) "
+                        f"para operar sin riesgo. Espera +9% para vender el primer 25%.")
+        color        = "var(--green)"
+        urgente      = False
+
+    elif ganancia_pct < 15:
+        nivel_actual = "1"
+        estado_op    = "🎯 NIVEL 1 — Vender 25%"
+        accion       = (f"Ganancia +{ganancia_pct:.1f}%. ✅ Vende {tit_vender_n1} título(s) ({fmt(precio_actual_mxn)} MXN c/u). "
+                        f"Mueve stop a breakeven ({fmt(breakeven)}). Espera +15% para el siguiente 25%.")
+        color        = "var(--green)"
+        urgente      = False
+
+    elif ganancia_pct < (objetivo_pct * 0.85 if objetivo_pct > 15 else 25):
+        nivel_actual = "2"
+        estado_op    = "🎯 NIVEL 2 — Vender otro 25%"
+        accion       = (f"Ganancia +{ganancia_pct:.1f}%. ✅ Vende {tit_vender_n2} título(s) más ({fmt(precio_actual_mxn)} MXN c/u). "
+                        f"Stop ya en breakeven. Espera EMA200 ({fmt(nivel3_precio)}) para el 25% siguiente.")
+        color        = "var(--green)"
+        urgente      = False
+
+    elif objetivo_mxn and precio_actual_mxn >= objetivo_mxn * 0.90:
+        nivel_actual = "3"
+        estado_op    = "🏁 NIVEL 3 — Vender otro 25% (objetivo/EMA200)"
+        accion       = (f"Precio cerca del objetivo ({fmt(objetivo_mxn)}). ✅ Vende {tit_vender_n3} título(s) más. "
+                        f"El último {25}% lo dejas correr con trailing stop al 97% ({fmt(trailing_stop)}).")
+        color        = "#d4a017"
+        urgente      = False
+
     else:
-        estado_op   = "🔴 Stop loss inminente"
-        accion      = f"SALIR en {fmt(stop_mxn)} MXN. No negociar con el stop."
-        color       = "var(--red)"
+        nivel_actual = "4"
+        estado_op    = "🚀 NIVEL 4 — Dejar correr"
+        accion       = (f"Ganancia +{ganancia_pct:.1f}%. Ya vendiste 75%. El último lote corre libre. "
+                        f"Trailing stop en {fmt(trailing_stop)} (97% del precio actual). Muévelo arriba cada semana.")
+        color        = "#7c3aed"
+        urgente      = False
 
     return {
-        "ganancia_pct":  round(ganancia_pct, 2),
-        "estado_op":     estado_op,
-        "accion":        accion,
-        "color":         color,
-        "breakeven":     round(breakeven, 2),
-        "parciales_50":  round(parciales_50, 2) if parciales_50 else None,
-        "riesgo_orig":   round(riesgo_orig, 2),
-        "objetivo_pct":  round(objetivo_pct, 2),
+        "ganancia_pct":   round(ganancia_pct, 2),
+        "estado_op":      estado_op,
+        "accion":         accion,
+        "color":          color,
+        "urgente":        urgente,
+        "nivel_actual":   nivel_actual,
+        "breakeven":      round(breakeven, 2),
+        "nivel1_precio":  round(nivel1_precio, 2),
+        "nivel2_precio":  round(nivel2_precio, 2),
+        "nivel3_precio":  round(nivel3_precio, 2),
+        "trailing_stop":  round(trailing_stop, 2),
+        "tit_vender_n1":  tit_vender_n1,
+        "tit_vender_n2":  tit_vender_n2,
+        "tit_vender_n3":  tit_vender_n3,
+        "objetivo_pct":   round(objetivo_pct, 2),
+        "riesgo_orig":    round(riesgo_orig, 2),
+        "parciales_50":   round(nivel1_precio, 2),  # compatibilidad legacy
     }
 
 
@@ -1371,28 +1448,33 @@ def adx(highs: list, lows: list, closes: list, n: int = 14) -> float:
 _MACRO_CACHE: dict = {}
 
 def get_vix() -> float:
-    """Obtiene el VIX (Fear Index) actual. <18=calma, 18-25=precaución, >25=pánico."""
+    """Obtiene el VIX (Fear Index) actual. <18=calma, 18-25=precaucion, >25=panico."""
     global _MACRO_CACHE
     if "vix" in _MACRO_CACHE:
         return _MACRO_CACHE["vix"]
-    # Fuente 1: TwelveData
+    # Intento 1: /quote con "VIX" — acepta close o previous_close (fuera de horario)
     try:
-        r = requests.get(f"{API_BASE}/quote", params={"symbol":"VIX","apikey":API_KEY}, timeout=8)
+        r = requests.get(f"{API_BASE}/quote", params={"symbol": "VIX", "apikey": API_KEY}, timeout=8)
         d = r.json()
-        if "close" in d:
-            v = float(d["close"])
-            _MACRO_CACHE["vix"] = v
-            return v
-    except Exception: pass
-    # Fuente 2: serie histórica de TwelveData
+        val = d.get("close") or d.get("previous_close")
+        if val:
+            v = float(val)
+            if 5 < v < 90:
+                _MACRO_CACHE["vix"] = v
+                return v
+    except Exception:
+        pass
+    # Intento 2: timeseries — vals[-1] es la vela MAS RECIENTE (no [0])
     try:
         vals = api_timeseries("VIX", "1day", 5, "")
         if vals:
             v = float(vals[-1]["close"])
-            _MACRO_CACHE["vix"] = v
-            return v
-    except Exception: pass
-    # Fallback neutro: asumimos VIX moderado para no bloquear todo
+            if 5 < v < 90:
+                _MACRO_CACHE["vix"] = v
+                return v
+    except Exception:
+        pass
+    # Fallback neutro
     _MACRO_CACHE["vix"] = 20.0
     return 20.0
 
@@ -1916,36 +1998,88 @@ def render_sector_panel(sector_info: dict) -> str:
 
 
 def render_gestion_panel(gestion: dict, precio_actual_mxn: float, stop_mxn: float) -> str:
-    """Panel de gestión de posición abierta — qué hacer ahora con la posición."""
+    """Panel de estrategia de salida escalonada — 4 niveles claros."""
     if not gestion:
         return '<p class="hint" style="font-size:11px">Registra tu precio de entrada para ver la gestión</p>'
 
-    color   = gestion.get("color","var(--muted)")
-    estado  = gestion.get("estado_op","—")
-    accion  = gestion.get("accion","—")
-    pct     = gestion.get("ganancia_pct",0)
-    be      = gestion.get("breakeven")
-    parc    = gestion.get("parciales_50")
+    color      = gestion.get("color", "var(--muted)")
+    estado     = gestion.get("estado_op", "—")
+    accion     = gestion.get("accion", "—")
+    pct        = gestion.get("ganancia_pct", 0)
+    urgente    = gestion.get("urgente", False)
+    nivel      = gestion.get("nivel_actual", "0")
+    be         = gestion.get("breakeven")
+    n1         = gestion.get("nivel1_precio")
+    n2         = gestion.get("nivel2_precio")
+    n3         = gestion.get("nivel3_precio")
+    trail      = gestion.get("trailing_stop")
+    pct_col    = "var(--green)" if pct >= 0 else "var(--red)"
+    borde      = "2px solid var(--red)" if urgente else f"2px solid {color}"
 
-    pct_str = f"{pct:+.1f}%"
-    pct_col = "var(--green)" if pct >= 0 else "var(--red)"
+    # Mapa visual de los 4 niveles
+    def _nivel_dot(n_id, label, precio, activo, completado):
+        if completado:
+            bg, txt, ring = "#14532d", "#86efac", "var(--green)"
+        elif activo:
+            bg, txt, ring = "#1e3a5f", "#93c5fd", "#3b82f6"
+        else:
+            bg, txt, ring = "var(--surface)", "var(--muted)", "var(--brd)"
+        icon = "✅" if completado else ("▶" if activo else "○")
+        precio_txt = fmt(precio) if precio else "—"
+        return (
+            f'<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">'
+            f'<div style="width:28px;height:28px;border-radius:50%;background:{bg};border:2px solid {ring};'
+            f'display:flex;align-items:center;justify-content:center;font-size:12px">{icon}</div>'
+            f'<div style="font-size:9px;font-weight:700;color:{txt};text-align:center">{label}</div>'
+            f'<div style="font-size:9px;color:var(--muted);font-family:var(--mono)">{precio_txt}</div>'
+            f'</div>'
+        )
 
-    h = (f'<div style="border-left:3px solid {color};padding:9px 12px;background:var(--surface2);border-radius:0 6px 6px 0">'
-         f'<div style="font-weight:600;font-size:12px;color:{color};margin-bottom:5px">{estado}</div>'
-         f'<div style="font-size:11px;margin-bottom:8px">{accion}</div>'
-         f'<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px">')
+    en_stop    = nivel == "stop"
+    en_n0      = nivel == "0"
+    en_n1      = nivel == "1"
+    en_n2      = nivel == "2"
+    en_n3      = nivel == "3"
+    en_n4      = nivel == "4"
 
-    h += f'<div><span style="color:var(--muted)">P&L: </span><span style="color:{pct_col};font-weight:600;font-family:var(--mono)">{pct_str}</span></div>'
+    dot1 = _nivel_dot("1", "+9%\n25%", n1,
+                       activo=en_n1, completado=en_n2 or en_n3 or en_n4)
+    dot2 = _nivel_dot("2", "+15%\n25%", n2,
+                       activo=en_n2, completado=en_n3 or en_n4)
+    dot3 = _nivel_dot("3", "EMA200\n25%", n3,
+                       activo=en_n3, completado=en_n4)
+    dot4 = _nivel_dot("4", "Trail\nCorrer", trail,
+                       activo=en_n4, completado=False)
 
+    linea = f'<div style="flex:0 0 20px;height:2px;background:var(--brd);margin-top:13px"></div>'
+    mapa = (
+        f'<div style="display:flex;align-items:flex-start;gap:0;margin:10px 0 4px">'
+        f'{dot1}{linea}{dot2}{linea}{dot3}{linea}{dot4}'
+        f'</div>'
+    )
+
+    # Stats rápidos
+    stats = (
+        f'<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;margin-top:8px">'
+        f'<div><span style="color:var(--muted)">P&L: </span>'
+        f'<span style="color:{pct_col};font-weight:700;font-family:var(--mono)">{pct:+.1f}%</span></div>'
+    )
     if be:
-        h += f'<div><span style="color:var(--muted)">Breakeven: </span><span style="font-family:var(--mono)">{fmt(be)}</span></div>'
-    if parc:
-        h += f'<div><span style="color:var(--muted)">50% parciales: </span><span style="font-family:var(--mono);color:var(--green)">{fmt(parc)}</span></div>'
+        stats += f'<div><span style="color:var(--muted)">Breakeven: </span><span style="font-family:var(--mono)">{fmt(be)}</span></div>'
     if stop_mxn:
-        h += f'<div><span style="color:var(--muted)">Stop: </span><span style="font-family:var(--mono);color:var(--red)">{fmt(stop_mxn)}</span></div>'
+        stats += f'<div><span style="color:var(--muted)">Stop: </span><span style="font-family:var(--mono);color:var(--red)">{fmt(stop_mxn)}</span></div>'
+    if trail and (en_n4):
+        stats += f'<div><span style="color:var(--muted)">Trailing: </span><span style="font-family:var(--mono);color:#7c3aed">{fmt(trail)}</span></div>'
+    stats += '</div>'
 
-    h += '</div></div>'
-    return h
+    return (
+        f'<div style="border-left:3px solid {color};padding:10px 14px;background:var(--surface2);border-radius:0 8px 8px 0">'
+        f'<div style="font-weight:700;font-size:12px;color:{color};margin-bottom:4px">{estado}</div>'
+        f'<div style="font-size:11px;line-height:1.5;margin-bottom:6px">{accion}</div>'
+        f'{mapa}'
+        f'{stats}'
+        f'</div>'
+    )
 
 
 def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
@@ -3590,37 +3724,245 @@ def calcular_etapa(r: dict) -> tuple[str, str, str]:
     return ("⬜", "Sin etapa", "Sin etapa clara definida")
 
 
+def _puntuacion_top(r: dict) -> float:
+    """Fórmula unificada de puntuación para Top Diario y Semanal."""
+    score  = r.get("score_ajustado", r.get("score", 0))
+    total  = r.get("total_criterios", 11)
+    rr     = r.get("rr", 0)
+    ganga  = r.get("ganga", {})
+    inicio = r.get("inicio", {})
+
+    es_ganga  = isinstance(ganga, dict) and ganga.get("es_ganga", False)
+    nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
+    bonus = 2 if es_ganga else 1.5 if nivel_str == "pre_breakout" else 0.5 if nivel_str == "listo" else 0
+
+    score_pct = (score / total) if total > 0 else 0
+    rr_norm   = min(rr / 10.0, 1.0)
+    bonus_pct = bonus / 4.0
+    return (score_pct * 0.40) + (rr_norm * 0.40) + (bonus_pct * 0.20)
+
+
+def _fecha_hoy_cdmx() -> str:
+    """Fecha actual en formato YYYY-MM-DD para horario CDMX (UTC-6)."""
+    ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
+    return ahora_cdmx.strftime("%Y-%m-%d")
+
+
+def _hora_cdmx() -> int:
+    """Hora actual en CDMX (UTC-6) como entero."""
+    return (datetime.utcnow() - timedelta(hours=6)).hour
+
+
+def actualizar_top_diario(scan_data: list) -> None:
+    """
+    Persiste el mejor score de cada ticker visto hoy.
+    - Limpia registros de días anteriores.
+    - Ignora tickers con R:R < 3.
+    - Si el ticker ya existe hoy, actualiza solo si la puntuación mejoró.
+    - Reset automático: si el día cambió, borra todo antes de insertar.
+    """
+    hoy = _fecha_hoy_cdmx()
+    try:
+        con = sqlite3.connect(DB_FILE)
+        # Borrar registros de días anteriores (reset diario)
+        con.execute("DELETE FROM top_diario_acumulado WHERE fecha != ?", (hoy,))
+        con.commit()
+
+        for r in scan_data:
+            if r.get("rr", 0) < 3.0:
+                continue
+            ticker = r.get("nombre", "")
+            if not ticker:
+                continue
+            puntuacion = _puntuacion_top(r)
+            datos_json = json.dumps({
+                **r,
+                "_puntuacion": puntuacion,
+                "_es_ganga": isinstance(r.get("ganga", {}), dict) and r.get("ganga", {}).get("es_ganga", False),
+                "_nivel": (r.get("inicio", {}) or {}).get("nivel", "") if (r.get("inicio", {}) or {}).get("es_inicio") else "",
+            }, ensure_ascii=False)
+
+            cur = con.execute(
+                "SELECT puntuacion FROM top_diario_acumulado WHERE ticker=? AND fecha=?",
+                (ticker, hoy)
+            )
+            row = cur.fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO top_diario_acumulado (ticker, fecha, puntuacion, datos_json) VALUES (?,?,?,?)",
+                    (ticker, hoy, puntuacion, datos_json)
+                )
+            elif puntuacion > row[0]:
+                con.execute(
+                    "UPDATE top_diario_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND fecha=?",
+                    (puntuacion, datos_json, ticker, hoy)
+                )
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[top_diario] ⚠️ Error al actualizar: {e}")
+
+
+def obtener_top_diario(n: int = 5) -> list:
+    """Devuelve el Top N acumulado del día desde la DB."""
+    hoy = _fecha_hoy_cdmx()
+    resultado = []
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.execute(
+            "SELECT datos_json FROM top_diario_acumulado WHERE fecha=? ORDER BY puntuacion DESC LIMIT ?",
+            (hoy, n)
+        )
+        for row in cur.fetchall():
+            try:
+                resultado.append(json.loads(row[0]))
+            except Exception:
+                pass
+        con.close()
+    except Exception as e:
+        print(f"[top_diario] ⚠️ Error al obtener: {e}")
+    return resultado
+
+
+def render_top_diario_banner(top: list) -> str:
+    """Banner compacto del Top Diario para mostrar arriba del scanner."""
+    if not top:
+        return ""
+    items = []
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, r in enumerate(top):
+        nombre = r.get("nombre", "")
+        rr     = r.get("rr", 0)
+        badge  = ""
+        if r.get("_es_ganga"):
+            badge = ' <span style="color:#d4a017;font-size:9px">Ganga</span>'
+        elif r.get("_nivel") == "pre_breakout":
+            badge = ' <span style="color:#b45309;font-size:9px">4/5</span>'
+        items.append(
+            f'<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface);'
+            f'border:1px solid var(--brd);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer" '
+            f'onclick="showTab(\'topd\',document.querySelector(\'.nb[onclick*=topd]\'))" title="Ver Top Diario completo">'
+            f'{medals[i]} <strong>{nombre}</strong>{badge}'
+            f' <span style="color:var(--green);font-family:var(--mono)">{rr:.1f}x</span></span>'
+        )
+    hoy = _fecha_hoy_cdmx()
+    return (
+        f'<div style="background:linear-gradient(135deg,#0d1b2a,#1b2838);border:1px solid #00bfff33;'
+        f'border-radius:10px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;'
+        f'flex-wrap:wrap;gap:8px">'
+        f'<span style="color:#00bfff;font-weight:700;font-size:12px;margin-right:4px">📅 TOP DÍA {hoy}</span>'
+        f'{"".join(items)}'
+        f'</div>'
+    )
+
+
+def render_tab_top_diario(top: list, tc: float) -> str:
+    """Renderiza el tab completo de Top Diario Acumulado."""
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    razon_labels = {
+        "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
+        "listo":        ("🟢 Listo 5/5", "#15803d"),
+        "acumulacion":  ("🟡 Acumulación 3/5", "#d46b08"),
+    }
+    hoy = _fecha_hoy_cdmx()
+
+    if not top:
+        return f'''<div id="tab-topd" class="tab">
+          <div style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:48px;margin-bottom:16px">📅</div>
+            <div style="font-size:16px;font-weight:600">Sin candidatas hoy todavía</div>
+            <div style="font-size:13px;margin-top:8px">Corre el scanner para poblar el Top del Día. Se reinicia a las 8:00 AM CDMX.</div>
+          </div>
+        </div>'''
+
+    cards = []
+    for i, r in enumerate(top):
+        nombre    = r.get("nombre", "—")
+        precio    = r.get("precio_mxn", 0)
+        rr        = r.get("rr", 0)
+        score     = r.get("score_ajustado", r.get("score", 0))
+        total_c   = r.get("total_criterios", 11)
+        puntuacion = r.get("_puntuacion", 0)
+        es_ganga  = r.get("_es_ganga", False)
+        nivel     = r.get("_nivel", "")
+        inicio    = r.get("inicio", {}) or {}
+        sizing    = r.get("sizing", {}) or {}
+        ganga_d   = r.get("ganga", {}) or {}
+
+        label_txt, label_col = razon_labels.get(nivel, ("—", "var(--muted)"))
+        if es_ganga:
+            badge_html = f'<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">🏷️ Ganga</span>'
+        elif nivel == "pre_breakout":
+            badge_html = f'<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">⚡ Pre-breakout</span>'
+        else:
+            badge_html = ""
+
+        sl  = sizing.get("sl_mxn", inicio.get("sl_mxn", 0))
+        obj = sizing.get("objetivo_mxn", inicio.get("objetivo_mxn", 0))
+        pct_score = int((score / total_c * 100)) if total_c else 0
+        pct_puntuacion = int(puntuacion * 100)
+
+        cards.append(f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:14px;padding:20px;position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#00bfff,#0077b6)"></div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div style="font-size:28px;font-weight:800;letter-spacing:-1px;color:var(--text)">{medals[i]} {nombre}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${precio:,.2f} MXN</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:22px;font-weight:700;color:var(--green)">{rr:.1f}x</div>
+          <div style="font-size:11px;color:var(--muted)">R:R</div>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">{badge_html}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;font-size:12px">
+        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">SCORE</div>
+          <div style="font-weight:700">{score}/{total_c} <span style="color:var(--muted);font-weight:400">({pct_score}%)</span></div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">PUNTUACIÓN</div>
+          <div style="font-weight:700;color:#00bfff">{pct_puntuacion}%</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">STOP LOSS</div>
+          <div style="font-weight:600;color:var(--red)">${sl:,.2f}</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">OBJETIVO</div>
+          <div style="font-weight:600;color:var(--green)">${obj:,.2f}</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);text-align:right">Acumulado del día · Reset 8:00 AM CDMX</div>
+    </div>''')
+
+    cards_html = "\n".join(cards)
+    return f'''<div id="tab-topd" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
+    <p class="hint">Los mejores 5 de <strong>todos</strong> los tickers escaneados hoy · Se actualiza con cada scan · Se reinicia a las 8:00 AM CDMX</p>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+    {cards_html}
+  </div>
+  <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
+    💡 <strong>Recuerda:</strong> El Top del Día acumula los mejores scores de cada scan. Si escaneas 15 tickers y luego otros 15, el Top 5 definitivo vendrá de los 30. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado.
+  </div>
+</div>'''
+
+
 def calcular_top_semanal(scanner: list, n: int = 5) -> list:
     """Calcula el Top N del scanner usando Score + R:R + badge como fórmula."""
     candidatas = []
     for r in scanner:
-        score  = r.get("score_ajustado", r.get("score", 0))
-        total  = r.get("total_criterios", 11)
-        rr     = r.get("rr", 0)
-        ganga  = r.get("ganga", {})
-        inicio = r.get("inicio", {})
-
-        # Solo con R:R válido
-        if rr < 3.0:
+        if r.get("rr", 0) < 3.0:
             continue
-
-        # Badge bonus
-        bonus = 0
-        es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
+        ganga     = r.get("ganga", {})
+        inicio    = r.get("inicio", {})
+        es_ganga  = isinstance(ganga, dict) and ganga.get("es_ganga", False)
         nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
-        if es_ganga:
-            bonus = 2
-        elif nivel_str == "pre_breakout":
-            bonus = 1.5
-        elif nivel_str == "listo":
-            bonus = 0.5
-
-        # Fórmula: 40% score + 40% R:R normalizado + 20% badge
-        score_pct = (score / total) if total > 0 else 0
-        rr_norm   = min(rr / 10.0, 1.0)
-        bonus_pct = bonus / 4.0
-        puntuacion = (score_pct * 0.40) + (rr_norm * 0.40) + (bonus_pct * 0.20)
-
+        puntuacion = _puntuacion_top(r)
         candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
 
     candidatas.sort(key=lambda x: x["_puntuacion"], reverse=True)
@@ -4347,6 +4689,12 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     top_banner_html = render_top_semanal_banner(top_semanal)
     top_tab_html   = render_tab_top_semanal(top_semanal, tc)
 
+    # ── TOP DIARIO ACUMULADO ─────────────────────────────────
+    actualizar_top_diario(scan_data)
+    top_diario      = obtener_top_diario(n=5)
+    top_diario_banner_html = render_top_diario_banner(top_diario)
+    top_diario_tab_html    = render_tab_top_diario(top_diario, tc)
+
     n_radar =len(radar_data)
     n_rocket=sum(1 for r in radar_data if r["estado"]=="ROCKET")
     n_buy   =sum(1 for r in radar_data if r["estado"]=="BUY")
@@ -4570,6 +4918,7 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('historial',this)">Historial</button>
   <button class="nb active" onclick="showTab('scanner',this)">Scanner</button>
   <button class="nb" onclick="showTab('top',this)">🏆 Top Semanal</button>
+  <button class="nb" onclick="showTab('topd',this)">📅 Top Diario</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
@@ -4757,6 +5106,7 @@ td strong{{font-size:13px;font-weight:500}}
 
 <!-- ══ SCANNER ══ -->
 <div id="tab-scanner" class="tab active">
+  {top_diario_banner_html}
   {top_banner_html}
   {que_hago_hoy}
   <div style="padding:20px 0 14px">
@@ -4885,6 +5235,8 @@ td strong{{font-size:13px;font-weight:500}}
 </div>
 
 {top_tab_html}
+
+{top_diario_tab_html}
 
 <!-- ══ RADAR ══ -->
 <div id="tab-radar" class="tab">
