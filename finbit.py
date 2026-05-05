@@ -7553,7 +7553,7 @@ setTimeout(calcRiesgo, 100);
 <script>
 const TC = {tc:.4f};
 const PORT_BASE = {port_json};
-const scan_json = {scan_data_json};
+const scan_json = __SCAN_DATA_JSON__;
 
 // ── Tabs ─────────────────────────────────────────────────
 function showTab(name,btn){{
@@ -8285,7 +8285,7 @@ function actualizarDashboard() {{
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
-</script></body></html>"""
+</script></body></html>""".replace("__SCAN_DATA_JSON__", scan_data_json)
 
 
 # ── IMPORTAR OPS ──────────────────────────────────────────
