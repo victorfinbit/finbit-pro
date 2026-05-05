@@ -2630,7 +2630,7 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     # (se asigna después en analizar_ticker, aquí placeholder)
     sector_ok = True   # se sobreescribe en analizar_ticker si aplica
 
-
+    precio   = float(c.iloc[-1])
     soporte  = float(c.rolling(min(20,n)).min().iloc[-1])
     # Máximo histórico solo como referencia de resistencia, NO como objetivo
     max_20   = float(c.rolling(min(20,n)).max().iloc[-1])
