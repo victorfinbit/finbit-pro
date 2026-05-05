@@ -168,7 +168,8 @@ def _loop_backup_github():
     """Hilo que respalda la DB en GitHub cada 60 minutos y resetea keys a medianoche."""
     time.sleep(300)   # esperar 5 min después de arrancar
     ultimo_dia = datetime.now().day
-    ultimo_reset_top = -1   # hora del último reset del top diario
+    ultimo_reset_top    = -1   # hora del último reset del top diario
+    ultima_semana_reset = ""   # semana del último reset semanal
     while True:
         db_backup_to_github()
         # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
@@ -178,7 +179,7 @@ def _loop_backup_github():
             _KEYS_AGOTADAS = set()
             ultimo_dia = dia_actual
             print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
-        # Reset del Top Diario a las 8:00 AM CDMX (una vez por hora 8)
+        # Reset del Top Diario a las 8:00 AM CDMX (una vez por día)
         hora_cdmx = _hora_cdmx()
         if hora_cdmx == 8 and ultimo_reset_top != dia_actual:
             try:
@@ -190,6 +191,20 @@ def _loop_backup_github():
                 print("[top_diario] 🔄 Reset a las 8:00 AM CDMX — Top del Día limpiado")
             except Exception as e:
                 print(f"[top_diario] ⚠️ Error en reset: {e}")
+        # Reset del Top Semanal los LUNES a las 8:00 AM CDMX
+        ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
+        es_lunes   = ahora_cdmx.weekday() == 0  # 0 = lunes
+        semana_act = ahora_cdmx.strftime("%G-W%V")
+        if es_lunes and hora_cdmx == 8 and ultima_semana_reset != semana_act:
+            try:
+                con = sqlite3.connect(DB_FILE)
+                con.execute("DELETE FROM top_semanal_acumulado")
+                con.commit()
+                con.close()
+                ultima_semana_reset = semana_act
+                print(f"[top_semanal] 🔄 Reset lunes 8:00 AM CDMX — semana {semana_act} iniciada")
+            except Exception as e:
+                print(f"[top_semanal] ⚠️ Error en reset: {e}")
         time.sleep(3600)  # cada hora
 
 
@@ -464,6 +479,12 @@ def init_db():
     CREATE TABLE IF NOT EXISTS top_diario_acumulado (
         ticker      TEXT PRIMARY KEY,
         fecha       TEXT NOT NULL,
+        puntuacion  REAL NOT NULL,
+        datos_json  TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS top_semanal_acumulado (
+        ticker      TEXT PRIMARY KEY,
+        semana      TEXT NOT NULL,
         puntuacion  REAL NOT NULL,
         datos_json  TEXT NOT NULL
     );
@@ -4084,6 +4105,105 @@ def _hora_cdmx() -> int:
     return (datetime.utcnow() - timedelta(hours=6)).hour
 
 
+def _semana_actual_cdmx() -> str:
+    """Devuelve la semana actual como 'YYYY-WXX' basado en el lunes de la semana CDMX."""
+    ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
+    # ISO week: lunes=inicio de semana
+    return ahora_cdmx.strftime("%G-W%V")
+
+
+def actualizar_top_semanal_acum(scan_data: list) -> None:
+    """
+    Persiste el mejor score de cada ticker visto esta semana (lunes-viernes).
+    Reset automático cada lunes a las 8:00 AM CDMX.
+    Misma lógica que top diario pero con ventana semanal.
+    """
+    semana = _semana_actual_cdmx()
+    try:
+        con = sqlite3.connect(DB_FILE)
+        # Borrar semanas anteriores
+        con.execute("DELETE FROM top_semanal_acumulado WHERE semana != ?", (semana,))
+        con.commit()
+
+        for r in scan_data:
+            if r.get("rr", 0) < 3.0:
+                continue
+            if es_etf_apalancado(r.get("nombre", "")):
+                continue
+            score = r.get("score_ajustado", r.get("score", 0))
+            total = r.get("total_criterios", 13) or 13
+            if total > 0 and (score / total) < (5 / 13):
+                continue
+            estado = r.get("estado", "")
+            if estado in ("EXIT", "SHORT"):
+                continue
+            rsi = r.get("rsi", 50)
+            if not (30 <= rsi <= 65):
+                continue
+            inicio_r  = r.get("inicio", {}) or {}
+            ganga_r   = r.get("ganga", {}) or {}
+            cap_r     = r.get("capitulacion", {}) or {}
+            es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
+            es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
+            nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
+            es_cap_r    = isinstance(cap_r, dict) and cap_r.get("es_capitulacion", False)
+            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r):
+                continue
+
+            ticker = r.get("nombre", "")
+            if not ticker:
+                continue
+            puntuacion = _puntuacion_top(r)
+            datos_json = json.dumps({
+                **r,
+                "_puntuacion": puntuacion,
+                "_es_ganga": es_ganga_r,
+                "_nivel": nivel_r,
+                "_es_cap": es_cap_r,
+            }, ensure_ascii=False)
+
+            cur = con.execute(
+                "SELECT puntuacion FROM top_semanal_acumulado WHERE ticker=? AND semana=?",
+                (ticker, semana)
+            )
+            row = cur.fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO top_semanal_acumulado (ticker, semana, puntuacion, datos_json) VALUES (?,?,?,?)",
+                    (ticker, semana, puntuacion, datos_json)
+                )
+            elif puntuacion > row[0]:
+                con.execute(
+                    "UPDATE top_semanal_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND semana=?",
+                    (puntuacion, datos_json, ticker, semana)
+                )
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[top_semanal] ⚠️ Error al actualizar: {e}")
+
+
+def obtener_top_semanal_acum(n: int = 5) -> list:
+    """Devuelve el Top N acumulado de la semana desde la DB."""
+    semana = _semana_actual_cdmx()
+    resultado = []
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.execute(
+            "SELECT datos_json FROM top_semanal_acumulado WHERE semana=? ORDER BY puntuacion DESC LIMIT ?",
+            (semana, n)
+        )
+        for row in cur.fetchall():
+            try:
+                resultado.append(json.loads(row[0]))
+            except Exception:
+                pass
+        con.close()
+    except Exception as e:
+        print(f"[top_semanal] ⚠️ Error al obtener: {e}")
+    return resultado
+
+
 def actualizar_top_diario(scan_data: list) -> None:
     """
     Persiste el mejor score de cada ticker visto hoy.
@@ -4343,28 +4463,38 @@ def get_estadisticas_diario() -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None:
-    """Guarda un snapshot diario del capital para tracking de rendimiento."""
+    """Guarda o actualiza el snapshot diario del capital."""
     hoy = _fecha_hoy_cdmx()
     try:
         con = sqlite3.connect(DB_FILE)
         existe = con.execute(
             "SELECT id, capital FROM pnl_historico WHERE fecha=?", (hoy,)
         ).fetchone()
+
+        # Primer registro histórico para P&L acumulado
+        primer = con.execute(
+            "SELECT capital FROM pnl_historico ORDER BY fecha ASC LIMIT 1"
+        ).fetchone()
+        ultimo_ant = con.execute(
+            "SELECT capital FROM pnl_historico WHERE fecha != ? ORDER BY fecha DESC LIMIT 1", (hoy,)
+        ).fetchone()
+
+        pnl_dia  = capital_actual - ultimo_ant[0] if ultimo_ant else 0
+        cap_ini  = primer[0] if primer else capital_actual
+        pnl_acum = (capital_actual - cap_ini) / cap_ini * 100 if cap_ini else 0
+
         if not existe:
-            # Calcular P&L vs día anterior
-            ant = con.execute(
-                "SELECT capital FROM pnl_historico ORDER BY fecha DESC LIMIT 1"
-            ).fetchone()
-            pnl_dia = capital_actual - ant[0] if ant else 0
-            # P&L acumulado vs capital inicial (config)
-            cfg = cargar_config()
-            cap_ini = cfg.get("capital", capital_actual)
-            pnl_acum = (capital_actual - cap_ini) / cap_ini * 100 if cap_ini else 0
             con.execute(
                 "INSERT INTO pnl_historico (fecha, capital, pnl_dia_mxn, pnl_acum_pct, spy_precio) VALUES (?,?,?,?,?)",
                 (hoy, capital_actual, round(pnl_dia, 2), round(pnl_acum, 2), spy_precio)
             )
-            con.commit()
+        else:
+            # Actualizar si el capital cambió
+            con.execute(
+                "UPDATE pnl_historico SET capital=?, pnl_dia_mxn=?, pnl_acum_pct=?, spy_precio=? WHERE fecha=?",
+                (capital_actual, round(pnl_dia, 2), round(pnl_acum, 2), spy_precio, hoy)
+            )
+        con.commit()
         con.close()
     except Exception as e:
         print(f"[pnl] Error: {e}")
@@ -4931,6 +5061,50 @@ def render_tab_top_diario(top: list, tc: float) -> str:
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
     💡 <strong>Recuerda:</strong> El Top del Día acumula los mejores scores de cada scan. Si escaneas 15 tickers y luego otros 15, el Top 5 definitivo vendrá de los 30. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado.
   </div>
+
+  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:14px;font-size:12px;line-height:1.8">
+    <div style="font-weight:700;font-size:13px;margin-bottom:10px">📖 Estrategia de entrada — léela hasta aprenderla</div>
+
+    <div style="margin-bottom:10px">
+      <span style="color:var(--green);font-weight:700">Señal más fuerte:</span> cuando un ticker aparece en el Top Diario <strong>Y</strong> en el Top Semanal al mismo tiempo. Significa que es bueno hoy y ha sido bueno toda la semana.
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">⏰ ¿Cuándo usar cada Top?</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>• <strong>Lunes-miércoles</strong> — confía más en el Top Diario. La semana apenas empieza y el Semanal tiene pocos datos.</div>
+      <div>• <strong>Jueves-viernes</strong> — el Top Semanal ya tiene 3-4 días acumulados y es más confiable. Si algo sigue ahí al jueves, lleva varios días siendo la mejor oportunidad.</div>
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">✅ Flujo exacto antes de comprar</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>1. Pre-apertura 8-9 AM — revisas ambos tops</div>
+      <div>2. El ticker aparece en los dos → lo abres en el scanner</div>
+      <div>3. Pasa los 10 puntos de verificación → lo agregas a Watchlist</div>
+      <div>4. Esperas que el precio toque el nivel E1 del DCA</div>
+      <div>5. Entras con 1 título — no te aventures con todo de golpe</div>
+      <div>6. Si baja a E2 y el setup sigue válido → agregas otro título</div>
+      <div>7. Si baja a E3 y sigue válido → último título</div>
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">🔟 Los 10 puntos de verificación antes de entrar</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>1. ¿Aparece en Top Diario y Top Semanal?</div>
+      <div>2. Score ≥ 8/13</div>
+      <div>3. R:R ≥ 3x — sin esto no entras, sin excepción</div>
+      <div>4. RSI entre 30-65</div>
+      <div>5. ¿Tiene badge Ganga, Pre-breakout o Capitulación?</div>
+      <div>6. ¿Divergencia RSI alcista?</div>
+      <div>7. ¿Patrón de vela? (martillo, envolvente o estrella de la mañana)</div>
+      <div>8. ¿Distancia al soporte ≤ 3%? (badge verde 🎯)</div>
+      <div>9. ¿Sector alcista?</div>
+      <div>10. Registrar con diario obligatorio — escribe por qué entras antes de ejecutar</div>
+    </div>
+
+    <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--muted)">
+      ⚠️ <strong>La clave es la paciencia</strong> — no entres solo porque aparece en el Top. Espera que el precio llegue a tu nivel E1 del DCA. Si no llega, no pasa nada — habrá otra oportunidad. Más vale perderse una entrada que entrar mal.
+    </div>
+  </div>
+  </div>
 </div>'''
 
 
@@ -5117,7 +5291,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
     return f'''<div id="tab-top" class="tab">
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
-    <p class="hint">Las mejores oportunidades del scanner esta semana · Fórmula: Score 40% + R:R 40% + Badge 20% · Solo R:R ≥ 3x</p>
+    <p class="hint">Los mejores de <strong>todos</strong> los tickers escaneados esta semana · Se acumula de lunes a viernes · Reset cada lunes 8:00 AM CDMX</p>
     <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
       <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top Semanal?</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
@@ -5128,14 +5302,58 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         <div>✅ <strong>Sin ETFs apalancados</strong> — SOXS, SOXL, TQQQ etc. excluidos por decay</div>
         <div>✅ <strong>No en EXIT ni SHORT</strong> — ticker técnicamente deteriorado queda fuera</div>
       </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">El ranking final usa: 40% score técnico + 40% R:R normalizado + 20% badge (Ganga vale más que Pre-breakout).</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">El ranking usa: 40% score técnico + 40% R:R normalizado + 20% badge. Se acumula toda la semana — si el lunes escaneas 10 tickers y el miércoles otros 10, el Top 5 es de los 20. Reset cada lunes 8:00 AM CDMX.</div>
     </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
   </div>
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
-    💡 <strong>Recuerda:</strong> El Top Semanal es una guía, no una señal de entrada. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado antes de operar.
+    💡 <strong>Recuerda:</strong> El Top Semanal acumula toda la semana. Si algo sigue aquí el jueves, lleva días siendo la mejor oportunidad. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado antes de operar.
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:14px;font-size:12px;line-height:1.8">
+    <div style="font-weight:700;font-size:13px;margin-bottom:10px">📖 Estrategia de entrada — léela hasta aprenderla</div>
+
+    <div style="margin-bottom:10px">
+      <span style="color:var(--green);font-weight:700">Señal más fuerte:</span> cuando un ticker aparece en el Top Semanal <strong>Y</strong> en el Top Diario al mismo tiempo. Significa que es bueno hoy y ha sido bueno toda la semana.
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">⏰ ¿Cuándo usar cada Top?</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>• <strong>Lunes-miércoles</strong> — confía más en el Top Diario. La semana apenas empieza y el Semanal tiene pocos datos.</div>
+      <div>• <strong>Jueves-viernes</strong> — el Top Semanal ya tiene 3-4 días acumulados y es más confiable. Si algo sigue aquí al jueves, lleva varios días siendo la mejor oportunidad.</div>
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">✅ Flujo exacto antes de comprar</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>1. Pre-apertura 8-9 AM — revisas ambos tops</div>
+      <div>2. El ticker aparece en los dos → lo abres en el scanner</div>
+      <div>3. Pasa los 10 puntos de verificación → lo agregas a Watchlist</div>
+      <div>4. Esperas que el precio toque el nivel E1 del DCA</div>
+      <div>5. Entras con 1 título — no te aventures con todo de golpe</div>
+      <div>6. Si baja a E2 y el setup sigue válido → agregas otro título</div>
+      <div>7. Si baja a E3 y sigue válido → último título</div>
+    </div>
+
+    <div style="font-weight:600;margin-bottom:6px">🔟 Los 10 puntos de verificación antes de entrar</div>
+    <div style="color:var(--muted);margin-bottom:10px">
+      <div>1. ¿Aparece en Top Diario y Top Semanal?</div>
+      <div>2. Score ≥ 8/13</div>
+      <div>3. R:R ≥ 3x — sin esto no entras, sin excepción</div>
+      <div>4. RSI entre 30-65</div>
+      <div>5. ¿Tiene badge Ganga, Pre-breakout o Capitulación?</div>
+      <div>6. ¿Divergencia RSI alcista?</div>
+      <div>7. ¿Patrón de vela? (martillo, envolvente o estrella de la mañana)</div>
+      <div>8. ¿Distancia al soporte ≤ 3%? (badge verde 🎯)</div>
+      <div>9. ¿Sector alcista?</div>
+      <div>10. Registrar con diario obligatorio — escribe por qué entras antes de ejecutar</div>
+    </div>
+
+    <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--muted)">
+      ⚠️ <strong>La clave es la paciencia</strong> — no entres solo porque aparece en el Top. Espera que el precio llegue a tu nivel E1 del DCA. Si no llega, no pasa nada — habrá otra oportunidad. Más vale perderse una entrada que entrar mal.
+    </div>
+  </div>
   </div>
 </div>'''
 
@@ -5736,10 +5954,11 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     radar_rows = render_radar_rows(radar_data, tc)
     hist_rows  = render_hist_rows(ops)
 
-    # ── TOP SEMANAL ──────────────────────────────────────────
-    top_semanal    = calcular_top_semanal(scan_data, n=5)
+    # ── TOP SEMANAL ACUMULADO ────────────────────────────────
+    actualizar_top_semanal_acum(scan_data)
+    top_semanal     = obtener_top_semanal_acum(n=5)
     top_banner_html = render_top_semanal_banner(top_semanal)
-    top_tab_html   = render_tab_top_semanal(top_semanal, tc)
+    top_tab_html    = render_tab_top_semanal(top_semanal, tc)
 
     # ── TOP DIARIO ACUMULADO ─────────────────────────────────
     actualizar_top_diario(scan_data)
