@@ -4765,6 +4765,18 @@ def render_tab_top_diario(top: list, tc: float) -> str:
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
     <p class="hint">Los mejores 5 de <strong>todos</strong> los tickers escaneados hoy · Se actualiza con cada scan · Se reinicia a las 8:00 AM CDMX</p>
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
+      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top del Día?</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
+        <div>✅ <strong>R:R ≥ 3x</strong> — riesgo/recompensa mínimo</div>
+        <div>✅ <strong>Score ≥ 5/13</strong> — mayoría de criterios confirmados</div>
+        <div>✅ <strong>RSI entre 30-65</strong> — zona de oportunidad real</div>
+        <div>✅ <strong>Setup definido</strong> — Ganga, Pre-breakout 4/5, Listo 5/5 o Acumulación</div>
+        <div>✅ <strong>Sin ETFs apalancados</strong> — excluidos por decay diario</div>
+        <div>✅ <strong>No en EXIT ni SHORT</strong> — solo tickers con potencial alcista</div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">Se acumula todo el día — si escaneas 15 tickers y luego 15 más, el Top 5 final es de los 30. El mejor score de cada ticker persiste aunque cambie en scans posteriores.</div>
+    </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
@@ -4958,6 +4970,18 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
     <p class="hint">Las mejores oportunidades del scanner esta semana · Fórmula: Score 40% + R:R 40% + Badge 20% · Solo R:R ≥ 3x</p>
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
+      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top Semanal?</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
+        <div>✅ <strong>R:R ≥ 3x</strong> — riesgo/recompensa mínimo</div>
+        <div>✅ <strong>Score ≥ 5/13</strong> — mayoría de criterios confirmados</div>
+        <div>✅ <strong>RSI entre 30-65</strong> — zona de oportunidad, ni sobrevendido extremo ni sobrecomprado</div>
+        <div>✅ <strong>Setup definido</strong> — Ganga, Pre-breakout 4/5, Listo 5/5 o Acumulación</div>
+        <div>✅ <strong>Sin ETFs apalancados</strong> — SOXS, SOXL, TQQQ etc. excluidos por decay</div>
+        <div>✅ <strong>No en EXIT ni SHORT</strong> — ticker técnicamente deteriorado queda fuera</div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">El ranking final usa: 40% score técnico + 40% R:R normalizado + 20% badge (Ganga vale más que Pre-breakout).</div>
+    </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
