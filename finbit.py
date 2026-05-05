@@ -4810,11 +4810,6 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
             continue
         puntuacion = _puntuacion_top(r)
         candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
-        inicio    = r.get("inicio", {})
-        es_ganga  = isinstance(ganga, dict) and ganga.get("es_ganga", False)
-        nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
-        puntuacion = _puntuacion_top(r)
-        candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
 
     candidatas.sort(key=lambda x: x["_puntuacion"], reverse=True)
     return candidatas[:n]
@@ -5542,6 +5537,25 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "sr": (p.get("analisis") or {}).get("sr", {}),
     } for p in port_data], ensure_ascii=False)
 
+    scan_data_json = json.dumps([{
+        "nombre":        r.get("nombre",""),
+        "estado":        r.get("estado",""),
+        "precio_mxn":    r.get("precio_mxn",0),
+        "entrada_mxn":   r.get("entrada_mxn",0),
+        "stop_mxn":      r.get("stop_mxn",0),
+        "obj_mxn":       r.get("obj_mxn",0),
+        "rr":            r.get("rr",0),
+        "rsi":           r.get("rsi",0),
+        "macd_ok":       r.get("macd_ok",False),
+        "ema200_ok":     r.get("ema200_ok",False),
+        "score":         r.get("score",0),
+        "score_ajustado":r.get("score_ajustado",0),
+        "total_criterios":r.get("total_criterios",13),
+        "setup":         r.get("setup",{}),
+        "ganga":         r.get("ganga",{}),
+        "sector":        r.get("sector",{}),
+    } for r in scan_data], ensure_ascii=False)
+
     port_rows       = render_port_rows(port_data, tc)
     scan_rows       = render_scan_rows(scan_data, tc)
     que_hago_hoy    = render_que_hago_hoy(scan_data, port_data)
@@ -6127,6 +6141,7 @@ td strong{{font-size:13px;font-weight:500}}
           <option value="Bajista">↓ Bajista</option>
           <option value="Bloqueado">🔒 Bloqueado</option>
         </select>
+        <button onclick="exportarScannerCSV()" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--brd);background:var(--surface2);color:var(--text);cursor:pointer" title="Exportar scanner a Excel/CSV">📥 Excel</button>
       </div>
     </div>
     <div style="overflow-x:auto"><table id="scan_table">
@@ -7538,6 +7553,7 @@ setTimeout(calcRiesgo, 100);
 <script>
 const TC = {tc:.4f};
 const PORT_BASE = {port_json};
+const scan_json = {scan_data_json};
 
 // ── Tabs ─────────────────────────────────────────────────
 function showTab(name,btn){{
@@ -8051,6 +8067,38 @@ function sincronizarOpsAlServidor() {{
     }}
   }})
   .catch(e => console.log('[finbit] Sin conexión al servidor para sincronizar ops'));
+}}
+
+// ── Exportar Scanner a CSV/Excel ─────────────────────────
+function exportarScannerCSV() {{
+  const rows = [["Ticker","Estado","Precio MXN","Entrada EMA9","Stop","Objetivo","R:R","RSI","MACD","EMA200","Score","Setup","Ganga","Sector"]];
+  const data = {scan_json};
+  data.forEach(r => {{
+    rows.push([
+      r.nombre || "",
+      r.estado || "",
+      (r.precio_mxn || 0).toFixed(2),
+      (r.entrada_mxn || 0).toFixed(2),
+      (r.stop_mxn || 0).toFixed(2),
+      (r.obj_mxn || 0).toFixed(2),
+      (r.rr || 0).toFixed(1),
+      (r.rsi || 0).toFixed(0),
+      r.macd_ok ? "Alcista" : "Bajista",
+      r.ema200_ok ? "Sobre" : "Bajo",
+      (r.score_ajustado || r.score || 0) + "/" + (r.total_criterios || 13),
+      (r.setup && r.setup.tipo_setup) || "",
+      (r.ganga && r.ganga.es_ganga) ? "Sí +" + ((r.ganga.potencial_pct||0).toFixed(0)) + "%" : "No",
+      (r.sector && r.sector.etf) ? r.sector.etf + " " + (r.sector.alcista ? "✅" : "❌") : "—"
+    ]);
+  }});
+  const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(",")).join("\\n");
+  const blob = new Blob(["\uFEFF" + csv], {{type: "text/csv;charset=utf-8"}});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "finbit_scanner_" + new Date().toISOString().slice(0,10) + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }}
 
 // ── Exportar Excel ────────────────────────────────────────
