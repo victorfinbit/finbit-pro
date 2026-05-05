@@ -5078,6 +5078,7 @@ def render_scan_rows(scanner, tc):
         adx_color = "var(--green)" if adx_val>=25 else "var(--yellow)" if adx_val>=20 else "var(--red)"
         adx_label = "✅ Tendencia" if adx_val>=25 else "⚠️ Débil" if adx_val>=20 else "❌ Lateral"
 
+        _n = r['nombre']
         detail=(f'<div class="detail-panel">'
                 f'{exit_html}'
                 f'{render_ganga_panel(r.get("ganga", {}))}'
@@ -5117,13 +5118,13 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                f'<div style="margin-top:10px">'
-                f'<button onclick="event.stopPropagation();wlToggle(this,&quot;{r[chr(39)+chr(110)+chr(111)+chr(109)+chr(98)+chr(114)+chr(101)+chr(39)]}&quot;)"'
-                f' id="wl-btn-{r[chr(39)+chr(110)+chr(111)+chr(109)+chr(98)+chr(114)+chr(101)+chr(39)]}"'
-                f' style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid #3b82f6;'
-                f'background:var(--surface2);color:#3b82f6;cursor:pointer;font-weight:600">'
-                f'👁 Watchlist</button></div>'
-                f'</div>')
+                + ('<div style="margin-top:10px"><button'
+                   ' onclick="event.stopPropagation();wlToggle(this,\''+_n+'\')'  
+                   '" id="wl-btn-'+_n+'"'
+                   ' style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid #3b82f6;'
+                   'background:var(--surface2);color:#3b82f6;cursor:pointer;font-weight:600">'
+                   '👁 Watchlist</button></div>')
+                + '</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         etapa_emoji, etapa_label, etapa_tooltip = calcular_etapa(r)
