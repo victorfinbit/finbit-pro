@@ -8009,11 +8009,27 @@ function saveConfig(){{
   const rie=parseFloat(document.getElementById('cfg_riesgo').value)/100;
   const rr=parseFloat(document.getElementById('cfg_rr').value);
   if(!cap||!rie||!rr)return;
-  localStorage.setItem('cfg_capital',cap);localStorage.setItem('cfg_riesgo',rie);localStorage.setItem('cfg_rr',rr);
-  const blob=new Blob([JSON.stringify({{capital:cap,riesgo:rie,rr_min:rr}})],{{type:'application/json'}});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='finbit_config.json';a.click();
-  URL.revokeObjectURL(a.href);
-  alert('Config guardada. Descargó finbit_config.json — ponlo junto al script y vuelve a correr.');
+  localStorage.setItem('cfg_capital',cap);
+  localStorage.setItem('cfg_riesgo',rie);
+  localStorage.setItem('cfg_rr',rr);
+  // Guardar en el servidor para que persista en cada actualización
+  fetch('/api/config', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{capital:cap, riesgo:rie, rr_min:rr}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if(d.status === 'ok') {{
+      const msg = document.createElement('span');
+      msg.style.cssText = 'margin-left:10px;font-size:12px;color:var(--green)';
+      msg.textContent = '✅ Guardado';
+      const btn = document.querySelector('.cfg-btn');
+      btn.parentNode.appendChild(msg);
+      setTimeout(() => msg.remove(), 3000);
+    }}
+  }})
+  .catch(() => alert('Error al guardar config'));
 }}
 
 // ── Radar ────────────────────────────────────────────────
