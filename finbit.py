@@ -7553,7 +7553,6 @@ setTimeout(calcRiesgo, 100);
 <script>
 const TC = {tc:.4f};
 const PORT_BASE = {port_json};
-const scan_json = __SCAN_DATA_JSON__;
 
 // ── Tabs ─────────────────────────────────────────────────
 function showTab(name,btn){{
@@ -8069,30 +8068,12 @@ function sincronizarOpsAlServidor() {{
   .catch(e => console.log('[finbit] Sin conexión al servidor para sincronizar ops'));
 }}
 
-// ── Exportar Scanner a CSV/Excel ─────────────────────────
+// ── Exportar Scanner a CSV/Excel (via servidor) ──────────
 function exportarScannerCSV() {{
-  const rows = [["Ticker","Estado","Precio MXN","Entrada EMA9","Stop","Objetivo","R:R","RSI","MACD","EMA200","Score","Setup","Ganga","Sector"]];
-  const data = {scan_json};
-  data.forEach(r => {{
-    rows.push([
-      r.nombre || "",
-      r.estado || "",
-      (r.precio_mxn || 0).toFixed(2),
-      (r.entrada_mxn || 0).toFixed(2),
-      (r.stop_mxn || 0).toFixed(2),
-      (r.obj_mxn || 0).toFixed(2),
-      (r.rr || 0).toFixed(1),
-      (r.rsi || 0).toFixed(0),
-      r.macd_ok ? "Alcista" : "Bajista",
-      r.ema200_ok ? "Sobre" : "Bajo",
-      (r.score_ajustado || r.score || 0) + "/" + (r.total_criterios || 13),
-      (r.setup && r.setup.tipo_setup) || "",
-      (r.ganga && r.ganga.es_ganga) ? "Sí +" + ((r.ganga.potencial_pct||0).toFixed(0)) + "%" : "No",
-      (r.sector && r.sector.etf) ? r.sector.etf + " " + (r.sector.alcista ? "✅" : "❌") : "—"
-    ]);
-  }});
-  const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(",")).join("\\n");
-  const blob = new Blob(["\uFEFF" + csv], {{type: "text/csv;charset=utf-8"}});
+  window.location.href = '/api/exportar/scanner';
+}}
+function _exportarScannerCSV_unused() {{
+  const blob = new Blob([""], {{type: "text/csv;charset=utf-8"}});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -8285,7 +8266,7 @@ function actualizarDashboard() {{
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
-</script></body></html>""".replace("__SCAN_DATA_JSON__", scan_data_json)
+</script></body></html>"""
 
 
 # ── IMPORTAR OPS ──────────────────────────────────────────
@@ -9058,6 +9039,66 @@ def api_diario_cerrar():
 @app.route("/api/diario")
 def api_diario_lista():
     return jsonify(get_diario(limite=100))
+
+@app.route("/api/exportar/scanner")
+def api_exportar_scanner():
+    """Exporta el último scanner como CSV descargable."""
+    import io, csv
+    global _dash_html
+    # Obtener datos del scanner desde la DB/cache
+    try:
+        tc  = get_tipo_cambio(API_KEY)
+        cfg = cargar_config()
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        tickers = {r["ticker"]: (r["exchange"] or "", r.get("origen","USA"))
+                   for r in con.execute("SELECT ticker,exchange,origen FROM tickers WHERE activo=1").fetchall()}
+        con.close()
+        todos = {**SCANNER_TICKERS, **tickers}
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Ticker","Precio MXN","Entrada EMA9","Stop","Objetivo","R:R","RSI","MACD","EMA200","Score","Estado"])
+
+        for ticker in todos:
+            try:
+                sym, exch = todos[ticker] if isinstance(todos[ticker], tuple) else (ticker, "")
+                vals = _get_cached(sym or ticker, "1day", exch)
+                if not vals: continue
+                closes = [float(x["close"]) for x in vals]
+                highs  = [float(x.get("high", x["close"])) for x in vals]
+                lows   = [float(x.get("low",  x["close"])) for x in vals]
+                opens  = [float(x.get("open", x["close"])) for x in vals]
+                tf = analizar_tf(closes, [float(x.get("volume",0)) for x in vals],
+                                 "1D", cfg["capital"], cfg["riesgo"], cfg["rr_min"],
+                                 tc=tc, highs=highs, lows=lows, opens=opens)
+                if not tf.get("valido"): continue
+                precio = tf["precio"] * tc
+                writer.writerow([
+                    ticker,
+                    f"{precio:.2f}",
+                    f"{tf['ema9']*tc:.2f}",
+                    f"{tf['stop']*tc:.2f}",
+                    f"{tf['objetivo']*tc:.2f}",
+                    f"{tf['rr']:.1f}",
+                    f"{tf['rsi']:.0f}",
+                    "Alcista" if tf["macd_alcista"] else "Bajista",
+                    "Sobre" if tf["precio"] > tf["ema200"] else "Bajo",
+                    f"{tf['score']}/{tf['total_criterios']}",
+                    tf["senal"],
+                ])
+            except Exception:
+                pass
+
+        output.seek(0)
+        from flask import Response
+        return Response(
+            "\ufeff" + output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=finbit_scanner_{_fecha_hoy_cdmx()}.csv"}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/exportar/excel")
 def api_exportar_excel():
