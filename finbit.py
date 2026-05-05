@@ -3771,6 +3771,30 @@ def actualizar_top_diario(scan_data: list) -> None:
         for r in scan_data:
             if r.get("rr", 0) < 3.0:
                 continue
+            # Excluir ETFs apalancados/inversos
+            if es_etf_apalancado(r.get("nombre", "")):
+                continue
+            # Score mínimo 5/11
+            score = r.get("score_ajustado", r.get("score", 0))
+            total = r.get("total_criterios", 11)
+            if total > 0 and (score / total) < (5 / 11):
+                continue
+            # Sistema no bloqueado
+            estado = r.get("estado", "")
+            if estado in ("BLOQUEADO", "EXIT", "LATERAL", "RUPTURA"):
+                continue
+            # RSI en zona de oportunidad (30-65)
+            rsi = r.get("rsi", 50)
+            if not (30 <= rsi <= 65):
+                continue
+            # Debe tener setup de entrada definido
+            inicio_r  = r.get("inicio", {}) or {}
+            ganga_r   = r.get("ganga", {}) or {}
+            es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
+            es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
+            nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
+            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion")):
+                continue
             ticker = r.get("nombre", "")
             if not ticker:
                 continue
@@ -3956,9 +3980,36 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
     """Calcula el Top N del scanner usando Score + R:R + badge como fórmula."""
     candidatas = []
     for r in scanner:
+        # ── Filtro 1: R:R mínimo ──────────────────────────────────
         if r.get("rr", 0) < 3.0:
             continue
-        ganga     = r.get("ganga", {})
+        # ── Filtro 2: Sin ETFs apalancados/inversos ───────────────
+        if es_etf_apalancado(r.get("nombre", "")):
+            continue
+        # ── Filtro 3: Score mínimo 5/11 ───────────────────────────
+        score = r.get("score_ajustado", r.get("score", 0))
+        total = r.get("total_criterios", 11)
+        if total > 0 and (score / total) < (5 / 11):
+            continue
+        # ── Filtro 4: Sistema no bloqueado ────────────────────────
+        estado = r.get("estado", "")
+        if estado in ("BLOQUEADO", "EXIT", "LATERAL", "RUPTURA"):
+            continue
+        # ── Filtro 5: RSI en zona de oportunidad (30-65) ──────────
+        rsi = r.get("rsi", 50)
+        if not (30 <= rsi <= 65):
+            continue
+        # ── Filtro 6: Debe tener setup de entrada definido ────────
+        inicio   = r.get("inicio", {}) or {}
+        ganga    = r.get("ganga", {}) or {}
+        es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
+        es_inicio = isinstance(inicio, dict) and inicio.get("es_inicio", False)
+        nivel_str = inicio.get("nivel", "") if es_inicio else ""
+        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion")
+        if not tiene_setup:
+            continue
+        puntuacion = _puntuacion_top(r)
+        candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
         inicio    = r.get("inicio", {})
         es_ganga  = isinstance(ganga, dict) and ganga.get("es_ganga", False)
         nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
