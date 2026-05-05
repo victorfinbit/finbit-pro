@@ -3590,6 +3590,196 @@ def calcular_etapa(r: dict) -> tuple[str, str, str]:
     return ("⬜", "Sin etapa", "Sin etapa clara definida")
 
 
+def calcular_top_semanal(scanner: list, n: int = 5) -> list:
+    """Calcula el Top N del scanner usando Score + R:R + badge como fórmula."""
+    candidatas = []
+    for r in scanner:
+        score  = r.get("score_ajustado", r.get("score", 0))
+        total  = r.get("total_criterios", 11)
+        rr     = r.get("rr", 0)
+        ganga  = r.get("ganga", {})
+        inicio = r.get("inicio", {})
+
+        # Solo con R:R válido
+        if rr < 3.0:
+            continue
+
+        # Badge bonus
+        bonus = 0
+        es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
+        nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
+        if es_ganga:
+            bonus = 2
+        elif nivel_str == "pre_breakout":
+            bonus = 1.5
+        elif nivel_str == "listo":
+            bonus = 0.5
+
+        # Fórmula: 40% score + 40% R:R normalizado + 20% badge
+        score_pct = (score / total) if total > 0 else 0
+        rr_norm   = min(rr / 10.0, 1.0)
+        bonus_pct = bonus / 4.0
+        puntuacion = (score_pct * 0.40) + (rr_norm * 0.40) + (bonus_pct * 0.20)
+
+        candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
+
+    candidatas.sort(key=lambda x: x["_puntuacion"], reverse=True)
+    return candidatas[:n]
+
+
+def render_top_semanal_banner(top: list) -> str:
+    """Banner compacto del Top 5 para mostrar arriba del scanner."""
+    if not top:
+        return ""
+    items = []
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, r in enumerate(top):
+        nombre = r.get("nombre", "")
+        rr     = r.get("rr", 0)
+        badge  = ""
+        if r.get("_es_ganga"):
+            badge = ' <span style="color:#d4a017;font-size:9px">Ganga</span>'
+        elif r.get("_nivel") == "pre_breakout":
+            badge = ' <span style="color:#b45309;font-size:9px">4/5</span>'
+        items.append(
+            f'<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface);'
+            f'border:1px solid var(--brd);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer" '
+            f'onclick="showTab(\'top\',document.querySelector(\'.nb[onclick*=top]\'))" title="Ver Top Semanal completo">'
+            f'{medals[i]} <strong>{nombre}</strong>{badge}'
+            f' <span style="color:var(--green);font-family:var(--mono)">{rr:.1f}x</span></span>'
+        )
+    return (
+        f'<div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border:1px solid #ffd70033;'
+        f'border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;'
+        f'flex-wrap:wrap;gap:8px">'
+        f'<span style="color:#ffd700;font-weight:700;font-size:12px;margin-right:4px">🏆 TOP SEMANA</span>'
+        f'{"".join(items)}'
+        f'</div>'
+    )
+
+
+def render_tab_top_semanal(top: list, tc: float) -> str:
+    """Renderiza el tab completo de Top Semanal."""
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    razon_labels = {
+        "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
+        "listo":        ("🟢 Listo 5/5", "#15803d"),
+        "acumulacion":  ("🟡 Acumulación 3/5", "#d46b08"),
+    }
+
+    if not top:
+        return '''<div id="tab-top" class="tab">
+          <div style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:48px;margin-bottom:16px">🏆</div>
+            <div style="font-size:16px;font-weight:600">Sin candidatas esta semana</div>
+            <div style="font-size:13px;margin-top:8px">Ninguna acción cumple R:R ≥ 3x. Espera mejores setups.</div>
+          </div>
+        </div>'''
+
+    cards = []
+    for i, r in enumerate(top):
+        nombre  = r.get("nombre", "")
+        precio  = r.get("precio_mxn", 0)
+        rr      = r.get("rr", 0)
+        rsi     = r.get("rsi", 0)
+        score   = r.get("score_ajustado", r.get("score", 0))
+        total   = r.get("total_criterios", 11)
+        stop    = r.get("stop_mxn", 0)
+        obj     = r.get("obj_mxn", 0)
+        ema200  = r.get("ema200_mxn", 0)
+        fuente  = r.get("objetivo_fuente", "ATR")
+        punt    = r.get("_puntuacion", 0)
+        es_ganga = r.get("_es_ganga", False)
+        nivel   = r.get("_nivel", "")
+
+        # Badge principal
+        if es_ganga:
+            badge_html = '<span style="background:#fef3c7;color:#d4a017;border:1px solid #fcd34d;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">🟡 Ganga +15%</span>'
+            razon_txt  = "Precio castigado con soporte confirmado — zona ideal de acumulación"
+        elif nivel in razon_labels:
+            label, color = razon_labels[nivel]
+            badge_html = f'<span style="background:#fff7ed;color:{color};border:1px solid {color}44;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">{label}</span>'
+            razon_txt  = "Señales de momentum alineadas — movimiento inminente"
+        else:
+            badge_html = '<span style="background:var(--surface);color:var(--muted);border:1px solid var(--brd);border-radius:4px;padding:2px 8px;font-size:10px">Setup técnico sólido</span>'
+            razon_txt  = "Score y R:R por encima del promedio del scanner"
+
+        # Color del puesto
+        medal_colors = ["#ffd700", "#c0c0c0", "#cd7f32", "var(--text)", "var(--text)"]
+        mc = medal_colors[i]
+
+        cards.append(f'''
+        <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:20px;position:relative;overflow:hidden">
+          <!-- Número de puesto -->
+          <div style="position:absolute;top:16px;right:16px;font-size:28px;opacity:0.15">{medals[i]}</div>
+          <!-- Header -->
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+            <div style="font-size:22px;font-weight:800;color:{mc};min-width:32px">{medals[i]}</div>
+            <div>
+              <div style="font-size:20px;font-weight:700;letter-spacing:-.5px">{nombre}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">{razon_txt}</div>
+            </div>
+            <div style="margin-left:auto">{badge_html}</div>
+          </div>
+          <!-- Métricas -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
+            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">PRECIO</div>
+              <div style="font-family:var(--mono);font-weight:700;font-size:14px">{fmt(precio)}</div>
+            </div>
+            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">R:R</div>
+              <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:var(--green)">{rr:.1f}x <span style="font-size:9px;color:var(--muted)">({fuente})</span></div>
+            </div>
+            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">SCORE</div>
+              <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:{'var(--green)' if score>=7 else 'var(--yellow)' if score>=5 else 'var(--red)'}">{score}/{total}</div>
+            </div>
+          </div>
+          <!-- Niveles clave -->
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:11px">
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
+              <span style="color:var(--muted)">Stop dinámico</span>
+              <span style="font-family:var(--mono);color:#ef4444">{fmt(stop) if stop else "—"}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
+              <span style="color:var(--muted)">Objetivo</span>
+              <span style="font-family:var(--mono);color:var(--green)">{fmt(obj) if obj else "—"}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
+              <span style="color:var(--muted)">RSI</span>
+              <span style="font-family:var(--mono);color:{'var(--red)' if rsi>70 else 'var(--green)' if rsi<40 else 'var(--text)'}">{rsi:.0f}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
+              <span style="color:var(--muted)">R EMA200</span>
+              <span style="font-family:var(--mono);color:#ff7875">{fmt(ema200) if ema200 else "—"}</span>
+            </div>
+          </div>
+          <!-- Puntuación interna -->
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--brd);display:flex;align-items:center;gap:8px">
+            <span style="font-size:10px;color:var(--muted)">Puntuación Finbit</span>
+            <div style="flex:1;height:4px;background:var(--brd);border-radius:2px">
+              <div style="width:{punt*100:.0f}%;height:4px;background:linear-gradient(90deg,#22c55e,#ffd700);border-radius:2px"></div>
+            </div>
+            <span style="font-size:10px;font-family:var(--mono);color:var(--muted)">{punt*100:.0f}%</span>
+          </div>
+        </div>''')
+
+    cards_html = "\n".join(cards)
+    return f'''<div id="tab-top" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
+    <p class="hint">Las mejores oportunidades del scanner esta semana · Fórmula: Score 40% + R:R 40% + Badge 20% · Solo R:R ≥ 3x</p>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+    {cards_html}
+  </div>
+  <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
+    💡 <strong>Recuerda:</strong> El Top Semanal es una guía, no una señal de entrada. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado antes de operar.
+  </div>
+</div>'''
+
+
 def render_scan_rows(scanner, tc):
     h=""
     for r in scanner:
@@ -4152,6 +4342,11 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     radar_rows = render_radar_rows(radar_data, tc)
     hist_rows  = render_hist_rows(ops)
 
+    # ── TOP SEMANAL ──────────────────────────────────────────
+    top_semanal    = calcular_top_semanal(scan_data, n=5)
+    top_banner_html = render_top_semanal_banner(top_semanal)
+    top_tab_html   = render_tab_top_semanal(top_semanal, tc)
+
     n_radar =len(radar_data)
     n_rocket=sum(1 for r in radar_data if r["estado"]=="ROCKET")
     n_buy   =sum(1 for r in radar_data if r["estado"]=="BUY")
@@ -4374,6 +4569,7 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('registrar',this)">Registrar operación</button>
   <button class="nb" onclick="showTab('historial',this)">Historial</button>
   <button class="nb active" onclick="showTab('scanner',this)">Scanner</button>
+  <button class="nb" onclick="showTab('top',this)">🏆 Top Semanal</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
@@ -4561,6 +4757,7 @@ td strong{{font-size:13px;font-weight:500}}
 
 <!-- ══ SCANNER ══ -->
 <div id="tab-scanner" class="tab active">
+  {top_banner_html}
   {que_hago_hoy}
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
@@ -4686,6 +4883,8 @@ td strong{{font-size:13px;font-weight:500}}
     </table></div>
   </div>
 </div>
+
+{top_tab_html}
 
 <!-- ══ RADAR ══ -->
 <div id="tab-radar" class="tab">
