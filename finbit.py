@@ -297,13 +297,11 @@ def _loop_alertas_telegram():
             riesgo_pct = RIESGO_POR_TRADE
             rr_min     = RR_MINIMO
 
-            # Obtener VIX y SPY básico (sin crashear si falla)
+            # Obtener VIX via Yahoo Finance (TwelveData no soporta VIX)
             vix = 20.0
             spy = {}
             try:
-                vix_vals = api_timeseries("VIX", "1day", 5)
-                if vix_vals:
-                    vix = float(vix_vals[-1].get("close", 20.0))  # [-1] = vela más reciente
+                vix = get_vix()
             except Exception:
                 pass
 
@@ -1448,33 +1446,30 @@ def adx(highs: list, lows: list, closes: list, n: int = 14) -> float:
 _MACRO_CACHE: dict = {}
 
 def get_vix() -> float:
-    """Obtiene el VIX (Fear Index) actual. <18=calma, 18-25=precaucion, >25=panico."""
+    """Obtiene el VIX via Yahoo Finance (TwelveData no soporta VIX)."""
     global _MACRO_CACHE
     if "vix" in _MACRO_CACHE:
         return _MACRO_CACHE["vix"]
-    # Intento 1: /quote con "VIX" — acepta close o previous_close (fuera de horario)
     try:
-        r = requests.get(f"{API_BASE}/quote", params={"symbol": "VIX", "apikey": API_KEY}, timeout=8)
-        d = r.json()
-        val = d.get("close") or d.get("previous_close")
-        if val:
-            v = float(val)
+        # Yahoo Finance sí soporta ^VIX sin API key
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            params={"interval": "1d", "range": "5d"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8
+        )
+        data = r.json()
+        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        # Filtrar Nones y tomar el último valor válido
+        closes = [c for c in closes if c is not None]
+        if closes:
+            v = round(float(closes[-1]), 2)
             if 5 < v < 90:
                 _MACRO_CACHE["vix"] = v
+                print(f"[vix] OK Yahoo ^VIX -> {v:.1f}")
                 return v
-    except Exception:
-        pass
-    # Intento 2: timeseries — vals[-1] es la vela MAS RECIENTE (no [0])
-    try:
-        vals = api_timeseries("VIX", "1day", 5, "")
-        if vals:
-            v = float(vals[-1]["close"])
-            if 5 < v < 90:
-                _MACRO_CACHE["vix"] = v
-                return v
-    except Exception:
-        pass
-    # Fallback neutro
+    except Exception as e:
+        print(f"[vix] Error Yahoo: {e}")
     _MACRO_CACHE["vix"] = 20.0
     return 20.0
 
@@ -3779,9 +3774,9 @@ def actualizar_top_diario(scan_data: list) -> None:
             total = r.get("total_criterios", 11)
             if total > 0 and (score / total) < (5 / 11):
                 continue
-            # Sistema no bloqueado
+            # Solo excluir EXIT y SHORT (deterioro técnico real del ticker)
             estado = r.get("estado", "")
-            if estado in ("BLOQUEADO", "EXIT", "LATERAL", "RUPTURA"):
+            if estado in ("EXIT", "SHORT"):
                 continue
             # RSI en zona de oportunidad (30-65)
             rsi = r.get("rsi", 50)
@@ -3991,9 +3986,10 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
         total = r.get("total_criterios", 11)
         if total > 0 and (score / total) < (5 / 11):
             continue
-        # ── Filtro 4: Sistema no bloqueado ────────────────────────
+        # Sistema — solo excluir EXIT y SHORT (deterioro técnico real del ticker)
+        # BLOQUEADO/LATERAL/RUPTURA son filtros macro conservadores — el trader decide
         estado = r.get("estado", "")
-        if estado in ("BLOQUEADO", "EXIT", "LATERAL", "RUPTURA"):
+        if estado in ("EXIT", "SHORT"):
             continue
         # ── Filtro 5: RSI en zona de oportunidad (30-65) ──────────
         rsi = r.get("rsi", 50)
