@@ -5118,12 +5118,6 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                + ('<div style="margin-top:10px"><button'
-                   ' onclick="event.stopPropagation();wlToggle(this,\''+_n+'\')'  
-                   '" id="wl-btn-'+_n+'"'
-                   ' style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid #3b82f6;'
-                   'background:var(--surface2);color:#3b82f6;cursor:pointer;font-weight:600">'
-                   '👁 Watchlist</button></div>')
                 + '</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
