@@ -467,6 +467,12 @@ def init_db():
         puntuacion  REAL NOT NULL,
         datos_json  TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS watchlist (
+        ticker      TEXT PRIMARY KEY,
+        notas       TEXT DEFAULT '',
+        e1_manual   REAL DEFAULT 0,
+        fecha_add   TEXT DEFAULT ''
+    );
     CREATE TABLE IF NOT EXISTS tickers (
         id       INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker   TEXT UNIQUE NOT NULL,
@@ -1721,6 +1727,116 @@ def agrupar_zonas(pivotes: list, precio_ref: float,
     return sorted(resultado, key=lambda x: abs(x["distancia_pct"]))
 
 
+def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) -> dict:
+    """
+    Detecta los 3 patrones de velas más confiables en soporte:
+    - Martillo: mecha inferior larga, cuerpo pequeño arriba — reversión alcista
+    - Envolvente alcista: vela verde envuelve completamente la roja anterior
+    - Estrella de la mañana: 3 velas — bajista, doji/pequeña, alcista fuerte
+    """
+    if not opens or len(closes) < 3:
+        return {"patron": None, "desc": "", "ok": False}
+
+    o, h, l, c = opens, highs, lows, closes
+
+    # Última vela
+    o1, h1, l1, c1 = float(o[-1]), float(h[-1]), float(l[-1]), float(c[-1])
+    # Penúltima vela
+    o2, h2, l2, c2 = float(o[-2]), float(h[-2]), float(l[-2]), float(c[-2])
+    # Antepenúltima vela
+    o3, h3, l3, c3 = float(o[-3]), float(h[-3]), float(l[-3]), float(c[-3])
+
+    cuerpo1 = abs(c1 - o1)
+    rango1  = h1 - l1
+    mecha_inf1 = min(o1, c1) - l1
+    mecha_sup1 = h1 - max(o1, c1)
+
+    cuerpo2 = abs(c2 - o2)
+    rango2  = h2 - l2
+
+    # ── Martillo ────────────────────────────────────────────────────────
+    # Mecha inferior >= 2x el cuerpo, cuerpo pequeño, mecha superior mínima
+    es_martillo = (
+        rango1 > 0 and
+        cuerpo1 > 0 and
+        mecha_inf1 >= 2 * cuerpo1 and
+        mecha_sup1 <= cuerpo1 * 0.3 and
+        cuerpo1 <= rango1 * 0.35
+    )
+
+    # ── Envolvente alcista ───────────────────────────────────────────────
+    # Vela anterior bajista, vela actual alcista y envuelve completamente
+    vela2_bajista = c2 < o2
+    vela1_alcista = c1 > o1
+    es_envolvente = (
+        vela2_bajista and
+        vela1_alcista and
+        o1 <= c2 and   # abre por debajo del cierre anterior
+        c1 >= o2       # cierra por encima del open anterior
+    )
+
+    # ── Estrella de la mañana ────────────────────────────────────────────
+    # 1) Vela bajista fuerte, 2) Doji o vela pequeña, 3) Vela alcista fuerte
+    vela3_bajista = c3 < o3 and abs(c3 - o3) > rango2 * 0.5 if rango2 > 0 else False
+    vela2_pequena = cuerpo2 <= (h2 - l2) * 0.3 if (h2 - l2) > 0 else False
+    vela1_alcista_fuerte = c1 > o1 and cuerpo1 >= abs(c3 - o3) * 0.5
+    es_estrella = vela3_bajista and vela2_pequena and vela1_alcista_fuerte and c1 > (o3 + c3) / 2
+
+    if es_estrella:
+        return {"patron": "estrella_manana", "desc": "⭐ Estrella de la mañana — reversión alcista fuerte de 3 velas", "ok": True}
+    elif es_envolvente:
+        return {"patron": "envolvente_alcista", "desc": "🕯️ Envolvente alcista — compradores tomaron control total", "ok": True}
+    elif es_martillo:
+        return {"patron": "martillo", "desc": "🔨 Martillo — rechazo de mínimos, presión compradora", "ok": True}
+
+    return {"patron": None, "desc": "", "ok": False}
+
+
+def detectar_divergencia_rsi(closes: list, rsi_series: list, ventana: int = 14) -> dict:
+    """
+    Divergencia RSI:
+    - Alcista: precio hace mínimo más bajo, RSI hace mínimo más alto → reversión probable
+    - Bajista: precio hace máximo más alto, RSI hace máximo más bajo → agotamiento
+    """
+    if not rsi_series or len(rsi_series) < ventana or len(closes) < ventana:
+        return {"divergencia": False, "tipo": "", "desc": "", "alcista": False, "bajista": False}
+
+    p  = closes[-ventana:]
+    rs = rsi_series[-ventana:]
+
+    precio_min_reciente = min(p[-ventana//2:])
+    precio_min_anterior = min(p[:ventana//2])
+    rsi_min_reciente    = min(rs[-ventana//2:])
+    rsi_min_anterior    = min(rs[:ventana//2])
+
+    precio_max_reciente = max(p[-ventana//2:])
+    precio_max_anterior = max(p[:ventana//2])
+    rsi_max_reciente    = max(rs[-ventana//2:])
+    rsi_max_anterior    = max(rs[:ventana//2])
+
+    # Divergencia alcista: precio baja más pero RSI no confirma
+    div_alcista = (
+        precio_min_reciente < precio_min_anterior * 0.99 and
+        rsi_min_reciente > rsi_min_anterior + 2
+    )
+    # Divergencia bajista: precio sube más pero RSI no confirma
+    div_bajista = (
+        precio_max_reciente > precio_max_anterior * 1.01 and
+        rsi_max_reciente < rsi_max_anterior - 2
+    )
+
+    if div_alcista:
+        return {"divergencia": True, "tipo": "alcista",
+                "desc": "📈 Divergencia RSI alcista — precio baja pero RSI sube, institucionales acumulando",
+                "alcista": True, "bajista": False}
+    elif div_bajista:
+        return {"divergencia": True, "tipo": "bajista",
+                "desc": "⚠️ Divergencia RSI bajista — precio sube pero RSI baja, momentum se agota",
+                "alcista": False, "bajista": True}
+
+    return {"divergencia": False, "tipo": "", "desc": "", "alcista": False, "bajista": False}
+
+
 def calcular_zonas_sr(highs: list, lows: list, closes: list,
                        volumes: list, tc: float = 1.0,
                        origen: str = "USA") -> dict:
@@ -2424,7 +2540,7 @@ def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dic
 
 def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
                 titulos_en_cartera=0.0, tc=17.5, origen="USA",
-                highs=None, lows=None) -> dict:
+                highs=None, lows=None, opens=None) -> dict:
     if not closes or len(closes) < 20:
         return {"tf":tf_label,"valido":False}
 
@@ -2465,7 +2581,28 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     # OBV — detecta divergencias institucionales
     obv_info = obv(closes, volumes) if not _sin_volumen else {"tendencia":"sin datos","divergencia":False,"div_tipo":"","ok":True}
 
-    precio   = float(c.iloc[-1])
+    # OBV: divergencia ALCISTA es señal positiva (institucionales acumulando)
+    # Reescribir "ok" para que divergencia alcista cuente como positivo
+    if obv_info.get("div_alcista"):
+        obv_info["ok"] = True   # acumulación institucional — es buena señal
+    elif obv_info.get("div_bajista"):
+        obv_info["ok"] = False  # distribución institucional — señal negativa
+
+    # RSI series para divergencia
+    rsi_series = list(rsi(c, 14))
+    div_rsi = detectar_divergencia_rsi(closes, rsi_series)
+
+    # Patrones de velas — solo si tenemos opens
+    opens_list = opens if opens and len(opens) >= 3 else None
+    patron_velas = detectar_patrones_velas(
+        opens_list or closes, highs or closes, lows or closes, closes
+    ) if opens_list else {"patron": None, "desc": "", "ok": False}
+
+    # Sector: ok si alcista o no mapeado
+    # (se asigna después en analizar_ticker, aquí placeholder)
+    sector_ok = True   # se sobreescribe en analizar_ticker si aplica
+
+
     soporte  = float(c.rolling(min(20,n)).min().iloc[-1])
     # Máximo histórico solo como referencia de resistencia, NO como objetivo
     max_20   = float(c.rolling(min(20,n)).max().iloc[-1])
@@ -2570,16 +2707,24 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         "hhhl":   {"ok":hhhl_ok,  "label":"Estructura HH+HL",
                    "val":estructura_info["estructura"],
                    "razon":estructura_info["desc"] or f"Estructura: {estructura_info['estructura']}"},
-        "obv":    {"ok":obv_info["ok"],"label":"OBV sin divergencia",
+        "obv":    {"ok":obv_info["ok"],"label":"OBV alcista/acumulación",
                    "val":obv_info["tendencia"],
                    "razon":(obv_info["div_tipo"] if obv_info["divergencia"]
                             else f"OBV {obv_info['tendencia']} — flujo institucional consistente con precio.")},
+        "div_rsi":{"ok": div_rsi["alcista"] or not div_rsi["bajista"],
+                   "label":"Divergencia RSI",
+                   "val": div_rsi["tipo"] if div_rsi["divergencia"] else "sin divergencia",
+                   "razon": div_rsi["desc"] if div_rsi["divergencia"] else "RSI confirma movimiento del precio — sin señales de agotamiento."},
+        "patron_velas": {"ok": patron_velas["ok"],
+                   "label":"Patrón de vela",
+                   "val": patron_velas["patron"] or "ninguno",
+                   "razon": patron_velas["desc"] if patron_velas["ok"] else "Sin patrón de reversión alcista en las últimas 3 velas."},
     }
     score = sum(1 for x in criterios.values() if x["ok"])
-    total_criterios = len(criterios)   # 11 criterios
+    total_criterios = len(criterios)   # 13 criterios ahora
     explosion = (emas_ok and e200_ok and macd_ok and macdh_ok and 55<=rv<=72
                  and vol_ok and rr_val>=4.0 and adx_val>=25 and hhhl_ok
-                 and obv_info["ok"])
+                 and obv_info["ok"] and (div_rsi["alcista"] or not div_rsi["bajista"]))
 
     if score>=7 and emas_ok and e200_ok: senal="COMPRAR"
     elif score>=5:                        senal="MANTENER"
@@ -2606,6 +2751,8 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         "adx":adx_val,"atr":round(atr_val,4),"trailing_stop":round(stop,4),
         "estructura":estructura_info,
         "obv":obv_info,
+        "div_rsi":div_rsi,
+        "patron_velas":patron_velas,
         "rr":rr_val,"stop":stop,"objetivo":objetivo,"objetivo_fuente":_objetivo_fuente,"soporte":soporte,"vol_ok":vol_ok,
         "score":score,"total_criterios":total_criterios,"senal":senal,"explosion":explosion,
         "criterios":criterios,
@@ -2748,10 +2895,11 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
     volumes_1d = ohlcv_to_volume(values_1d)
     highs_1d   = [float(x.get("high", x["close"])) for x in values_1d]
     lows_1d    = [float(x.get("low",  x["close"])) for x in values_1d]
+    opens_1d   = [float(x.get("open", x["close"])) for x in values_1d]
 
     tf_1d = analizar_tf(closes_1d, volumes_1d, "1D", capital, riesgo_pct, rr_min,
                          titulos_en_cartera, tc=tc, origen=origen,
-                         highs=highs_1d, lows=lows_1d)
+                         highs=highs_1d, lows=lows_1d, opens=opens_1d)
 
     # ── ZONAS DE SOPORTE / RESISTENCIA ────────────────────────────────────
     sr = calcular_zonas_sr(highs_1d, lows_1d, closes_1d, volumes_1d, tc=tc, origen=origen)
@@ -3058,11 +3206,20 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
             score         = tf_1d["score"]
             score_ajustado= setup.get("score_ajustado", max(0, score - regimen["penalizacion"]))
 
-            # Si sector bajista → degradar a WATCH (no bloquear completamente)
-            if not sector_info["alcista"] and estado == "BUY":
-                estado = "WATCH"
-                setup["advertencias"].append(
-                    f"Sector {sector_info['etf']} bajista — esperar recuperación del sector")
+            # Sector afecta el score numéricamente:
+            # alcista → +1 punto (contexto favorable)
+            # bajista → -1 punto (contexto desfavorable) y degrada BUY→WATCH
+            etf_sector = sector_info.get("etf")
+            if etf_sector:
+                if sector_info["alcista"]:
+                    score_ajustado = min(tf_1d["total_criterios"], score_ajustado + 1)
+                    setup["advertencias"] = [a for a in setup.get("advertencias", []) if etf_sector not in a]
+                else:
+                    score_ajustado = max(0, score_ajustado - 1)
+                    if estado == "BUY":
+                        estado = "WATCH"
+                    setup["advertencias"].append(
+                        f"Sector {etf_sector} bajista — esperar recuperación del sector")
 
             # ── GANGA: señal adicional de precio (no cambia el estado) ──
             ganga_info = {}
@@ -3614,6 +3771,13 @@ def render_port_rows(posiciones, tc):
         obv_port  = tf_1d.get("obv", {}) if tf_1d.get("valido") else {}
         obv_html_port = render_obv_panel(obv_port)
 
+        _tnombre = r['nombre']
+        wl_btn = ('<div style="margin-top:10px">'
+                  '<button onclick="event.stopPropagation();wlToggle(this,\''+_tnombre+'\')"'
+                  ' id="wl-btn-'+_tnombre+'"'
+                  ' style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid #3b82f6;'
+                  'background:var(--surface2);color:#3b82f6;cursor:pointer;font-weight:600">'
+                  '👁 Watchlist</button></div>')
         detail=(f'<div class="detail-panel">'
                 f'{render_conf(conf) if conf else ""}'
                 f'{alertas_h}'
@@ -3873,6 +4037,180 @@ def render_top_diario_banner(top: list) -> str:
         f'{"".join(items)}'
         f'</div>'
     )
+
+
+def get_watchlist() -> list:
+    """Devuelve los tickers de la watchlist."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT * FROM watchlist ORDER BY fecha_add DESC").fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def agregar_watchlist(ticker: str, notas: str = "", e1_manual: float = 0) -> bool:
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.execute(
+            "INSERT OR IGNORE INTO watchlist (ticker, notas, e1_manual, fecha_add) VALUES (?,?,?,?)",
+            (ticker.upper().strip(), notas, e1_manual, _fecha_hoy_cdmx())
+        )
+        con.commit(); con.close()
+        return True
+    except Exception:
+        return False
+
+
+def quitar_watchlist(ticker: str) -> bool:
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.execute("DELETE FROM watchlist WHERE ticker=?", (ticker.upper().strip(),))
+        con.commit(); con.close()
+        return True
+    except Exception:
+        return False
+
+
+def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
+    """
+    Tab dedicado de Watchlist — solo tus candidatas activas con sus niveles.
+    Cruza la watchlist de DB con los datos frescos del scanner/radar.
+    """
+    wl = get_watchlist()
+    if not wl:
+        return '''<div id="tab-wl" class="tab">
+          <div style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:48px;margin-bottom:16px">👁</div>
+            <div style="font-size:16px;font-weight:600">Watchlist vacía</div>
+            <div style="font-size:13px;margin-top:8px">Agrega tickers con el buscador del scanner y márcalos como Watchlist.</div>
+          </div>
+        </div>'''
+
+    # Índice de datos frescos por ticker
+    datos_frescos = {}
+    for r in (scan_data or []):
+        t = r.get("nombre", "")
+        if t:
+            datos_frescos[t.upper()] = r
+    for r in (radar_data or []):
+        t = r.get("nombre", "")
+        if t and t.upper() not in datos_frescos:
+            datos_frescos[t.upper()] = r
+
+    estado_color = {
+        "ROCKET": "#7c3aed", "BUY": "var(--green)", "WATCH": "#d97706",
+        "SKIP": "var(--muted)", "BLOQUEADO": "var(--red)", "EXIT": "var(--red)",
+        "SHORT": "var(--red)", "LATERAL": "#d97706", "RUPTURA": "var(--red)",
+    }
+    cards = []
+    for w in wl:
+        ticker = w["ticker"]
+        notas  = w.get("notas", "")
+        fecha  = w.get("fecha_add", "")
+        r = datos_frescos.get(ticker.upper(), {})
+
+        if r:
+            precio   = r.get("precio_mxn", 0)
+            rr       = r.get("rr", 0)
+            rsi_v    = r.get("rsi", 0)
+            score    = r.get("score_ajustado", r.get("score", 0))
+            total_c  = r.get("total_criterios", 13)
+            estado   = r.get("estado", "—")
+            ecolor   = estado_color.get(estado, "var(--muted)")
+            dca      = r.get("dca", {}) or {}
+            e1       = dca.get("e1_precio", 0)
+            e2       = dca.get("e2_precio", 0)
+            e3       = dca.get("e3_precio", 0)
+            sl       = r.get("sizing", {}).get("sl_mxn", 0) if r.get("sizing") else 0
+            obj      = r.get("sizing", {}).get("objetivo_mxn", 0) if r.get("sizing") else 0
+            ganga    = r.get("ganga", {}) or {}
+            es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
+            inicio   = r.get("inicio", {}) or {}
+            nivel    = inicio.get("nivel", "") if inicio.get("es_inicio") else ""
+            div_rsi  = r.get("div_rsi", {}) or {}
+            patron   = r.get("patron_velas", {}) or {}
+
+            badge = ""
+            if es_ganga:
+                badge = '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;margin-left:6px">🏷️ Ganga</span>'
+            elif nivel == "pre_breakout":
+                badge = '<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;margin-left:6px">⚡ 4/5</span>'
+            elif nivel == "listo":
+                badge = '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;margin-left:6px">✅ 5/5</span>'
+
+            div_html = ""
+            if div_rsi.get("alcista"):
+                div_html = f'<div style="font-size:10px;color:#3b82f6;margin-top:4px">{div_rsi["desc"]}</div>'
+            elif div_rsi.get("bajista"):
+                div_html = f'<div style="font-size:10px;color:var(--red);margin-top:4px">{div_rsi["desc"]}</div>'
+
+            patron_html = ""
+            if patron.get("ok"):
+                patron_html = f'<div style="font-size:10px;color:var(--green);margin-top:4px">{patron["desc"]}</div>'
+
+            entradas_html = ""
+            if e1 or e2 or e3:
+                entradas_html = (
+                    f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;font-size:11px">'
+                    f'{"<span style=background:var(--bg);border-radius:6px;padding:4px 8px><span style=color:var(--muted)>E1 </span><strong>"+fmt(e1)+"</strong></span>" if e1 else ""}'
+                    f'{"<span style=background:var(--bg);border-radius:6px;padding:4px 8px><span style=color:var(--muted)>E2 </span><strong>"+fmt(e2)+"</strong></span>" if e2 else ""}'
+                    f'{"<span style=background:var(--bg);border-radius:6px;padding:4px 8px><span style=color:var(--muted)>E3 </span><strong>"+fmt(e3)+"</strong></span>" if e3 else ""}'
+                    f'</div>'
+                )
+
+            card_body = f'''
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <span style="font-size:20px;font-weight:800">{ticker}</span>{badge}
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">${precio:,.2f} MXN · RSI {rsi_v:.0f} · Score {score}/{total_c}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:16px;font-weight:700;color:{ecolor}">{estado}</div>
+            <div style="font-size:12px;color:var(--green);font-weight:600">{rr:.1f}x R:R</div>
+          </div>
+        </div>
+        {div_html}{patron_html}{entradas_html}
+        <div style="display:flex;gap:10px;margin-top:8px;font-size:11px">
+          {"<div><span style=color:var(--muted)>SL </span><span style=color:var(--red);font-family:var(--mono)>"+fmt(sl)+"</span></div>" if sl else ""}
+          {"<div><span style=color:var(--muted)>Obj </span><span style=color:var(--green);font-family:var(--mono)>"+fmt(obj)+"</span></div>" if obj else ""}
+        </div>'''
+        else:
+            card_body = f'''
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:20px;font-weight:800">{ticker}</span>
+          <span style="font-size:11px;color:var(--muted)">Sin datos frescos — escanear primero</span>
+        </div>'''
+
+        notas_html = f'<div style="font-size:11px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--brd)">📝 {notas}</div>' if notas else ""
+        fecha_html = f'<div style="font-size:9px;color:var(--muted);text-align:right;margin-top:6px">Agregado {fecha}</div>'
+
+        cards.append(f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:14px;padding:18px;position:relative">
+      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#3b82f6,#8b5cf6)"></div>
+      <button onclick="fetch('/api/watchlist/quitar/{ticker}',{{method:'POST'}}).then(()=>location.reload())"
+        style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer" title="Quitar de watchlist">✕</button>
+      {card_body}{notas_html}{fecha_html}
+    </div>''')
+
+    cards_html = "\n".join(cards)
+    n = len(wl)
+    return f'''<div id="tab-wl" class="tab">
+  <div style="padding:20px 0 14px;display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">👁 Watchlist <span style="font-size:14px;color:var(--muted);font-weight:400">({n} candidatas)</span></h2>
+      <p class="hint">Tus candidatas activas con datos frescos del último scan · Datos se actualizan al correr el scanner</p>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+    {cards_html}
+  </div>
+  <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
+    💡 Para agregar tickers a la Watchlist: búscalos en el scanner y usa el botón "👁 Watchlist". Para quitarlos usa la ✕ en cada card.
+  </div>
+</div>'''
 
 
 def render_tab_top_diario(top: list, tc: float) -> str:
@@ -4301,7 +4639,8 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                f'</div>')
+                + wl_btn
+                + '</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
         etapa_emoji, etapa_label, etapa_tooltip = calcular_etapa(r)
@@ -4742,6 +5081,9 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     top_diario_banner_html = render_top_diario_banner(top_diario)
     top_diario_tab_html    = render_tab_top_diario(top_diario, tc)
 
+    # ── WATCHLIST ────────────────────────────────────────────
+    watchlist_tab_html = render_tab_watchlist(scan_data, radar_data, tc)
+
     n_radar =len(radar_data)
     n_rocket=sum(1 for r in radar_data if r["estado"]=="ROCKET")
     n_buy   =sum(1 for r in radar_data if r["estado"]=="BUY")
@@ -4966,6 +5308,7 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb active" onclick="showTab('scanner',this)">Scanner</button>
   <button class="nb" onclick="showTab('top',this)">🏆 Top Semanal</button>
   <button class="nb" onclick="showTab('topd',this)">📅 Top Diario</button>
+  <button class="nb" onclick="showTab('wl',this)">👁 Watchlist</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
@@ -5284,6 +5627,8 @@ td strong{{font-size:13px;font-weight:500}}
 {top_tab_html}
 
 {top_diario_tab_html}
+
+{watchlist_tab_html}
 
 <!-- ══ RADAR ══ -->
 <div id="tab-radar" class="tab">
@@ -7157,6 +7502,32 @@ function sincronizarOpsAlServidor() {{
   .catch(e => console.log('[finbit] Sin conexión al servidor para sincronizar ops'));
 }}
 
+// ── Watchlist toggle ──────────────────────────────────────
+function wlToggle(ticker) {{
+  fetch('/api/watchlist/agregar', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{ticker}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    const btn = document.getElementById('wl-btn-' + ticker);
+    if (btn) {{
+      btn.textContent = '✅ En Watchlist';
+      btn.style.background = '#dcfce7';
+      btn.style.color = '#15803d';
+      btn.style.borderColor = '#15803d';
+      setTimeout(() => {{
+        btn.textContent = '👁 Agregar a Watchlist';
+        btn.style.background = 'var(--surface2)';
+        btn.style.color = '#3b82f6';
+        btn.style.borderColor = '#3b82f6';
+      }}, 2000);
+    }}
+  }})
+  .catch(() => alert('Error al agregar a Watchlist'));
+}}
+
 // ── Agregar ticker al scanner (guarda en DB via API) ─────────
 function agregarTickerScanner() {{
   const ticker = (document.getElementById('add_ticker_input').value||'').toUpperCase().trim();
@@ -8033,6 +8404,29 @@ def api_test():
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
+
+
+# ═══════════════════════════════════════════════════════════
+#   API WATCHLIST
+# ═══════════════════════════════════════════════════════════
+@app.route("/api/watchlist/agregar", methods=["POST"])
+def api_wl_agregar():
+    data   = request.get_json(silent=True) or {}
+    ticker = data.get("ticker", "").upper().strip()
+    notas  = data.get("notas", "")
+    if not ticker:
+        return jsonify({"ok": False, "error": "ticker requerido"}), 400
+    ok = agregar_watchlist(ticker, notas)
+    return jsonify({"ok": ok, "ticker": ticker})
+
+@app.route("/api/watchlist/quitar/<ticker>", methods=["POST"])
+def api_wl_quitar(ticker):
+    ok = quitar_watchlist(ticker)
+    return jsonify({"ok": ok, "ticker": ticker.upper()})
+
+@app.route("/api/watchlist")
+def api_wl_lista():
+    return jsonify(get_watchlist())
 
 
 # ═══════════════════════════════════════════════════════════
