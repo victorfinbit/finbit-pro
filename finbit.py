@@ -473,6 +473,33 @@ def init_db():
         e1_manual   REAL DEFAULT 0,
         fecha_add   TEXT DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS diario_trading (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id           INTEGER,
+        ticker          TEXT NOT NULL,
+        fecha           TEXT NOT NULL,
+        tipo            TEXT NOT NULL,
+        precio_mxn      REAL NOT NULL,
+        titulos         REAL NOT NULL,
+        score_entrada   INTEGER DEFAULT 0,
+        total_criterios INTEGER DEFAULT 13,
+        razon_entrada   TEXT NOT NULL,
+        setup_tipo      TEXT DEFAULT '',
+        rr_esperado     REAL DEFAULT 0,
+        resultado       TEXT DEFAULT 'abierta',
+        pnl_mxn         REAL DEFAULT 0,
+        pnl_pct         REAL DEFAULT 0,
+        aprendizaje     TEXT DEFAULT '',
+        fecha_cierre    TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS pnl_historico (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha       TEXT NOT NULL,
+        capital     REAL NOT NULL,
+        pnl_dia_mxn REAL DEFAULT 0,
+        pnl_acum_pct REAL DEFAULT 0,
+        spy_precio  REAL DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS tickers (
         id       INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker   TEXT UNIQUE NOT NULL,
@@ -486,6 +513,7 @@ def init_db():
     migrations = [
         "ALTER TABLE tickers ADD COLUMN origen TEXT DEFAULT 'USA'",
         "ALTER TABLE portafolio ADD COLUMN mercado TEXT DEFAULT 'SIC'",
+        "ALTER TABLE operaciones ADD COLUMN diario_id INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -4039,6 +4067,446 @@ def render_top_diario_banner(top: list) -> str:
     )
 
 
+
+# ═══════════════════════════════════════════════════════════
+#   DIARIO DE TRADING
+# ═══════════════════════════════════════════════════════════
+
+def guardar_entrada_diario(ticker: str, tipo: str, precio_mxn: float, titulos: float,
+                            score_entrada: int, total_criterios: int, razon_entrada: str,
+                            setup_tipo: str = "", rr_esperado: float = 0,
+                            op_id: int = 0) -> int:
+    """Guarda una entrada en el diario. Devuelve el id generado."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.execute(
+            """INSERT INTO diario_trading
+               (ticker, fecha, tipo, precio_mxn, titulos, score_entrada, total_criterios,
+                razon_entrada, setup_tipo, rr_esperado, resultado, op_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,'abierta',?)""",
+            (ticker.upper(), _fecha_hoy_cdmx(), tipo, precio_mxn, titulos,
+             score_entrada, total_criterios, razon_entrada, setup_tipo, rr_esperado, op_id)
+        )
+        diario_id = cur.lastrowid
+        con.commit(); con.close()
+        return diario_id
+    except Exception as e:
+        print(f"[diario] Error al guardar: {e}")
+        return 0
+
+
+def cerrar_entrada_diario(diario_id: int, precio_cierre_mxn: float,
+                           aprendizaje: str = "") -> bool:
+    """Cierra una entrada del diario calculando P&L real."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        row = con.execute("SELECT * FROM diario_trading WHERE id=?", (diario_id,)).fetchone()
+        if not row:
+            con.close(); return False
+        row = dict(row)
+        pnl_mxn = (precio_cierre_mxn - row["precio_mxn"]) * row["titulos"]
+        if row["tipo"] == "VENTA":
+            pnl_mxn = -pnl_mxn
+        pnl_pct = ((precio_cierre_mxn - row["precio_mxn"]) / row["precio_mxn"] * 100) if row["precio_mxn"] else 0
+        resultado = "ganancia" if pnl_mxn > 0 else "perdida" if pnl_mxn < 0 else "break_even"
+        con.execute(
+            """UPDATE diario_trading SET resultado=?, pnl_mxn=?, pnl_pct=?,
+               aprendizaje=?, fecha_cierre=? WHERE id=?""",
+            (resultado, round(pnl_mxn, 2), round(pnl_pct, 2),
+             aprendizaje, _fecha_hoy_cdmx(), diario_id)
+        )
+        con.commit(); con.close()
+        return True
+    except Exception as e:
+        print(f"[diario] Error al cerrar: {e}")
+        return False
+
+
+def get_diario(limite: int = 50) -> list:
+    """Devuelve entradas del diario más recientes."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM diario_trading ORDER BY fecha DESC, id DESC LIMIT ?",
+            (limite,)
+        ).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_estadisticas_diario() -> dict:
+    """Calcula estadísticas del diario para mostrar patrones."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM diario_trading WHERE resultado != 'abierta'"
+        ).fetchall()]
+        con.close()
+    except Exception:
+        return {}
+
+    if not rows:
+        return {}
+
+    total    = len(rows)
+    ganadoras= [r for r in rows if r["resultado"] == "ganancia"]
+    perdedoras=[r for r in rows if r["resultado"] == "perdida"]
+    win_rate = len(ganadoras) / total * 100 if total else 0
+    pnl_total= sum(r["pnl_mxn"] for r in rows)
+    avg_gan  = sum(r["pnl_mxn"] for r in ganadoras) / len(ganadoras) if ganadoras else 0
+    avg_per  = sum(r["pnl_mxn"] for r in perdedoras) / len(perdedoras) if perdedoras else 0
+
+    # Análisis por score de entrada
+    score_stats = {}
+    for r in rows:
+        s = r.get("score_entrada", 0)
+        tc = r.get("total_criterios", 13) or 13
+        rango = f"{s}/{tc}"
+        if rango not in score_stats:
+            score_stats[rango] = {"total": 0, "ganadoras": 0, "pnl": 0.0}
+        score_stats[rango]["total"] += 1
+        score_stats[rango]["pnl"] += r["pnl_mxn"]
+        if r["resultado"] == "ganancia":
+            score_stats[rango]["ganadoras"] += 1
+
+    # Análisis por tipo de setup
+    setup_stats = {}
+    for r in rows:
+        s = r.get("setup_tipo", "—") or "—"
+        if s not in setup_stats:
+            setup_stats[s] = {"total": 0, "ganadoras": 0, "pnl": 0.0}
+        setup_stats[s]["total"] += 1
+        setup_stats[s]["pnl"] += r["pnl_mxn"]
+        if r["resultado"] == "ganancia":
+            setup_stats[s]["ganadoras"] += 1
+
+    return {
+        "total": total, "ganadoras": len(ganadoras), "perdedoras": len(perdedoras),
+        "win_rate": round(win_rate, 1), "pnl_total": round(pnl_total, 2),
+        "avg_ganadora": round(avg_gan, 2), "avg_perdedora": round(avg_per, 2),
+        "score_stats": score_stats, "setup_stats": setup_stats,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+#   P&L HISTÓRICO Y RENDIMIENTO VS SPY
+# ═══════════════════════════════════════════════════════════
+
+def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None:
+    """Guarda un snapshot diario del capital para tracking de rendimiento."""
+    hoy = _fecha_hoy_cdmx()
+    try:
+        con = sqlite3.connect(DB_FILE)
+        existe = con.execute(
+            "SELECT id, capital FROM pnl_historico WHERE fecha=?", (hoy,)
+        ).fetchone()
+        if not existe:
+            # Calcular P&L vs día anterior
+            ant = con.execute(
+                "SELECT capital FROM pnl_historico ORDER BY fecha DESC LIMIT 1"
+            ).fetchone()
+            pnl_dia = capital_actual - ant[0] if ant else 0
+            # P&L acumulado vs capital inicial (config)
+            cfg = cargar_config()
+            cap_ini = cfg.get("capital", capital_actual)
+            pnl_acum = (capital_actual - cap_ini) / cap_ini * 100 if cap_ini else 0
+            con.execute(
+                "INSERT INTO pnl_historico (fecha, capital, pnl_dia_mxn, pnl_acum_pct, spy_precio) VALUES (?,?,?,?,?)",
+                (hoy, capital_actual, round(pnl_dia, 2), round(pnl_acum, 2), spy_precio)
+            )
+            con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[pnl] Error: {e}")
+
+
+def get_pnl_historico(dias: int = 90) -> list:
+    """Devuelve el historial de P&L de los últimos N días."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM pnl_historico ORDER BY fecha DESC LIMIT ?", (dias,)
+        ).fetchall()
+        con.close()
+        return [dict(r) for r in reversed(rows)]
+    except Exception:
+        return []
+
+
+def get_spy_precio_actual() -> float:
+    """Obtiene precio actual de SPY para comparación."""
+    try:
+        vals = _get_cached("SPY", "1day", "")
+        if vals:
+            return float(vals[-1]["close"])
+    except Exception:
+        pass
+    return 0.0
+
+
+def calcular_rendimiento_vs_spy(pnl_hist: list, spy_actual: float) -> dict:
+    """Compara rendimiento del portafolio vs SPY en el mismo periodo."""
+    if not pnl_hist or len(pnl_hist) < 2:
+        return {}
+    primer = pnl_hist[0]
+    ultimo = pnl_hist[-1]
+    rend_port = ultimo.get("pnl_acum_pct", 0)
+    spy_ini   = primer.get("spy_precio", 0)
+    rend_spy  = ((spy_actual - spy_ini) / spy_ini * 100) if spy_ini and spy_actual else 0
+    alfa      = rend_port - rend_spy
+    return {
+        "rend_port": round(rend_port, 2),
+        "rend_spy":  round(rend_spy, 2),
+        "alfa":      round(alfa, 2),
+        "periodo_dias": len(pnl_hist),
+        "ganando_al_mercado": alfa > 0,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+#   VOLUMEN INUSUAL
+# ═══════════════════════════════════════════════════════════
+
+def es_volumen_inusual(vol_rel: float, umbral: float = 2.5) -> bool:
+    """Volumen inusual: 2.5x o más del promedio de 20 días."""
+    return vol_rel >= umbral
+
+
+def badge_volumen_inusual(vol_rel: float) -> str:
+    """Badge visual para volumen inusual."""
+    if vol_rel >= 4.0:
+        return f'<span style="background:#fde68a;color:#92400e;border:1px solid #fbbf24;border-radius:6px;padding:1px 6px;font-size:9px;font-weight:700" title="Volumen {vol_rel:.1f}x — actividad institucional extrema">🔥 {vol_rel:.1f}x VOL</span>'
+    elif vol_rel >= 2.5:
+        return f'<span style="background:#fef3c7;color:#d97706;border:1px solid #fde68a;border-radius:6px;padding:1px 6px;font-size:9px;font-weight:700" title="Volumen {vol_rel:.1f}x — actividad inusual">⚡ {vol_rel:.1f}x VOL</span>'
+    return ""
+
+
+def distancia_soporte_pct(precio_mxn: float, sr: dict) -> float:
+    """Calcula distancia % al soporte más cercano por debajo del precio."""
+    soportes = sr.get("soportes", [])
+    if not soportes or not precio_mxn:
+        return 0.0
+    cercano = None
+    for z in soportes:
+        p = z.get("precio_mxn", z.get("precio", 0))
+        if p and p < precio_mxn:
+            if cercano is None or p > cercano:
+                cercano = p
+    if not cercano:
+        return 0.0
+    return round((precio_mxn - cercano) / precio_mxn * 100, 1)
+
+
+def render_tab_diario(entradas: list, stats: dict) -> str:
+    """Tab del diario de trading con análisis de patrones."""
+    medals_score = {"ganancia": "🟢", "perdida": "🔴", "break_even": "🟡", "abierta": "🔵"}
+
+    # ── Estadísticas generales ────────────────────────────
+    stats_html = ""
+    if stats:
+        wr_col = "var(--green)" if stats["win_rate"] >= 55 else "var(--yellow)" if stats["win_rate"] >= 40 else "var(--red)"
+        pnl_col = "var(--green)" if stats["pnl_total"] >= 0 else "var(--red)"
+        stats_html = f'''
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px">
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:{wr_col}">{stats["win_rate"]:.0f}%</div>
+        <div style="font-size:10px;color:var(--muted)">Win rate</div>
+        <div style="font-size:10px;color:var(--muted)">{stats["ganadoras"]}G / {stats["perdedoras"]}P</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:{pnl_col}">{fmt(stats["pnl_total"])}</div>
+        <div style="font-size:10px;color:var(--muted)">P&L total MXN</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:var(--green)">{fmt(stats["avg_ganadora"])}</div>
+        <div style="font-size:10px;color:var(--muted)">Promedio ganadora</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:var(--red)">{fmt(stats["avg_perdedora"])}</div>
+        <div style="font-size:10px;color:var(--muted)">Promedio perdedora</div>
+      </div>
+    </div>'''
+
+        # Análisis por score
+        if stats.get("score_stats"):
+            score_rows = ""
+            for rango, s in sorted(stats["score_stats"].items()):
+                wr = s["ganadoras"] / s["total"] * 100 if s["total"] else 0
+                wr_c = "var(--green)" if wr >= 55 else "var(--yellow)" if wr >= 40 else "var(--red)"
+                pnl_c = "var(--green)" if s["pnl"] >= 0 else "var(--red)"
+                score_rows += (f'<tr><td style="font-weight:700">{rango}</td>'
+                               f'<td class="num">{s["total"]}</td>'
+                               f'<td class="num" style="color:{wr_c}">{wr:.0f}%</td>'
+                               f'<td class="num" style="color:{pnl_c}">{fmt(s["pnl"])}</td></tr>')
+            stats_html += f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">📊 Rendimiento por score de entrada</div>
+      <p class="hint" style="margin-bottom:10px">Aquí verás si tus mejores trades vienen de score 7/13 o 10/13 — eso te dice en qué nivel de convicción operas mejor.</p>
+      <table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead><tr style="color:var(--muted);font-size:10px">
+          <th style="text-align:left;padding:4px 0">Score</th>
+          <th style="text-align:right">Ops</th><th style="text-align:right">Win%</th><th style="text-align:right">P&L</th>
+        </tr></thead>
+        <tbody>{score_rows}</tbody>
+      </table>
+    </div>'''
+
+        # Análisis por setup
+        if stats.get("setup_stats"):
+            setup_rows = ""
+            for setup, s in sorted(stats["setup_stats"].items(), key=lambda x: -x[1]["total"]):
+                wr = s["ganadoras"] / s["total"] * 100 if s["total"] else 0
+                wr_c = "var(--green)" if wr >= 55 else "var(--yellow)" if wr >= 40 else "var(--red)"
+                pnl_c = "var(--green)" if s["pnl"] >= 0 else "var(--red)"
+                setup_rows += (f'<tr><td style="font-weight:600">{setup}</td>'
+                               f'<td class="num">{s["total"]}</td>'
+                               f'<td class="num" style="color:{wr_c}">{wr:.0f}%</td>'
+                               f'<td class="num" style="color:{pnl_c}">{fmt(s["pnl"])}</td></tr>')
+            stats_html += f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">🎯 Rendimiento por tipo de setup</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead><tr style="color:var(--muted);font-size:10px">
+          <th style="text-align:left;padding:4px 0">Setup</th>
+          <th style="text-align:right">Ops</th><th style="text-align:right">Win%</th><th style="text-align:right">P&L</th>
+        </tr></thead>
+        <tbody>{setup_rows}</tbody>
+      </table>
+    </div>'''
+
+    # ── Lista de entradas del diario ──────────────────────
+    entradas_html = ""
+    if not entradas:
+        entradas_html = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin entradas aún. Cada operación que registres aparecerá aquí.</div>'
+    else:
+        for e in entradas:
+            dot    = medals_score.get(e.get("resultado", "abierta"), "⚪")
+            r_col  = ("var(--green)" if e["resultado"] == "ganancia"
+                      else "var(--red)" if e["resultado"] == "perdida"
+                      else "var(--muted)")
+            pnl_txt = (f'<span style="color:{r_col};font-weight:700">{fmt(e["pnl_mxn"])} ({e["pnl_pct"]:+.1f}%)</span>'
+                       if e["resultado"] != "abierta" else
+                       '<span style="color:#3b82f6;font-size:10px">● Abierta</span>')
+            aprend_html = (f'<div style="margin-top:6px;font-size:11px;color:var(--muted);'
+                           f'border-top:1px solid var(--brd);padding-top:6px">'
+                           f'💡 <em>{e["aprendizaje"]}</em></div>'
+                           if e.get("aprendizaje") else "")
+            entradas_html += f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px;margin-bottom:10px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <span style="font-size:16px">{dot}</span>
+          <strong style="font-size:15px;margin-left:6px">{e["ticker"]}</strong>
+          <span style="color:var(--muted);font-size:11px;margin-left:8px">{e["tipo"]} · {e["fecha"][:10]}</span>
+          {f'<span style="background:var(--surface2);border-radius:6px;padding:1px 8px;font-size:10px;margin-left:6px">{e["setup_tipo"]}</span>' if e.get("setup_tipo") else ""}
+        </div>
+        <div style="text-align:right">
+          {pnl_txt}
+          <div style="font-size:10px;color:var(--muted)">Score: {e["score_entrada"]}/{e["total_criterios"]} · R:R {e["rr_esperado"]:.1f}x</div>
+        </div>
+      </div>
+      <div style="font-size:12px;line-height:1.5;background:var(--surface2);border-radius:8px;padding:8px 10px">
+        📝 <strong>Por qué entré:</strong> {e["razon_entrada"]}
+      </div>
+      {aprend_html}
+      {f'<div style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right">Cerrada: {e["fecha_cierre"]}</div>' if e.get("fecha_cierre") else ""}
+    </div>'''
+
+    return f'''<div id="tab-diario" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📓 Diario de Trading</h2>
+    <p class="hint">Cada operación que registres queda aquí con tu razonamiento. Con el tiempo verás qué setups y qué scores te funcionan mejor.</p>
+  </div>
+  {stats_html}
+  <div>{entradas_html}</div>
+</div>'''
+
+
+def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> str:
+    """Tab de rendimiento acumulado vs SPY con opción de exportar."""
+    if not pnl_hist:
+        return '''<div id="tab-rendimiento" class="tab">
+          <div style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:48px;margin-bottom:16px">📊</div>
+            <div style="font-size:16px;font-weight:600">Sin historial de rendimiento todavía</div>
+            <div style="font-size:13px;margin-top:8px">El sistema registrará tu P&L cada vez que actualices el dashboard.</div>
+          </div>
+        </div>'''
+
+    ultimo   = pnl_hist[-1]
+    cap_act  = ultimo.get("capital", 0)
+    pnl_acum = ultimo.get("pnl_acum_pct", 0)
+    pnl_col  = "var(--green)" if pnl_acum >= 0 else "var(--red)"
+
+    # Alfa vs SPY
+    alfa_html = ""
+    if vs_spy:
+        alfa_col = "var(--green)" if vs_spy["ganando_al_mercado"] else "var(--red)"
+        alfa_html = f'''
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:20px;font-weight:800;color:{pnl_col}">{pnl_acum:+.1f}%</div>
+        <div style="font-size:10px;color:var(--muted)">Tu portafolio</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:20px;font-weight:800;color:var(--muted)">{vs_spy["rend_spy"]:+.1f}%</div>
+        <div style="font-size:10px;color:var(--muted)">SPY (S&P500)</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:20px;font-weight:800;color:{alfa_col}">{vs_spy["alfa"]:+.1f}%</div>
+        <div style="font-size:10px;color:var(--muted)">Alfa vs mercado</div>
+        <div style="font-size:9px;color:{alfa_col}">{"✅ Ganando al mercado" if vs_spy["ganando_al_mercado"] else "⚠️ Perdiendo vs índice"}</div>
+      </div>
+    </div>'''
+
+    # Tabla de historial
+    hist_rows = ""
+    for h in reversed(pnl_hist[-30:]):
+        pnl_d_col = "var(--green)" if h.get("pnl_dia_mxn", 0) >= 0 else "var(--red)"
+        pnl_a_col = "var(--green)" if h.get("pnl_acum_pct", 0) >= 0 else "var(--red)"
+        hist_rows += (f'<tr>'
+                      f'<td>{h["fecha"]}</td>'
+                      f'<td class="num">{fmt(h["capital"])}</td>'
+                      f'<td class="num" style="color:{pnl_d_col}">{fmt(h["pnl_dia_mxn"])}</td>'
+                      f'<td class="num" style="color:{pnl_a_col}">{h["pnl_acum_pct"]:+.1f}%</td>'
+                      f'<td class="num" style="color:var(--muted)">{fmt(h["spy_precio"]) if h["spy_precio"] else "—"}</td>'
+                      f'</tr>')
+
+    return f'''<div id="tab-rendimiento" class="tab">
+  <div style="padding:20px 0 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📊 Rendimiento</h2>
+      <p class="hint">Capital actual: <strong>{fmt(cap_act)} MXN</strong> · {len(pnl_hist)} días de historial</p>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button onclick="exportarExcel()" style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid var(--brd);background:var(--surface2);color:var(--text);cursor:pointer">📥 Excel</button>
+      <button onclick="exportarPDF()" style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid var(--brd);background:var(--surface2);color:var(--text);cursor:pointer">📄 PDF</button>
+    </div>
+  </div>
+  {alfa_html}
+  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;overflow:hidden">
+    <table style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead style="background:var(--surface2)">
+        <tr style="color:var(--muted);font-size:10px">
+          <th style="text-align:left;padding:8px 12px">Fecha</th>
+          <th style="text-align:right;padding:8px 12px">Capital</th>
+          <th style="text-align:right;padding:8px 12px">P&L día</th>
+          <th style="text-align:right;padding:8px 12px">P&L acum%</th>
+          <th style="text-align:right;padding:8px 12px">SPY</th>
+        </tr>
+      </thead>
+      <tbody>{hist_rows}</tbody>
+    </table>
+  </div>
+</div>'''
+
+
 def get_watchlist() -> list:
     """Devuelve los tickers de la watchlist."""
     try:
@@ -4534,6 +5002,18 @@ def render_scan_rows(scanner, tc):
         ganga_badge  = badge_ganga(r.get("ganga", {}))
         inicio_badge = badge_inicio_movimiento(r.get("inicio", {}))
 
+        # Badge volumen inusual
+        vol_rel_val  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0) or 0
+        vol_badge    = badge_volumen_inusual(vol_rel_val)
+
+        # Distancia al soporte
+        dist_sop = distancia_soporte_pct(r.get("precio_mxn", 0), r.get("sr", {}))
+        dist_badge = ""
+        if 0 < dist_sop <= 3:
+            dist_badge = f'<span style="font-size:9px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:1px 5px;margin-left:3px" title="A {dist_sop:.1f}% del soporte">🎯 {dist_sop:.1f}% sop</span>'
+        elif 0 < dist_sop <= 6:
+            dist_badge = f'<span style="font-size:9px;background:#fef9c3;color:#854d0e;border:1px solid #fde047;border-radius:6px;padding:1px 5px;margin-left:3px" title="A {dist_sop:.1f}% del soporte">📍 {dist_sop:.1f}% sop</span>'
+
         score_block    = render_score_badge(score_aj, total_c, senal_1d)
         score_adj_note = ""
         if penaliz > 0:
@@ -4650,7 +5130,7 @@ def render_scan_rows(scanner, tc):
                          f'<div style="height:100%;width:{confianza}%;background:{"#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"};border-radius:2px"></div></div>'
                          if confianza>0 else "")
         h+=(f'<tr class="datarow" onclick="toggle(\'{rid}\')">'
-            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{inicio_badge}{sr_badge}{cartera_badge}</td>'
+            f'<td><strong>{r["nombre"]}</strong>{etf_badge}{setup_badge}{ganga_badge}{inicio_badge}{sr_badge}{vol_badge}{dist_badge}{cartera_badge}</td>'
             f'<td>{badge_estado(r["estado"])}</td>'
             f'<td class="num">{fmt(r["precio_mxn"])}<br><span class="hint">USD {(r["precio_usd"] or 0):.2f}</span></td>'
             f'<td class="num" style="color:var(--green)">{fmt(r["entrada_mxn"])}</td>'
@@ -5084,6 +5564,19 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     # ── WATCHLIST ────────────────────────────────────────────
     watchlist_tab_html = render_tab_watchlist(scan_data, radar_data, tc)
 
+    # ── DIARIO DE TRADING ────────────────────────────────────
+    diario_entradas   = get_diario(limite=50)
+    diario_stats      = get_estadisticas_diario()
+    diario_tab_html   = render_tab_diario(diario_entradas, diario_stats)
+
+    # ── RENDIMIENTO VS SPY ───────────────────────────────────
+    capital_actual = capital + total_valor - total_costo  # capital config + P&L abierto
+    spy_precio     = get_spy_precio_actual()
+    registrar_snapshot_pnl(capital_actual, spy_precio)
+    pnl_hist       = get_pnl_historico(dias=90)
+    vs_spy         = calcular_rendimiento_vs_spy(pnl_hist, spy_precio)
+    rendimiento_tab_html = render_tab_rendimiento(pnl_hist, vs_spy, diario_stats)
+
     n_radar =len(radar_data)
     n_rocket=sum(1 for r in radar_data if r["estado"]=="ROCKET")
     n_buy   =sum(1 for r in radar_data if r["estado"]=="BUY")
@@ -5309,6 +5802,8 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('top',this)">🏆 Top Semanal</button>
   <button class="nb" onclick="showTab('topd',this)">📅 Top Diario</button>
   <button class="nb" onclick="showTab('wl',this)">👁 Watchlist</button>
+  <button class="nb" onclick="showTab('diario',this)">📓 Diario</button>
+  <button class="nb" onclick="showTab('rendimiento',this)">📊 Rendimiento</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
@@ -5404,7 +5899,36 @@ td strong{{font-size:13px;font-weight:500}}
       <div class="fg"><label>Precio por título MXN</label><input type="number" id="f_precio" step="0.01" placeholder="1500.00"></div>
       <div class="fg"><label>Origen</label><select id="f_origen"><option value="USA">USA (SIC)</option><option value="MX">México (BMV)</option></select></div>
       <div class="fg"><label>Mercado</label><select id="f_mercado"><option value="SIC">SIC</option><option value="BMV">BMV</option></select></div>
-      <div class="fg"><label>Notas</label><input type="text" id="f_notas" placeholder="Señal MACD+EMA..."></div>
+      <div class="fg"><label>R:R esperado</label><input type="number" id="f_rr" step="0.1" min="0" placeholder="3.0"></div>
+    </div>
+    <div style="padding:0 16px 12px">
+      <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border:1px solid #334155;border-radius:10px;padding:16px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700;color:#94a3b8;margin-bottom:12px">📓 Diario de trading — obligatorio</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="fg" style="margin:0">
+            <label style="color:#94a3b8;font-size:11px">Score al entrar (ej: 8)</label>
+            <input type="number" id="f_score" min="0" max="13" step="1" placeholder="8" style="width:100%">
+          </div>
+          <div class="fg" style="margin:0">
+            <label style="color:#94a3b8;font-size:11px">Tipo de setup</label>
+            <select id="f_setup" style="width:100%">
+              <option value="">— Selecciona —</option>
+              <option value="Ganga">🏷️ Ganga +15%</option>
+              <option value="Pre-breakout">⚡ Pre-breakout 4/5</option>
+              <option value="Listo 5/5">✅ Listo 5/5</option>
+              <option value="Acumulacion">🟡 Acumulación</option>
+              <option value="DCA">📥 DCA escalonado</option>
+              <option value="Pullback">↩️ Pullback a EMA</option>
+              <option value="Breakout">🚀 Breakout</option>
+              <option value="Otro">Otro</option>
+            </select>
+          </div>
+        </div>
+        <div class="fg" style="margin:0">
+          <label style="color:#94a3b8;font-size:11px">¿Por qué entras? — sé específico <span style="color:#ef4444">*obligatorio*</span></label>
+          <textarea id="f_razon" rows="3" placeholder="Ej: Score 8/13, RSI 32 en soporte $2,400, divergencia RSI alcista, Ganga activa con R:R 4.2x. EMA9 cruzando arriba de EMA21. Sector SMH alcista." style="width:100%;resize:vertical;font-family:var(--sans);font-size:12px;padding:8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--text)"></textarea>
+        </div>
+      </div>
     </div>
     <div style="padding:0 16px 16px">
       <div id="f_preview" style="background:var(--surface2);border:1px solid var(--brd);border-radius:var(--r);padding:9px 12px;margin-bottom:11px;display:none;font-size:12px">
@@ -5629,6 +6153,10 @@ td strong{{font-size:13px;font-weight:500}}
 {top_diario_tab_html}
 
 {watchlist_tab_html}
+
+{diario_tab_html}
+
+{rendimiento_tab_html}
 
 <!-- ══ RADAR ══ -->
 <div id="tab-radar" class="tab">
@@ -7257,6 +7785,22 @@ function updatePreview(){{
   }}
 }}
 function registrarOp(){{
+  const razon = (document.getElementById('f_razon').value||'').trim();
+  const score = parseInt(document.getElementById('f_score').value||'0');
+  const setup = document.getElementById('f_setup').value;
+  const rr_esp = parseFloat(document.getElementById('f_rr').value||'0');
+
+  // Validación del diario — obligatorio
+  if(!razon || razon.length < 20) {{
+    document.getElementById('f_msg').innerHTML='<span style="color:var(--red)">⚠ Escribe por qué entras (mínimo 20 caracteres) — el diario es obligatorio para mejorar</span>';
+    document.getElementById('f_razon').focus();
+    return;
+  }}
+  if(!setup) {{
+    document.getElementById('f_msg').innerHTML='<span style="color:var(--red)">⚠ Selecciona el tipo de setup</span>';
+    return;
+  }}
+
   const op={{fecha:document.getElementById('f_fecha').value,
     ticker:(document.getElementById('f_ticker').value||'').toUpperCase().trim(),
     tipo:document.getElementById('f_tipo').value,
@@ -7264,8 +7808,14 @@ function registrarOp(){{
     precio_mxn:parseFloat(document.getElementById('f_precio').value),
     origen:document.getElementById('f_origen').value,
     mercado:document.getElementById('f_mercado').value,
-    notas:document.getElementById('f_notas').value,
-    tc_dia:TC}};
+    notas:setup + (razon ? ' | ' + razon.substring(0,80) : ''),
+    tc_dia:TC,
+    score_entrada: score,
+    total_criterios: 13,
+    razon_entrada: razon,
+    setup_tipo: setup,
+    rr_esperado: rr_esp
+  }};
   if(!op.ticker||!op.titulos||!op.precio_mxn||!op.fecha){{
     document.getElementById('f_msg').innerHTML='<span style="color:var(--red)">⚠ Completa todos los campos</span>';return;
   }}
@@ -7275,9 +7825,12 @@ function registrarOp(){{
   localStorage.setItem('finbit_ops',JSON.stringify(ops));
   renderOpsTable(ops);
   actualizarTablaPortafolio();
-  document.getElementById('f_msg').innerHTML='<span style="color:var(--green)">✅ Guardado — portafolio actualizado</span>';
+  document.getElementById('f_msg').innerHTML='<span style="color:var(--green)">✅ Guardado — portafolio y diario actualizados</span>';
   setTimeout(()=>document.getElementById('f_msg').innerHTML='',5000);
-  ['f_ticker','f_titulos','f_precio','f_notas'].forEach(id=>document.getElementById(id).value='');
+  ['f_ticker','f_titulos','f_precio','f_razon','f_score','f_rr'].forEach(id=>{{
+    const el=document.getElementById(id); if(el) el.value='';
+  }});
+  document.getElementById('f_setup').value='';
   document.getElementById('f_preview').style.display='none';
   // ── Sincronizar todas las ops al servidor para persistencia ──
   _sincronizarOpsServidor(ops);
@@ -7500,6 +8053,27 @@ function sincronizarOpsAlServidor() {{
     }}
   }})
   .catch(e => console.log('[finbit] Sin conexión al servidor para sincronizar ops'));
+}}
+
+// ── Exportar Excel ────────────────────────────────────────
+function exportarExcel() {{
+  fetch('/api/exportar/excel')
+    .then(r => r.blob())
+    .then(blob => {{
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'finbit_rendimiento.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }})
+    .catch(() => alert('Error al exportar'));
+}}
+
+// ── Exportar PDF (print) ──────────────────────────────────
+function exportarPDF() {{
+  showTab('rendimiento', document.querySelector('.nb[onclick*=rendimiento]'));
+  setTimeout(() => window.print(), 300);
 }}
 
 // ── Watchlist toggle ──────────────────────────────────────
@@ -8311,7 +8885,7 @@ def api_ops_import():
         for op in sorted(ops, key=lambda x: x.get("fecha", "")):
             try:
                 total_mxn = op.get("total_mxn") or (op.get("titulos",0) * op.get("precio_mxn",0))
-                con.execute(
+                cur = con.execute(
                     "INSERT INTO operaciones (fecha,ticker,tipo,titulos,precio_mxn,total_mxn,tc_dia,origen,mercado,notas) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (op.get("fecha"), op.get("ticker","").upper(), op.get("tipo"),
@@ -8319,7 +8893,22 @@ def api_ops_import():
                      op.get("tc_dia", tc), op.get("origen","USA"),
                      op.get("mercado","SIC"), op.get("notas",""))
                 )
+                op_id = cur.lastrowid
                 con.commit()
+                # Guardar en diario si tiene razón de entrada
+                razon = op.get("razon_entrada", "").strip()
+                if razon:
+                    con.execute(
+                        """INSERT OR IGNORE INTO diario_trading
+                           (ticker, fecha, tipo, precio_mxn, titulos, score_entrada,
+                            total_criterios, razon_entrada, setup_tipo, rr_esperado, resultado, op_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,'abierta',?)""",
+                        (op.get("ticker","").upper(), op.get("fecha",""),
+                         op.get("tipo",""), op.get("precio_mxn",0), op.get("titulos",0),
+                         op.get("score_entrada", 0), op.get("total_criterios", 13),
+                         razon, op.get("setup_tipo",""), op.get("rr_esperado", 0), op_id)
+                    )
+                    con.commit()
                 # Reconstruir portafolio op por op
                 upsert_portafolio_from_op({
                     "ticker":     op.get("ticker","").upper(),
@@ -8404,6 +8993,57 @@ def api_test():
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
+
+
+# ═══════════════════════════════════════════════════════════
+#   API DIARIO Y RENDIMIENTO
+# ═══════════════════════════════════════════════════════════
+@app.route("/api/diario/cerrar", methods=["POST"])
+def api_diario_cerrar():
+    data         = flask_req.get_json(silent=True) or {}
+    diario_id    = data.get("id", 0)
+    precio_cierre= data.get("precio_cierre_mxn", 0)
+    aprendizaje  = data.get("aprendizaje", "")
+    if not diario_id or not precio_cierre:
+        return jsonify({"ok": False, "error": "id y precio_cierre_mxn requeridos"}), 400
+    ok = cerrar_entrada_diario(diario_id, precio_cierre, aprendizaje)
+    return jsonify({"ok": ok})
+
+@app.route("/api/diario")
+def api_diario_lista():
+    return jsonify(get_diario(limite=100))
+
+@app.route("/api/exportar/excel")
+def api_exportar_excel():
+    """Exporta historial de P&L y diario como CSV."""
+    import io, csv
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Hoja 1: P&L histórico
+    writer.writerow(["=== RENDIMIENTO HISTÓRICO ==="])
+    writer.writerow(["Fecha", "Capital MXN", "P&L día MXN", "P&L acum %", "SPY precio"])
+    for h in get_pnl_historico(dias=365):
+        writer.writerow([h["fecha"], h["capital"], h["pnl_dia_mxn"], h["pnl_acum_pct"], h.get("spy_precio","")])
+
+    writer.writerow([])
+    writer.writerow(["=== DIARIO DE TRADING ==="])
+    writer.writerow(["Fecha","Ticker","Tipo","Precio MXN","Títulos","Score","Setup","R:R esp","Resultado","P&L MXN","P&L %","Por qué entré","Aprendizaje"])
+    for e in get_diario(limite=500):
+        writer.writerow([
+            e["fecha"], e["ticker"], e["tipo"], e["precio_mxn"], e["titulos"],
+            f'{e["score_entrada"]}/{e["total_criterios"]}', e["setup_tipo"],
+            e["rr_esperado"], e["resultado"], e["pnl_mxn"], e["pnl_pct"],
+            e["razon_entrada"], e.get("aprendizaje","")
+        ])
+
+    output.seek(0)
+    from flask import Response
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=finbit_rendimiento.csv"}
+    )
 
 
 # ═══════════════════════════════════════════════════════════
