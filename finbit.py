@@ -3475,11 +3475,14 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     syms_usa = list(set([v[0] for v in combinados.values() if v[1] != "BMV"]))
     syms_bmv = [(v[0], v[1]) for v in combinados.values() if v[1] == "BMV"]
 
-    # Agregar tickers de semis al batch — se descargan junto con el scanner
-    # Así el tab Semis ETF usa el cache y no gasta créditos extra
-    syms_semis = [v[0] for v in _SEMIS_CACHE_TICKERS.values()]
-    syms_usa_total = list(set(syms_usa + syms_semis))
-    _precargar_cache_batch(syms_usa_total, ["1day", "1week"])
+    # Scanner normal — descarga 1day + 1week para análisis multi-timeframe
+    _precargar_cache_batch(syms_usa, ["1day", "1week"])
+
+    # Semis — solo 1day, sin 1week (ahorra 10 créditos por actualización)
+    syms_semis = [v[0] for v in _SEMIS_CACHE_TICKERS.values()
+                  if v[0] not in syms_usa]  # solo los que no están ya en scanner
+    if syms_semis:
+        _precargar_cache_batch(syms_semis, ["1day"])
     # Cargar tickers BMV individualmente con exchange explícito
     if syms_bmv:
         print(f"  [batch] {len(syms_bmv)} tickers BMV — cargando individualmente con exchange=BMV")
