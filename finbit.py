@@ -1706,8 +1706,17 @@ _ETFS_APALANCADOS = {
     "WEBL","DFEN","WANT","PILL","CURE","MIDU",
 }
 
+# Tickers que TwelveData reconoce pero NO están disponibles en GBM/SIC
+# Si encuentras más, avísame y los agrego aquí
+_NO_DISPONIBLE_GBM = {
+    "FUJIY",  # No disponible en GBM/SIC
+}
+
 def es_etf_apalancado(ticker: str) -> bool:
     return ticker.upper() in _ETFS_APALANCADOS
+
+def no_disponible_gbm(ticker: str) -> bool:
+    return ticker.upper() in _NO_DISPONIBLE_GBM
 
 def score_minimo_entrada(ticker: str, vix: float) -> int:
     """Score mínimo para señal BUY según tipo de activo y condición macro."""
@@ -4178,6 +4187,8 @@ def actualizar_top_semanal_acum(scan_data: list) -> None:
                 continue
             if es_etf_apalancado(r.get("nombre", "")):
                 continue
+            if no_disponible_gbm(r.get("nombre", "")):
+                continue
             score = r.get("score_ajustado", r.get("score", 0))
             total = r.get("total_criterios", 13) or 13
             if total > 0 and (score / total) < (5 / 13):
@@ -5045,8 +5056,21 @@ def render_tab_top_diario(top: list, tc: float) -> str:
         else:
             badge_html = ""
 
-        sl  = sizing.get("sl_mxn", inicio.get("sl_mxn", 0))
-        obj = sizing.get("objetivo_mxn", inicio.get("objetivo_mxn", 0))
+        sl  = (sizing.get("sl_mxn") or
+               inicio.get("sl_mxn") or
+               ganga_d.get("sl_mxn") or
+               r.get("stop_mxn") or
+               r.get("sl_mxn") or 0)
+        obj = (sizing.get("objetivo_mxn") or
+               inicio.get("objetivo_mxn") or
+               ganga_d.get("objetivo_mxn") or
+               r.get("obj_mxn") or
+               r.get("objetivo_mxn") or 0)
+        # Si aún no hay sl/obj, calcular desde precio y rr
+        if not sl and precio and rr >= 3:
+            atr_est = precio * 0.03  # estimado 3% como ATR
+            sl  = round(precio - atr_est, 2)
+            obj = round(precio + atr_est * rr, 2)
         pct_score = int((score / total_c * 100)) if total_c else 0
         pct_puntuacion = int(puntuacion * 100)
 
@@ -5166,6 +5190,9 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
         # ── Filtro 2: Sin ETFs apalancados/inversos ───────────────
         if es_etf_apalancado(r.get("nombre", "")):
             continue
+        # ── Filtro 3: Sin tickers no disponibles en GBM/SIC ───────
+        if no_disponible_gbm(r.get("nombre", "")):
+            continue
         # ── Filtro 3: Score mínimo 5/11 ───────────────────────────
         score = r.get("score_ajustado", r.get("score", 0))
         total = r.get("total_criterios", 11)
@@ -5254,13 +5281,29 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         rsi     = r.get("rsi", 0)
         score   = r.get("score_ajustado", r.get("score", 0))
         total   = r.get("total_criterios", 11)
-        stop    = r.get("stop_mxn", 0)
-        obj     = r.get("obj_mxn", 0)
-        ema200  = r.get("ema200_mxn", 0)
         fuente  = r.get("objetivo_fuente", "ATR")
         punt    = r.get("_puntuacion", 0)
         es_ganga = r.get("_es_ganga", False)
         nivel   = r.get("_nivel", "")
+        sizing  = r.get("sizing", {}) or {}
+        inicio  = r.get("inicio", {}) or {}
+        ganga_d = r.get("ganga", {}) or {}
+
+        # Buscar stop y objetivo en múltiples fuentes
+        stop = (r.get("stop_mxn") or
+                sizing.get("sl_mxn") or
+                inicio.get("sl_mxn") or
+                ganga_d.get("sl_mxn") or 0)
+        obj  = (r.get("obj_mxn") or
+                sizing.get("objetivo_mxn") or
+                inicio.get("objetivo_mxn") or
+                ganga_d.get("objetivo_mxn") or 0)
+        ema200 = r.get("ema200_mxn", 0)
+        # Si aún $0, estimar desde precio y rr
+        if not stop and precio and rr >= 3:
+            atr_est = precio * 0.03
+            stop = round(precio - atr_est, 2)
+            obj  = round(precio + atr_est * rr, 2)
 
         # Badge principal
         if es_ganga:
