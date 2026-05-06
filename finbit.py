@@ -482,7 +482,7 @@ def init_db():
         puntuacion  REAL NOT NULL,
         datos_json  TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS semis_señales (
+    CREATE TABLE IF NOT EXISTS semis_senales (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha       TEXT NOT NULL,
         simbolo     TEXT NOT NULL,
@@ -4123,12 +4123,12 @@ def guardar_senal_semis(simbolo: str, senal: str, precio_mxn: float,
         con = sqlite3.connect(DB_FILE)
         # Solo una señal por símbolo por día
         existe = con.execute(
-            "SELECT id FROM semis_señales WHERE fecha=? AND simbolo=? AND senal=?",
+            "SELECT id FROM semis_senales WHERE fecha=? AND simbolo=? AND senal=?",
             (hoy, simbolo, senal)
         ).fetchone()
         if not existe:
             con.execute(
-                "INSERT INTO semis_señales (fecha, simbolo, senal, precio_mxn, pasos_ok, tipo) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO semis_senales (fecha, simbolo, senal, precio_mxn, pasos_ok, tipo) VALUES (?,?,?,?,?,?)",
                 (hoy, simbolo, senal, precio_mxn, pasos_ok, tipo)
             )
             con.commit()
@@ -4143,7 +4143,7 @@ def get_historial_señales(limite: int = 30) -> list:
         con = sqlite3.connect(DB_FILE)
         con.row_factory = sqlite3.Row
         rows = con.execute(
-            "SELECT * FROM semis_señales ORDER BY fecha DESC, id DESC LIMIT ?",
+            "SELECT * FROM semis_senales ORDER BY fecha DESC, id DESC LIMIT ?",
             (limite,)
         ).fetchall()
         con.close()
