@@ -72,6 +72,21 @@ SCANNER_TICKERS = {
     "PYPL":("PYPL",""),
 }
 
+# Tickers del módulo Semis ETF — se pre-cachean con el build normal
+# Así el tab Semis no gasta créditos extra al abrirse
+_SEMIS_CACHE_TICKERS = {
+    "SMH":  ("SMH",  ""),
+    "SOXX": ("SOXX", ""),
+    "QQQ":  ("QQQ",  ""),
+    "AMD":  ("AMD",  ""),
+    "ASML": ("ASML", ""),
+    "AVGO": ("AVGO", ""),
+    "MU":   ("MU",   ""),
+    "QCOM": ("QCOM", ""),
+    "ARM":  ("ARM",  ""),
+    "INTC": ("INTC", ""),
+}
+
 # SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
 
 
@@ -3342,7 +3357,12 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     _sector_etfs = []  # No precargar sector ETFs — ahorrar créditos de API
     syms_usa = list(set([v[0] for v in combinados.values() if v[1] != "BMV"]))
     syms_bmv = [(v[0], v[1]) for v in combinados.values() if v[1] == "BMV"]
-    _precargar_cache_batch(syms_usa, ["1day", "1week"])
+
+    # Agregar tickers de semis al batch — se descargan junto con el scanner
+    # Así el tab Semis ETF usa el cache y no gasta créditos extra
+    syms_semis = [v[0] for v in _SEMIS_CACHE_TICKERS.values()]
+    syms_usa_total = list(set(syms_usa + syms_semis))
+    _precargar_cache_batch(syms_usa_total, ["1day", "1week"])
     # Cargar tickers BMV individualmente con exchange explícito
     if syms_bmv:
         print(f"  [batch] {len(syms_bmv)} tickers BMV — cargando individualmente con exchange=BMV")
@@ -10007,9 +10027,26 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
 def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
     """
     Análisis técnico base para cualquier ticker del módulo semis.
-    USA SOLO _get_cached — cero llamadas API si ya está en memoria.
+    SOLO usa datos ya en cache — NUNCA hace llamadas API nuevas.
+    Si el ticker no está en cache, devuelve valido=False.
     """
-    vals = _get_cached(symbol, "1day", exchange)
+    # Buscar en cache sin llamar a la API
+    key_1d = f"{symbol}:1day"
+    key_1d_ex = f"{symbol}:{exchange}:1day"
+    
+    vals = None
+    for key in (key_1d, key_1d_ex):
+        if key in _TD_CACHE and _TD_CACHE[key]:
+            vals = _TD_CACHE[key]
+            break
+    
+    # También buscar por símbolo parcial en caso de variación de key
+    if not vals:
+        for k, v in _TD_CACHE.items():
+            if symbol.upper() in k.upper() and "1day" in k.lower() and v:
+                vals = v
+                break
+    
     if not vals or len(vals) < 30:
         return {"valido": False, "simbolo": symbol}
 
