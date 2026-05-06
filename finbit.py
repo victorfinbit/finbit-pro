@@ -3948,7 +3948,7 @@ def render_port_rows(posiciones, tc):
         obv_port  = tf_1d.get("obv", {}) if tf_1d.get("valido") else {}
         obv_html_port = render_obv_panel(obv_port)
 
-        _tnombre = r['nombre']
+        _tnombre = p['ticker']
         wl_btn = ('<div style="margin-top:10px">'
                   '<button onclick="event.stopPropagation();wlToggle(this,\''+_tnombre+'\')"'
                   ' id="wl-btn-'+_tnombre+'"'
