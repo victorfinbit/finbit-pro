@@ -4504,7 +4504,7 @@ def render_top_diario_banner(top: list) -> str:
         return ""
     items = []
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    for i, r in enumerate(top):
+    for i, r in enumerate(top[:5]):  # banner muestra solo top 5
         nombre = r.get("nombre", "")
         rr     = r.get("rr", 0)
         badge  = ""
