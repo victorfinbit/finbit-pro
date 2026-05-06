@@ -482,7 +482,15 @@ def init_db():
         puntuacion  REAL NOT NULL,
         datos_json  TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS top_semanal_acumulado (
+    CREATE TABLE IF NOT EXISTS semis_señales (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha       TEXT NOT NULL,
+        simbolo     TEXT NOT NULL,
+        senal       TEXT NOT NULL,
+        precio_mxn  REAL NOT NULL,
+        pasos_ok    INTEGER DEFAULT 0,
+        tipo        TEXT DEFAULT 'ETF'
+    );
         ticker      TEXT PRIMARY KEY,
         semana      TEXT NOT NULL,
         puntuacion  REAL NOT NULL,
@@ -4105,6 +4113,45 @@ def _hora_cdmx() -> int:
     return (datetime.utcnow() - timedelta(hours=6)).hour
 
 
+def guardar_senal_semis(simbolo: str, senal: str, precio_mxn: float,
+                         pasos_ok: int, tipo: str = "ETF") -> None:
+    """Guarda señal detectada en historial para análisis futuro."""
+    if senal == "NEUTRAL":
+        return
+    hoy = _fecha_hoy_cdmx()
+    try:
+        con = sqlite3.connect(DB_FILE)
+        # Solo una señal por símbolo por día
+        existe = con.execute(
+            "SELECT id FROM semis_señales WHERE fecha=? AND simbolo=? AND senal=?",
+            (hoy, simbolo, senal)
+        ).fetchone()
+        if not existe:
+            con.execute(
+                "INSERT INTO semis_señales (fecha, simbolo, senal, precio_mxn, pasos_ok, tipo) VALUES (?,?,?,?,?,?)",
+                (hoy, simbolo, senal, precio_mxn, pasos_ok, tipo)
+            )
+            con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[semis] Error guardando señal: {e}")
+
+
+def get_historial_señales(limite: int = 30) -> list:
+    """Devuelve historial de señales de semis."""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM semis_señales ORDER BY fecha DESC, id DESC LIMIT ?",
+            (limite,)
+        ).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def _semana_actual_cdmx() -> str:
     """Devuelve la semana actual como 'YYYY-WXX' basado en el lunes de la semana CDMX."""
     ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
@@ -5966,6 +6013,10 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     top_diario_banner_html = render_top_diario_banner(top_diario)
     top_diario_tab_html    = render_tab_top_diario(top_diario, tc)
 
+    # ── SEMIS ETF ────────────────────────────────────────────
+    semis_data     = analizar_todos_semis(tc)
+    semis_tab_html = render_tab_semis(semis_data, tc)
+
     # ── WATCHLIST ────────────────────────────────────────────
     watchlist_tab_html = render_tab_watchlist(scan_data, radar_data, tc)
 
@@ -6209,6 +6260,7 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('wl',this)">👁 Watchlist</button>
   <button class="nb" onclick="showTab('diario',this)">📓 Diario</button>
   <button class="nb" onclick="showTab('rendimiento',this)">📊 Rendimiento</button>
+  <button class="nb" onclick="showTab('semis',this)">📡 Semis ETF</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
   <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
@@ -6563,6 +6615,8 @@ td strong{{font-size:13px;font-weight:500}}
 {diario_tab_html}
 
 {rendimiento_tab_html}
+
+{semis_tab_html}
 
 <!-- ══ RADAR ══ -->
 <div id="tab-radar" class="tab">
@@ -9563,6 +9617,796 @@ def api_wl_quitar(ticker):
 @app.route("/api/watchlist")
 def api_wl_lista():
     return jsonify(get_watchlist())
+
+
+# ═══════════════════════════════════════════════════════════
+#   MÓDULO SEMIS ETF — DETECTOR DE CAMBIO DE TENDENCIA
+# ═══════════════════════════════════════════════════════════
+
+# ETFs de semiconductores monitoreados
+SEMIS_ETFS = {
+    "SMH":  ("SMH",  "NASDAQ"),   # Referencia del sector sin apalancamiento
+    "SOXL": ("SOXL", "NYSE"),     # 3x alcista
+    "SOXS": ("SOXS", "NYSE"),     # 3x bajista
+    "SOXX": ("SOXX", "NASDAQ"),   # Sin apalancamiento alternativo
+}
+
+# Empresas que MUEVEN el sector — en orden de impacto en SMH/SOXL
+SEMIS_EMPRESAS = {
+    "NVDA": ("NVDA", "NASDAQ"),   # #1 — IA, GPUs, mueve todo el sector
+    "AMD":  ("AMD",  "NASDAQ"),   # #2 — competidor NVDA, GPUs IA
+    "ASML": ("ASML", "NASDAQ"),   # #3 — máquinas para fabricar chips, sin ellos no hay semis
+    "AVGO": ("AVGO", "NASDAQ"),   # #4 — Broadcom, chips redes e IA
+    "MU":   ("MU",   "NASDAQ"),   # #5 — Micron, memoria, ciclo de semis
+    "QCOM": ("QCOM", "NASDAQ"),   # #6 — Qualcomm, móviles y autos
+    "ARM":  ("ARM",  "NASDAQ"),   # #7 — arquitectura base de chips modernos
+    "INTC": ("INTC", "NASDAQ"),   # #8 — Intel, en declive pero aún mueve
+}
+
+# Contexto macro — QQQ confirma dirección del NASDAQ
+SEMIS_MACRO = {
+    "QQQ":  ("QQQ",  "NASDAQ"),   # NASDAQ ETF — macro de tech
+}
+
+# Tu posición actual en SOXS
+SEMIS_POSICION_ACTUAL = {
+    "ticker": "SOXS",
+    "titulos": 18,
+    "precio_entrada_mxn": 198.0,
+    "tipo": "BAJISTA",
+    "notas": "Posición abierta — esperando corrección de semis"
+}
+
+
+def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
+    """
+    Análisis especializado para ETFs de semiconductores.
+    Detecta los 4 pasos de corrección bajista y los 4 alcistas.
+    """
+    vals = _get_cached(symbol, "1day", exchange)
+    if not vals or len(vals) < 30:
+        return {"valido": False, "simbolo": symbol}
+
+    closes = [float(x["close"]) for x in vals]
+    highs  = [float(x.get("high",  x["close"])) for x in vals]
+    lows   = [float(x.get("low",   x["close"])) for x in vals]
+    opens  = [float(x.get("open",  x["close"])) for x in vals]
+    vols   = [float(x.get("volume", 0))          for x in vals]
+
+    c = pd.Series(closes)
+    v = pd.Series(vols)
+    n = len(c)
+
+    # EMAs clave
+    e9   = float(ema(c, 9).iloc[-1])
+    e21  = float(ema(c, 21).iloc[-1])
+    e50  = float(ema(c, 50).iloc[-1])
+    e200 = float(ema(c, 200).iloc[-1]) if n >= 200 else float(ema(c, min(n-1, 50)).iloc[-1])
+
+    precio   = closes[-1]
+    precio_1 = closes[-2] if n > 1 else precio
+    open_h   = opens[-1]
+    high_h   = highs[-1]
+    low_h    = lows[-1]
+
+    # Volumen relativo
+    vol_avg = float(v.rolling(20).mean().iloc[-1])
+    vol_rel = float(v.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+
+    # RSI
+    rsi_v = float(rsi(c, 14).iloc[-1])
+
+    # MACD
+    macd_line, signal_line, hist_v = macd(c)
+    macd_val   = float(macd_line.iloc[-1])
+    signal_val = float(signal_line.iloc[-1])
+    hist_val   = float(hist_v.iloc[-1])
+    hist_prev  = float(hist_v.iloc[-2]) if n > 1 else 0
+
+    # ── Mínimos y máximos recientes (últimas 10 velas) ────────────────
+    min_10 = min(lows[-10:])
+    max_10 = max(highs[-10:])
+    min_prev = min(lows[-11:-1]) if n > 11 else min_10
+    max_prev = max(highs[-11:-1]) if n > 11 else max_10
+
+    # ── Tamaño de la vela actual ──────────────────────────────────────
+    cuerpo     = abs(precio - open_h)
+    rango_vela = high_h - low_h
+    es_vela_grande = cuerpo > 0 and rango_vela > 0 and (cuerpo / rango_vela) >= 0.6
+    vela_roja  = precio < open_h and es_vela_grande
+    vela_verde = precio > open_h and es_vela_grande
+
+    # ── Promedio de cuerpos para comparar ────────────────────────────
+    cuerpos_avg = float(pd.Series([abs(closes[i] - opens[i]) for i in range(-10, -1)]).mean())
+    vela_fuerte = cuerpo >= cuerpos_avg * 1.5  # vela 1.5x más grande que el promedio
+
+    # ════════════════════════════════════════════════════════════════
+    # DETECCIÓN BAJISTA (4 pasos para SOXS)
+    # ════════════════════════════════════════════════════════════════
+    pasos_bajista = []
+
+    # Paso 1: Pierde EMA9 diaria
+    paso1_bajista = precio < e9 and precio_1 >= e9 * 0.995
+    pasos_bajista.append({
+        "num": 1, "ok": paso1_bajista,
+        "desc": "Pierde EMA9 diaria",
+        "detalle": f"Precio ${precio*tc:,.2f} {'< ✅' if paso1_bajista else '> ❌'} EMA9 ${e9*tc:,.2f}"
+    })
+
+    # Paso 2: Vela roja fuerte
+    paso2_bajista = vela_roja and vela_fuerte and vol_rel >= 1.3
+    pasos_bajista.append({
+        "num": 2, "ok": paso2_bajista,
+        "desc": "Vela roja fuerte con volumen",
+        "detalle": f"Vela {'roja fuerte ✅' if paso2_bajista else 'no confirmada ❌'} · Volumen {vol_rel:.1f}x"
+    })
+
+    # Paso 3: El rebote falla (precio intenta subir pero cierra bajo EMA9)
+    # Detectar: vela anterior fue verde pero hoy cierra rojo o plano bajo EMA9
+    vela_anterior_verde = closes[-2] > opens[-2] if n > 1 else False
+    paso3_bajista = vela_anterior_verde and precio < e9 and macd_val < signal_val
+    pasos_bajista.append({
+        "num": 3, "ok": paso3_bajista,
+        "desc": "El rebote falla",
+        "detalle": f"Rebote {'falló ✅' if paso3_bajista else 'pendiente ❌'} · MACD {'bajista' if macd_val < signal_val else 'alcista'}"
+    })
+
+    # Paso 4: Rompe mínimos previos
+    paso4_bajista = low_h < min_prev and vol_rel >= 1.2
+    pasos_bajista.append({
+        "num": 4, "ok": paso4_bajista,
+        "desc": "Rompe mínimos previos",
+        "detalle": f"Min actual ${low_h*tc:,.2f} {'< mín previo ✅' if paso4_bajista else '>= mín previo ❌'} ${min_prev*tc:,.2f}"
+    })
+
+    pasos_bajista_ok = sum(1 for p in pasos_bajista if p["ok"])
+
+    # ════════════════════════════════════════════════════════════════
+    # DETECCIÓN ALCISTA (4 pasos para SOXL)
+    # ════════════════════════════════════════════════════════════════
+    pasos_alcista = []
+
+    # Paso 1: Supera EMA9 diaria
+    paso1_alcista = precio > e9 and precio_1 <= e9 * 1.005
+    pasos_alcista.append({
+        "num": 1, "ok": paso1_alcista,
+        "desc": "Supera EMA9 diaria",
+        "detalle": f"Precio ${precio*tc:,.2f} {'> ✅' if paso1_alcista else '< ❌'} EMA9 ${e9*tc:,.2f}"
+    })
+
+    # Paso 2: Vela verde fuerte con volumen
+    paso2_alcista = vela_verde and vela_fuerte and vol_rel >= 1.3
+    pasos_alcista.append({
+        "num": 2, "ok": paso2_alcista,
+        "desc": "Vela verde fuerte con volumen",
+        "detalle": f"Vela {'verde fuerte ✅' if paso2_alcista else 'no confirmada ❌'} · Volumen {vol_rel:.1f}x"
+    })
+
+    # Paso 3: Pullback se sostiene (retrocede pero no pierde EMA9)
+    vela_anterior_roja = closes[-2] < opens[-2] if n > 1 else False
+    paso3_alcista = vela_anterior_roja and precio > e9 and macd_val > signal_val
+    pasos_alcista.append({
+        "num": 3, "ok": paso3_alcista,
+        "desc": "Pullback se sostiene sobre EMA9",
+        "detalle": f"Pullback {'sostenido ✅' if paso3_alcista else 'pendiente ❌'} · MACD {'alcista' if macd_val > signal_val else 'bajista'}"
+    })
+
+    # Paso 4: Rompe máximos previos
+    paso4_alcista = high_h > max_prev and vol_rel >= 1.2
+    pasos_alcista.append({
+        "num": 4, "ok": paso4_alcista,
+        "desc": "Rompe máximos previos",
+        "detalle": f"Max actual ${high_h*tc:,.2f} {'> máx previo ✅' if paso4_alcista else '<= máx previo ❌'} ${max_prev*tc:,.2f}"
+    })
+
+    pasos_alcista_ok = sum(1 for p in pasos_alcista if p["ok"])
+
+    # ── Señal final ───────────────────────────────────────────────
+    if pasos_bajista_ok == 4:
+        senal = "SOXS_ENTRADA"
+        senal_desc = "🔴 SEÑAL COMPLETA — Corrección confirmada · Oportunidad SOXS"
+        senal_color = "#ef4444"
+    elif pasos_bajista_ok == 3:
+        senal = "SOXS_PROBABLE"
+        senal_desc = "🟠 3/4 pasos bajistas · Preparar entrada SOXS"
+        senal_color = "#f97316"
+    elif pasos_alcista_ok == 4:
+        senal = "SOXL_ENTRADA"
+        senal_desc = "🟢 SEÑAL COMPLETA — Tendencia alcista confirmada · Oportunidad SOXL"
+        senal_color = "#22c55e"
+    elif pasos_alcista_ok == 3:
+        senal = "SOXL_PROBABLE"
+        senal_desc = "🟡 3/4 pasos alcistas · Preparar entrada SOXL"
+        senal_color = "#eab308"
+    else:
+        senal = "NEUTRAL"
+        senal_desc = f"⚪ Sin señal clara · {pasos_bajista_ok}/4 bajistas · {pasos_alcista_ok}/4 alcistas"
+        senal_color = "var(--muted)"
+
+    # Tendencia general del sector (SMH como referencia)
+    tendencia_sector = "alcista" if precio > e50 > e200 else "bajista" if precio < e50 else "lateral"
+
+    return {
+        "valido": True,
+        "simbolo": symbol,
+        "precio_usd": round(precio, 4),
+        "precio_mxn": round(precio * tc, 2),
+        "e9_mxn": round(e9 * tc, 2),
+        "e21_mxn": round(e21 * tc, 2),
+        "e50_mxn": round(e50 * tc, 2),
+        "e200_mxn": round(e200 * tc, 2),
+        "rsi": round(rsi_v, 1),
+        "vol_rel": round(vol_rel, 2),
+        "macd_hist": round(hist_val, 4),
+        "macd_hist_prev": round(hist_prev, 4),
+        "vela_roja": vela_roja,
+        "vela_verde": vela_verde,
+        "vela_fuerte": vela_fuerte,
+        "pasos_bajista": pasos_bajista,
+        "pasos_bajista_ok": pasos_bajista_ok,
+        "pasos_alcista": pasos_alcista,
+        "pasos_alcista_ok": pasos_alcista_ok,
+        "senal": senal,
+        "senal_desc": senal_desc,
+        "senal_color": senal_color,
+        "tendencia_sector": tendencia_sector,
+        "min_10_mxn": round(min_10 * tc, 2),
+        "max_10_mxn": round(max_10 * tc, 2),
+    }
+
+
+def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
+    """
+    Análisis técnico base para cualquier ticker del módulo semis.
+    USA SOLO _get_cached — cero llamadas API si ya está en memoria.
+    """
+    vals = _get_cached(symbol, "1day", exchange)
+    if not vals or len(vals) < 30:
+        return {"valido": False, "simbolo": symbol}
+
+    closes = [float(x["close"]) for x in vals]
+    highs  = [float(x.get("high",  x["close"])) for x in vals]
+    lows   = [float(x.get("low",   x["close"])) for x in vals]
+    opens  = [float(x.get("open",  x["close"])) for x in vals]
+    vols   = [float(x.get("volume", 0))          for x in vals]
+
+    c = pd.Series(closes)
+    v = pd.Series(vols)
+    n = len(c)
+
+    e9   = float(ema(c, 9).iloc[-1])
+    e21  = float(ema(c, 21).iloc[-1])
+    e50  = float(ema(c, 50).iloc[-1])
+    e200 = float(ema(c, min(n-1, 200)).iloc[-1])
+
+    precio   = closes[-1]
+    precio_1 = closes[-2] if n > 1 else precio
+    open_h   = opens[-1]
+    high_h   = highs[-1]
+    low_h    = lows[-1]
+
+    vol_avg = float(v.rolling(20).mean().iloc[-1])
+    vol_rel = float(v.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+    rsi_v   = float(rsi(c, 14).iloc[-1])
+
+    macd_line, signal_line, hist_v = macd(c)
+    macd_val   = float(macd_line.iloc[-1])
+    signal_val = float(signal_line.iloc[-1])
+    hist_val   = float(hist_v.iloc[-1])
+    hist_prev  = float(hist_v.iloc[-2]) if n > 1 else 0
+
+    min_10  = min(lows[-10:])
+    max_10  = max(highs[-10:])
+    min_prev = min(lows[-11:-1]) if n > 11 else min_10
+    max_prev = max(highs[-11:-1]) if n > 11 else max_10
+
+    cuerpo     = abs(precio - open_h)
+    rango_vela = high_h - low_h
+    cuerpos_avg = abs(pd.Series([abs(closes[i]-opens[i]) for i in range(-10,-1)]).mean())
+    es_vela_grande = cuerpo > 0 and rango_vela > 0 and (cuerpo/rango_vela) >= 0.6
+    vela_roja   = precio < open_h and es_vela_grande
+    vela_verde  = precio > open_h and es_vela_grande
+    vela_fuerte = cuerpo >= cuerpos_avg * 1.5
+
+    # Tendencia
+    sobre_e9   = precio > e9
+    sobre_e50  = precio > e50
+    sobre_e200 = precio > e200
+    tendencia  = "alcista" if sobre_e50 and sobre_e200 else "bajista" if not sobre_e50 else "lateral"
+
+    # Momentum: MACD histograma acelerando o desacelerando
+    momentum = "acelerando_alcista" if hist_val > 0 and hist_val > hist_prev else \
+               "acelerando_bajista" if hist_val < 0 and hist_val < hist_prev else \
+               "desacelerando"
+
+    # Cambio % del día
+    cambio_dia_pct = (precio - precio_1) / precio_1 * 100 if precio_1 else 0
+
+    return {
+        "valido": True, "simbolo": symbol,
+        "precio": precio, "precio_mxn": round(precio * tc, 2),
+        "precio_1": precio_1,
+        "open_h": open_h, "high_h": high_h, "low_h": low_h,
+        "e9": e9, "e21": e21, "e50": e50, "e200": e200,
+        "e9_mxn": round(e9*tc,2), "e50_mxn": round(e50*tc,2), "e200_mxn": round(e200*tc,2),
+        "rsi": round(rsi_v, 1),
+        "vol_rel": round(vol_rel, 2),
+        "macd_val": macd_val, "signal_val": signal_val,
+        "hist_val": hist_val, "hist_prev": hist_prev,
+        "vela_roja": vela_roja, "vela_verde": vela_verde, "vela_fuerte": vela_fuerte,
+        "sobre_e9": sobre_e9, "sobre_e50": sobre_e50, "sobre_e200": sobre_e200,
+        "tendencia": tendencia, "momentum": momentum,
+        "cambio_dia_pct": round(cambio_dia_pct, 2),
+        "min_10": min_10, "max_10": max_10,
+        "min_prev": min_prev, "max_prev": max_prev,
+        "min_10_mxn": round(min_10*tc,2), "max_10_mxn": round(max_10*tc,2),
+        "closes": closes[-20:],   # últimas 20 para mini-gráfico
+    }
+
+
+def _detectar_4_pasos(base: dict, tc: float) -> dict:
+    """Detecta los 4 pasos bajistas y los 4 alcistas."""
+    precio   = base["precio"]
+    precio_1 = base["precio_1"]
+    e9       = base["e9"]
+    vol_rel  = base["vol_rel"]
+    vela_roja   = base["vela_roja"]
+    vela_verde  = base["vela_verde"]
+    vela_fuerte = base["vela_fuerte"]
+    macd_val    = base["macd_val"]
+    signal_val  = base["signal_val"]
+    low_h    = base["low_h"]
+    high_h   = base["high_h"]
+    min_prev = base["min_prev"]
+    max_prev = base["max_prev"]
+
+    vela_anterior_verde = base["closes"][-2] > base["open_h"] if len(base["closes"]) > 1 else False
+    vela_anterior_roja  = base["closes"][-2] < base["open_h"] if len(base["closes"]) > 1 else False
+
+    # ── 4 pasos bajistas ─────────────────────────────────────
+    p1b = precio < e9 and precio_1 >= e9 * 0.995
+    p2b = vela_roja and vela_fuerte and vol_rel >= 1.3
+    p3b = vela_anterior_verde and precio < e9 and macd_val < signal_val
+    p4b = low_h < min_prev and vol_rel >= 1.2
+
+    pasos_bajista = [
+        {"num":1,"ok":p1b,"desc":"Pierde EMA9 diaria",
+         "detalle":f"Precio ${precio*tc:,.2f} {'< ✅' if p1b else '> ❌'} EMA9 ${e9*tc:,.2f}"},
+        {"num":2,"ok":p2b,"desc":"Vela roja fuerte con volumen",
+         "detalle":f"{'Confirmada ✅' if p2b else 'No confirmada ❌'} · Vol {vol_rel:.1f}x"},
+        {"num":3,"ok":p3b,"desc":"El rebote falla",
+         "detalle":f"{'Falló ✅' if p3b else 'Pendiente ❌'} · MACD {'bajista' if macd_val < signal_val else 'alcista'}"},
+        {"num":4,"ok":p4b,"desc":"Rompe mínimos previos",
+         "detalle":f"${low_h*tc:,.2f} {'< mín ✅' if p4b else '>= mín ❌'} ${min_prev*tc:,.2f}"},
+    ]
+
+    # ── 4 pasos alcistas ─────────────────────────────────────
+    p1a = precio > e9 and precio_1 <= e9 * 1.005
+    p2a = vela_verde and vela_fuerte and vol_rel >= 1.3
+    p3a = vela_anterior_roja and precio > e9 and macd_val > signal_val
+    p4a = high_h > max_prev and vol_rel >= 1.2
+
+    pasos_alcista = [
+        {"num":1,"ok":p1a,"desc":"Supera EMA9 diaria",
+         "detalle":f"Precio ${precio*tc:,.2f} {'> ✅' if p1a else '< ❌'} EMA9 ${e9*tc:,.2f}"},
+        {"num":2,"ok":p2a,"desc":"Vela verde fuerte con volumen",
+         "detalle":f"{'Confirmada ✅' if p2a else 'No confirmada ❌'} · Vol {vol_rel:.1f}x"},
+        {"num":3,"ok":p3a,"desc":"Pullback se sostiene sobre EMA9",
+         "detalle":f"{'Sostenido ✅' if p3a else 'Pendiente ❌'} · MACD {'alcista' if macd_val > signal_val else 'bajista'}"},
+        {"num":4,"ok":p4a,"desc":"Rompe máximos previos",
+         "detalle":f"${high_h*tc:,.2f} {'> máx ✅' if p4a else '<= máx ❌'} ${max_prev*tc:,.2f}"},
+    ]
+
+    pb_ok = sum(1 for p in pasos_bajista if p["ok"])
+    pa_ok = sum(1 for p in pasos_alcista if p["ok"])
+
+    if pb_ok == 4:
+        senal="BAJISTA_FULL"; senal_desc="🔴 SEÑAL COMPLETA — Corrección confirmada"; senal_color="#ef4444"
+    elif pb_ok == 3:
+        senal="BAJISTA_PROB"; senal_desc="🟠 3/4 pasos bajistas — Preparar entrada SOXS"; senal_color="#f97316"
+    elif pa_ok == 4:
+        senal="ALCISTA_FULL"; senal_desc="🟢 SEÑAL COMPLETA — Tendencia alcista confirmada"; senal_color="#22c55e"
+    elif pa_ok == 3:
+        senal="ALCISTA_PROB"; senal_desc="🟡 3/4 pasos alcistas — Preparar entrada SOXL"; senal_color="#eab308"
+    else:
+        senal="NEUTRAL"; senal_desc=f"⚪ Sin señal · {pb_ok}/4 bajistas · {pa_ok}/4 alcistas"; senal_color="var(--muted)"
+
+    return {
+        "pasos_bajista": pasos_bajista, "pasos_bajista_ok": pb_ok,
+        "pasos_alcista": pasos_alcista, "pasos_alcista_ok": pa_ok,
+        "senal": senal, "senal_desc": senal_desc, "senal_color": senal_color,
+    }
+
+
+def _calcular_decay_estimado(dias: int, tipo: str = "3x") -> float:
+    """Estima el decay acumulado de un ETF apalancado 3x en N días."""
+    # Decay diario promedio histórico de ETFs 3x: ~0.1% diario en mercado lateral
+    decay_diario = 0.001
+    return round((1 - (1 - decay_diario) ** dias) * 100, 2)
+
+
+def analizar_todos_semis(tc: float) -> dict:
+    """
+    Analiza ETFs, empresas clave y macro de semiconductores.
+    USA SOLO _get_cached — no hace llamadas API nuevas si los datos ya están en memoria.
+    Para tickers nuevos (no en scanner) hace UNA llamada y los cachea.
+    """
+    etfs      = {}
+    empresas  = {}
+    macro     = {}
+
+    # ETFs principales
+    for nombre, (symbol, exchange) in SEMIS_ETFS.items():
+        try:
+            base = _analizar_base_semis(symbol, exchange, tc)
+            if base["valido"]:
+                pasos = _detectar_4_pasos(base, tc)
+                etfs[nombre] = {**base, **pasos, "nombre": nombre}
+            else:
+                etfs[nombre] = {"valido": False, "nombre": nombre}
+        except Exception as e:
+            print(f"[semis] ETF {nombre}: {e}")
+            etfs[nombre] = {"valido": False, "nombre": nombre}
+
+    # Empresas que mueven el sector
+    for nombre, (symbol, exchange) in SEMIS_EMPRESAS.items():
+        try:
+            base = _analizar_base_semis(symbol, exchange, tc)
+            if base["valido"]:
+                empresas[nombre] = {**base, "nombre": nombre}
+            else:
+                empresas[nombre] = {"valido": False, "nombre": nombre}
+        except Exception as e:
+            print(f"[semis] Empresa {nombre}: {e}")
+            empresas[nombre] = {"valido": False, "nombre": nombre}
+
+    # Macro: QQQ
+    for nombre, (symbol, exchange) in SEMIS_MACRO.items():
+        try:
+            base = _analizar_base_semis(symbol, exchange, tc)
+            if base["valido"]:
+                macro[nombre] = {**base, "nombre": nombre}
+            else:
+                macro[nombre] = {"valido": False, "nombre": nombre}
+        except Exception as e:
+            print(f"[semis] Macro {nombre}: {e}")
+            macro[nombre] = {"valido": False, "nombre": nombre}
+
+    # ── Semáforo del sector basado en SMH ───────────────────
+    smh = etfs.get("SMH", {})
+    qqq = macro.get("QQQ", {})
+    if smh.get("valido") and qqq.get("valido"):
+        smh_alc = smh.get("tendencia") == "alcista"
+        qqq_alc = qqq.get("tendencia") == "alcista"
+        if smh_alc and qqq_alc:
+            semaforo = "verde"; semaforo_desc = "🟢 Sector alcista — condiciones para SOXL"
+        elif not smh_alc and not qqq_alc:
+            semaforo = "rojo"; semaforo_desc = "🔴 Sector bajista — condiciones para SOXS"
+        elif smh_alc and not qqq_alc:
+            semaforo = "amarillo"; semaforo_desc = "🟡 Divergencia: semis alcistas pero NASDAQ bajista — precaución"
+        else:
+            semaforo = "amarillo"; semaforo_desc = "🟡 Divergencia: NASDAQ alcista pero semis rezagados"
+    elif smh.get("valido"):
+        smh_alc = smh.get("tendencia") == "alcista"
+        semaforo = "verde" if smh_alc else "rojo"
+        semaforo_desc = f"{'🟢 SMH alcista' if smh_alc else '🔴 SMH bajista'} — QQQ sin datos"
+    else:
+        semaforo = "gris"; semaforo_desc = "⚪ Sin datos suficientes"
+
+    # ── Divergencia SOXL vs SMH ──────────────────────────────
+    soxl = etfs.get("SOXL", {})
+    divergencia_desc = ""
+    if smh.get("valido") and soxl.get("valido"):
+        smh_sube  = smh.get("cambio_dia_pct", 0) > 0
+        soxl_sube = soxl.get("cambio_dia_pct", 0) > 0
+        if smh_sube and not soxl_sube:
+            divergencia_desc = "⚠️ Trampa: SMH sube pero SOXL baja — no entrar a SOXL todavía"
+        elif not smh_sube and soxl_sube:
+            divergencia_desc = "💡 Oportunidad: SMH baja pero SOXL se mantiene — sector resistente"
+        elif not smh_sube and not soxl_sube:
+            divergencia_desc = "🔴 Corrección confirmada en ambos — SOXS tiene viento a favor"
+
+    # ── Empresas que más afectan hoy ─────────────────────────
+    impacto_hoy = []
+    for nombre, emp in empresas.items():
+        if not emp.get("valido"):
+            continue
+        cambio = emp.get("cambio_dia_pct", 0)
+        if abs(cambio) >= 2.0:
+            icon = "🔴" if cambio < 0 else "🟢"
+            impacto_hoy.append(f"{icon} {nombre} {cambio:+.1f}%")
+    impacto_hoy.sort(key=lambda x: abs(float(x.split()[-1].replace('%',''))), reverse=True)
+
+    return {
+        "etfs": etfs,
+        "empresas": empresas,
+        "macro": macro,
+        "semaforo": semaforo,
+        "semaforo_desc": semaforo_desc,
+        "divergencia_desc": divergencia_desc,
+        "impacto_hoy": impacto_hoy,
+    }
+
+
+def render_tab_semis(semis_data: dict, tc: float) -> str:
+    """Tab completo de Semis ETF."""
+    etfs     = semis_data.get("etfs", {})
+    empresas = semis_data.get("empresas", {})
+    macro    = semis_data.get("macro", {})
+    semaforo = semis_data.get("semaforo", "gris")
+    semaforo_desc = semis_data.get("semaforo_desc", "")
+    divergencia_desc = semis_data.get("divergencia_desc", "")
+    impacto_hoy = semis_data.get("impacto_hoy", [])
+
+    # Guardar señales en historial
+    for nombre, r in etfs.items():
+        if r.get("valido") and r.get("senal", "NEUTRAL") != "NEUTRAL":
+            guardar_senal_semis(nombre, r["senal"], r["precio_mxn"],
+                                max(r.get("pasos_bajista_ok",0), r.get("pasos_alcista_ok",0)), "ETF")
+
+    # ── Posición actual ──────────────────────────────────────
+    pos = SEMIS_POSICION_ACTUAL
+    soxs_data = etfs.get("SOXS", {})
+    if soxs_data.get("valido"):
+        precio_actual = soxs_data["precio_mxn"]
+        pl_mxn = (precio_actual - pos["precio_entrada_mxn"]) * pos["titulos"]
+        pl_pct = (precio_actual - pos["precio_entrada_mxn"]) / pos["precio_entrada_mxn"] * 100
+        pl_col = "var(--green)" if pl_mxn >= 0 else "var(--red)"
+        dias_aprox = 5  # estimado
+        decay_est  = _calcular_decay_estimado(dias_aprox)
+        stop_mxn   = round(pos["precio_entrada_mxn"] * 1.08, 2)
+        obj1_mxn   = round(pos["precio_entrada_mxn"] * 0.85, 2)
+        obj2_mxn   = round(pos["precio_entrada_mxn"] * 0.75, 2)
+        obj3_mxn   = round(pos["precio_entrada_mxn"] * 0.60, 2)
+        senal_soxs = soxs_data.get("senal_desc", "")
+        senal_col  = soxs_data.get("senal_color", "var(--muted)")
+
+        posicion_html = f'''
+<div style="background:linear-gradient(135deg,#1a0a0a,#2d1515);border:2px solid #ef4444;border-radius:14px;padding:20px;margin-bottom:20px">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+    <div>
+      <div style="font-size:11px;color:#fca5a5;font-weight:700;letter-spacing:1px">📍 TU POSICIÓN ACTUAL</div>
+      <div style="font-size:24px;font-weight:800;color:#fff;margin-top:4px">{pos["ticker"]} <span style="font-size:13px;color:#fca5a5">3x Bajista · {pos["titulos"]} títulos</span></div>
+      <div style="font-size:12px;color:#fca5a5">Entrada ${pos["precio_entrada_mxn"]:,.2f} MXN · Actual ${precio_actual:,.2f} MXN</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:22px;font-weight:800;color:{pl_col}">{pl_mxn:+,.2f}</div>
+      <div style="font-size:13px;color:{pl_col}">{pl_pct:+.1f}%</div>
+    </div>
+  </div>
+  <div style="background:#1a0808;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:{senal_col};font-weight:600">{senal_soxs}</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;font-size:10px;margin-bottom:12px">
+    <div style="background:#2d1515;border-radius:8px;padding:8px;text-align:center">
+      <div style="color:#fca5a5">STOP</div>
+      <div style="font-weight:700;color:#ef4444">${stop_mxn:,.2f}</div>
+    </div>
+    <div style="background:#2d1515;border-radius:8px;padding:8px;text-align:center">
+      <div style="color:#fca5a5">OBJ 1 · 25%</div>
+      <div style="font-weight:700;color:#22c55e">${obj1_mxn:,.2f}</div>
+    </div>
+    <div style="background:#2d1515;border-radius:8px;padding:8px;text-align:center">
+      <div style="color:#fca5a5">OBJ 2 · 50%</div>
+      <div style="font-weight:700;color:#22c55e">${obj2_mxn:,.2f}</div>
+    </div>
+    <div style="background:#2d1515;border-radius:8px;padding:8px;text-align:center">
+      <div style="color:#fca5a5">OBJ 3 · 75%</div>
+      <div style="font-weight:700;color:#22c55e">${obj3_mxn:,.2f}</div>
+    </div>
+    <div style="background:#2d1515;border-radius:8px;padding:8px;text-align:center">
+      <div style="color:#fca5a5">DECAY ~{dias_aprox}d</div>
+      <div style="font-weight:700;color:#f97316">-{decay_est:.1f}%</div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#fca5a5">⚠️ SOXS tiene decay diario 3x. Stop loss en ${stop_mxn:,.2f} — sin excepciones.</div>
+</div>'''
+    else:
+        posicion_html = f'''
+<div style="background:var(--surface);border:1px solid #ef4444;border-radius:12px;padding:16px;margin-bottom:20px">
+  <div style="font-weight:700">{pos["ticker"]} — {pos["titulos"]} títulos a ${pos["precio_entrada_mxn"]:,.2f} MXN</div>
+  <div style="font-size:11px;color:var(--muted)">Cargando datos...</div>
+</div>'''
+
+    # ── Semáforo del sector ──────────────────────────────────
+    sem_col = {"verde":"#22c55e","rojo":"#ef4444","amarillo":"#eab308","gris":"var(--muted)"}.get(semaforo,"var(--muted)")
+    sem_bg  = {"verde":"#052e16","rojo":"#1a0a0a","amarillo":"#1c1400","gris":"var(--surface)"}.get(semaforo,"var(--surface)")
+
+    semaforo_html = f'''
+<div style="background:{sem_bg};border:2px solid {sem_col};border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+  <div style="font-size:14px;font-weight:700;color:{sem_col}">{semaforo_desc}</div>
+  {f'<div style="font-size:12px;color:#eab308">{divergencia_desc}</div>' if divergencia_desc else ""}
+  {f'<div style="font-size:11px;color:var(--muted)">{"  ·  ".join(impacto_hoy[:5])}</div>' if impacto_hoy else ""}
+</div>'''
+
+    # ── Cards ETFs con 4 pasos ───────────────────────────────
+    etf_cards = ""
+    for nombre in ["SMH", "SOXL", "SOXS", "SOXX"]:
+        r = etfs.get(nombre, {})
+        if not r.get("valido"):
+            etf_cards += f'<div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px;opacity:0.4"><strong>{nombre}</strong><div style="font-size:11px;color:var(--muted)">Sin datos</div></div>'
+            continue
+        senal_col = r.get("senal_color","var(--muted)")
+        borde_w = "2px" if r.get("senal","NEUTRAL") != "NEUTRAL" else "1px"
+        pb_ok = r.get("pasos_bajista_ok",0)
+        pa_ok = r.get("pasos_alcista_ok",0)
+
+        pasos_b = "".join(
+            f'<div style="font-size:10px;color:{"#22c55e" if p["ok"] else "var(--muted)"};margin-top:2px">{"✅" if p["ok"] else "❌"} {p["desc"]}</div>'
+            for p in r.get("pasos_bajista",[])
+        )
+        pasos_a = "".join(
+            f'<div style="font-size:10px;color:{"#22c55e" if p["ok"] else "var(--muted)"};margin-top:2px">{"✅" if p["ok"] else "❌"} {p["desc"]}</div>'
+            for p in r.get("pasos_alcista",[])
+        )
+        etf_cards += f'''
+<div style="background:var(--surface);border:{borde_w} solid {senal_col};border-radius:14px;padding:18px;position:relative;overflow:hidden">
+  <div style="position:absolute;top:0;left:0;right:0;height:3px;background:{senal_col}"></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+    <div>
+      <div style="font-size:20px;font-weight:800">{nombre}</div>
+      <div style="font-size:11px;color:var(--muted)">${r["precio_mxn"]:,.2f} MXN · RSI {r["rsi"]:.0f} · Vol {r["vol_rel"]:.1f}x · {r["cambio_dia_pct"]:+.1f}%</div>
+    </div>
+    <div style="text-align:right;font-size:10px;color:var(--muted)">
+      <div>EMA9 ${r["e9_mxn"]:,.2f}</div>
+      <div>EMA50 ${r["e50_mxn"]:,.2f}</div>
+      <div>Tendencia: {r["tendencia"]}</div>
+    </div>
+  </div>
+  <div style="background:var(--surface2);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;font-weight:700;color:{senal_col}">{r.get("senal_desc","")}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div>
+      <div style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:3px">🔴 BAJISTA ({pb_ok}/4)</div>
+      {pasos_b}
+    </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;color:#22c55e;margin-bottom:3px">🟢 ALCISTA ({pa_ok}/4)</div>
+      {pasos_a}
+    </div>
+  </div>
+</div>'''
+
+    # ── Empresas que mueven el sector ────────────────────────
+    emp_rows = ""
+    for nombre in ["NVDA","AMD","ASML","AVGO","MU","QCOM","ARM","INTC"]:
+        e = empresas.get(nombre, {})
+        if not e.get("valido"):
+            continue
+        cambio = e.get("cambio_dia_pct", 0)
+        tend   = e.get("tendencia","—")
+        mom    = e.get("momentum","—")
+        c_col  = "#22c55e" if cambio > 0 else "#ef4444" if cambio < 0 else "var(--muted)"
+        t_col  = "#22c55e" if tend=="alcista" else "#ef4444" if tend=="bajista" else "var(--muted)"
+        sobre_e9_icon = "▲" if e.get("sobre_e9") else "▽"
+        emp_rows += f'''<tr>
+          <td style="font-weight:700;padding:8px 10px">{nombre}</td>
+          <td style="font-family:var(--mono);padding:8px 10px">${e["precio_mxn"]:,.2f}</td>
+          <td style="color:{c_col};font-family:var(--mono);padding:8px 10px">{cambio:+.1f}%</td>
+          <td style="color:var(--muted);padding:8px 10px">{e["rsi"]:.0f}</td>
+          <td style="color:{t_col};padding:8px 10px">{sobre_e9_icon} {tend}</td>
+          <td style="color:var(--muted);font-size:10px;padding:8px 10px">{mom.replace("_"," ")}</td>
+        </tr>'''
+
+    # ── Macro QQQ ────────────────────────────────────────────
+    qqq = macro.get("QQQ",{})
+    qqq_html = ""
+    if qqq.get("valido"):
+        qt  = qqq.get("tendencia","—")
+        qc  = qqq.get("cambio_dia_pct",0)
+        qt_col = "#22c55e" if qt=="alcista" else "#ef4444" if qt=="bajista" else "var(--muted)"
+        qc_col = "#22c55e" if qc>0 else "#ef4444"
+        qqq_html = f'''
+<div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+  <div style="font-weight:700;font-size:13px">📊 QQQ (NASDAQ)</div>
+  <div style="font-size:12px">${qqq["precio_mxn"]:,.2f} MXN</div>
+  <div style="font-size:12px;color:{qc_col}">{qc:+.1f}% hoy</div>
+  <div style="font-size:12px;color:{qt_col}">Tendencia: {qt}</div>
+  <div style="font-size:11px;color:var(--muted)">RSI {qqq["rsi"]:.0f}</div>
+  <div style="font-size:11px;color:var(--muted)">Vol {qqq["vol_rel"]:.1f}x</div>
+</div>'''
+
+    # ── Historial de señales ─────────────────────────────────
+    historial = get_historial_señales(20)
+    hist_rows = ""
+    for h in historial:
+        s = h.get("senal","")
+        s_col = "#22c55e" if "ALCISTA" in s else "#ef4444" if "BAJISTA" in s else "var(--muted)"
+        hist_rows += f'<tr><td style="padding:6px 10px">{h["fecha"]}</td><td style="font-weight:700;padding:6px 10px">{h["simbolo"]}</td><td style="color:{s_col};padding:6px 10px;font-size:11px">{s.replace("_"," ")}</td><td style="padding:6px 10px;font-family:var(--mono)">${h["precio_mxn"]:,.2f}</td><td style="padding:6px 10px;color:var(--muted)">{h["pasos_ok"]}/4</td></tr>'
+
+    hist_html = f'''
+<div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-top:16px">
+  <div style="padding:12px 16px;font-weight:700;font-size:13px;border-bottom:1px solid var(--brd)">📋 Historial de señales</div>
+  <table style="width:100%;font-size:12px;border-collapse:collapse">
+    <thead style="background:var(--surface2)">
+      <tr style="color:var(--muted);font-size:10px">
+        <th style="text-align:left;padding:6px 10px">Fecha</th>
+        <th style="text-align:left;padding:6px 10px">Símbolo</th>
+        <th style="text-align:left;padding:6px 10px">Señal</th>
+        <th style="text-align:left;padding:6px 10px">Precio MXN</th>
+        <th style="text-align:left;padding:6px 10px">Pasos</th>
+      </tr>
+    </thead>
+    <tbody>{hist_rows if hist_rows else '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--muted)">Sin señales registradas aún</td></tr>'}</tbody>
+  </table>
+</div>'''
+
+    # ── Notas educativas ─────────────────────────────────────
+    notas_html = '''
+<div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:16px;font-size:12px;line-height:1.8">
+  <div style="font-weight:700;font-size:13px;margin-bottom:12px">📖 Manual del operador de Semis ETF</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:14px">
+    <div>
+      <div style="font-weight:600;color:#ef4444;margin-bottom:6px">🔴 Los 4 pasos bajistas → SOXS</div>
+      <div style="color:var(--muted)">
+        <div>▼ Paso 1: Pierde EMA9 diaria</div>
+        <div>▼ Paso 2: Vela roja fuerte con volumen</div>
+        <div>▼ Paso 3: El rebote falla</div>
+        <div>▼ Paso 4: Rompe mínimos previos</div>
+      </div>
+    </div>
+    <div>
+      <div style="font-weight:600;color:#22c55e;margin-bottom:6px">🟢 Los 4 pasos alcistas → SOXL</div>
+      <div style="color:var(--muted)">
+        <div>▲ Paso 1: Supera EMA9 diaria</div>
+        <div>▲ Paso 2: Vela verde fuerte con volumen</div>
+        <div>▲ Paso 3: El pullback se sostiene</div>
+        <div>▲ Paso 4: Rompe máximos previos</div>
+      </div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px">
+    <div style="background:var(--surface2);border-radius:8px;padding:10px">
+      <div style="font-weight:600;margin-bottom:4px">⚠️ Reglas del decay</div>
+      <div style="color:var(--muted)">SOXL y SOXS pierden ~0.1% diario en mercados laterales por el apalancamiento 3x. Nunca mantengas más de 10 días sin señal activa. Usa SMH para confirmar dirección antes de entrar.</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:10px">
+      <div style="font-weight:600;margin-bottom:4px">🏢 Las empresas que más importan</div>
+      <div style="color:var(--muted)">NVDA mueve el sector. Si NVDA cae -3% en un día, SMH cae -1.5% y SOXL cae -4.5%. Siempre revisa NVDA y ASML antes de entrar. Earnings de NVDA = volatilidad extrema.</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:10px">
+      <div style="font-weight:600;margin-bottom:4px">📊 Cómo usar el semáforo</div>
+      <div style="color:var(--muted)">🟢 Verde: SMH y QQQ alcistas → condiciones para SOXL. 🔴 Rojo: ambos bajistas → condiciones para SOXS. 🟡 Amarillo: divergencia → esperar confirmación.</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:10px">
+      <div style="font-weight:600;margin-bottom:4px">🔮 Por qué semiconductores es el futuro</div>
+      <div style="color:var(--muted)">Todo lo que corre IA necesita chips: servidores, autos autónomos, smartphones, satélites. NVDA, ASML y AMD son el petróleo del siglo XXI. El ciclo alcista de semis tiene años por delante.</div>
+    </div>
+  </div>
+</div>'''
+
+    return f'''<div id="tab-semis" class="tab">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📡 Semis ETF — Detector de Cambio de Tendencia</h2>
+    <p class="hint">SMH · SOXL · SOXS · SOXX · NVDA · AMD · ASML · AVGO · MU · QCOM · ARM · INTC · QQQ</p>
+  </div>
+
+  {posicion_html}
+  {qqq_html}
+  {semaforo_html}
+
+  <div style="font-size:13px;font-weight:700;margin-bottom:10px">ETFs de semiconductores</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:20px">
+    {etf_cards}
+  </div>
+
+  <div style="font-size:13px;font-weight:700;margin-bottom:10px">Empresas que mueven el sector</div>
+  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px">
+    <table style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead style="background:var(--surface2)">
+        <tr style="color:var(--muted);font-size:10px">
+          <th style="text-align:left;padding:8px 10px">Empresa</th>
+          <th style="text-align:left;padding:8px 10px">Precio MXN</th>
+          <th style="text-align:left;padding:8px 10px">Hoy</th>
+          <th style="text-align:left;padding:8px 10px">RSI</th>
+          <th style="text-align:left;padding:8px 10px">Tendencia</th>
+          <th style="text-align:left;padding:8px 10px">Momentum</th>
+        </tr>
+      </thead>
+      <tbody>{emp_rows if emp_rows else '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--muted)">Cargando empresas...</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  {hist_html}
+  {notas_html}
+</div>'''
 
 
 # ═══════════════════════════════════════════════════════════
