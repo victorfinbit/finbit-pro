@@ -466,6 +466,120 @@ def _loop_alertas_telegram():
                         alertas += 1
 
             print(f"[alertas] 📊 Ciclo completo — {alertas} alertas enviadas")
+
+            # ── ALERTAS SEMIS ETF — SOXL y SOXS ─────────────────────────
+            try:
+                for etf_nom, etf_sym in [("SOXL", "SOXL"), ("SOXS", "SOXS"), ("SMH", "SMH")]:
+                    base = _analizar_base_semis(etf_sym, "", tc)
+                    if not base.get("valido"):
+                        continue
+                    pasos = _detectar_4_pasos(base, tc)
+                    pb_ok = pasos.get("pasos_bajista_ok", 0)
+                    pa_ok = pasos.get("pasos_alcista_ok", 0)
+                    precio_etf = base.get("precio_mxn", 0)
+                    hora_txt   = datetime.now().strftime("%H:%M")
+
+                    if etf_nom == "SOXS":
+                        # SOXS sube cuando semis caen → bajista de semis = bueno para SOXS
+                        if pb_ok == 4 and _puede_enviar_alerta("SOXS", "entrada_4", 240):
+                            msg = (f"🚨 <b>ENTRA A SOXS AHORA</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"✅ Los 4 pasos bajistas completos\n"
+                                   f"📉 SMH/Semis en corrección confirmada\n"
+                                   f"💰 SOXS precio: ${precio_etf:,.2f} MXN\n"
+                                   f"🛑 Pon stop loss al entrar — sin excepción\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXS ENTRADA enviada")
+
+                        elif pb_ok == 3 and _puede_enviar_alerta("SOXS", "prep_3", 240):
+                            msg = (f"⚡ <b>PREPÁRATE PARA SOXS — 3/4</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"3 de 4 pasos bajistas activos\n"
+                                   f"💰 SOXS precio: ${precio_etf:,.2f} MXN\n"
+                                   f"👀 Falta 1 paso para señal completa\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXS PREP enviada")
+
+                        elif pa_ok >= 2 and _puede_enviar_alerta("SOXS", "salida_giro", 240):
+                            msg = (f"⚠️ <b>SOXS — MERCADO GIRANDO</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"📈 {pa_ok}/4 señales alcistas activas\n"
+                                   f"⚠️ El mercado puede estar revirtiendo\n"
+                                   f"💰 SOXS precio: ${precio_etf:,.2f} MXN\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"💡 Considera reducir o salir de SOXS\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXS SALIDA GIRO enviada")
+
+                        elif pa_ok == 4 and _puede_enviar_alerta("SOXS", "salida_4", 240):
+                            msg = (f"🔴 <b>SAL DE SOXS AHORA</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"🚀 4/4 señales alcistas — mercado reviró\n"
+                                   f"❌ SOXS va en contra del mercado ahora\n"
+                                   f"💰 SOXS precio: ${precio_etf:,.2f} MXN\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"❗ VENDER SOXS — respetar la señal\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXS SAL AHORA enviada")
+
+                    elif etf_nom == "SOXL":
+                        # SOXL sube cuando semis suben → alcista de semis = bueno para SOXL
+                        if pa_ok == 4 and _puede_enviar_alerta("SOXL", "entrada_4", 240):
+                            msg = (f"🚀 <b>ENTRA A SOXL AHORA</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"✅ Los 4 pasos alcistas completos\n"
+                                   f"📈 SMH/Semis en tendencia alcista confirmada\n"
+                                   f"💰 SOXL precio: ${precio_etf:,.2f} MXN\n"
+                                   f"🛑 Pon stop loss al entrar — sin excepción\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXL ENTRADA enviada")
+
+                        elif pa_ok == 3 and _puede_enviar_alerta("SOXL", "prep_3", 240):
+                            msg = (f"⚡ <b>PREPÁRATE PARA SOXL — 3/4</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"3 de 4 pasos alcistas activos\n"
+                                   f"💰 SOXL precio: ${precio_etf:,.2f} MXN\n"
+                                   f"👀 Falta 1 paso para señal completa\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXL PREP enviada")
+
+                        elif pb_ok >= 2 and _puede_enviar_alerta("SOXL", "salida_giro", 240):
+                            msg = (f"⚠️ <b>SOXL — MERCADO GIRANDO</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"📉 {pb_ok}/4 señales bajistas activas\n"
+                                   f"⚠️ El mercado puede estar revirtiendo\n"
+                                   f"💰 SOXL precio: ${precio_etf:,.2f} MXN\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"💡 Considera reducir o salir de SOXL\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXL SALIDA GIRO enviada")
+
+                        elif pb_ok == 4 and _puede_enviar_alerta("SOXL", "salida_4", 240):
+                            msg = (f"🔴 <b>SAL DE SOXL AHORA</b>\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"📉 4/4 señales bajistas — mercado reviró\n"
+                                   f"❌ SOXL va en contra del mercado ahora\n"
+                                   f"💰 SOXL precio: ${precio_etf:,.2f} MXN\n"
+                                   f"━━━━━━━━━━━━━━━\n"
+                                   f"❗ VENDER SOXL — respetar la señal\n"
+                                   f"⏰ {hora_txt} ET")
+                            if tg_send(msg):
+                                print("[alertas] ✅ SOXL SAL AHORA enviada")
+
+            except Exception as e:
+                print(f"[alertas] ⚠️ Error alertas semis: {e}")
+
             time.sleep(1800)  # revisar cada 30 minutos
 
         except Exception as e:
@@ -5026,7 +5140,7 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
       <p class="hint">Tus candidatas activas con datos frescos del último scan · Datos se actualizan al correr el scanner</p>
     </div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+  <div class="top-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
   </div>
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
@@ -5037,7 +5151,8 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
 
 def render_tab_top_diario(top: list, tc: float) -> str:
     """Renderiza el tab completo de Top Diario Acumulado."""
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
+              "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"]
     razon_labels = {
         "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
         "listo":        ("🟢 Listo 5/5", "#15803d"),
@@ -5095,7 +5210,7 @@ def render_tab_top_diario(top: list, tc: float) -> str:
         pct_puntuacion = int(puntuacion * 100)
 
         cards.append(f'''
-    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:14px;padding:20px;position:relative;overflow:hidden">
+    <div class="top-card" data-precio="{precio:.0f}" style="background:var(--surface);border:1px solid var(--brd);border-radius:14px;padding:20px;position:relative;overflow:hidden">
       <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#00bfff,#0077b6)"></div>
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
         <div>
@@ -5131,9 +5246,21 @@ def render_tab_top_diario(top: list, tc: float) -> str:
 
     cards_html = "\n".join(cards)
     return f'''<div id="tab-topd" class="tab">
-  <div style="padding:20px 0 14px">
-    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
-    <p class="hint">Los mejores 5 de <strong>todos</strong> los tickers escaneados hoy · Se actualiza con cada scan · Se reinicia a las 8:00 AM CDMX</p>
+  <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
+      <p class="hint">Los mejores 5 de <strong>todos</strong> los tickers escaneados hoy · Se actualiza con cada scan · Se reinicia a las 8:00 AM CDMX</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:8px 12px">
+      <span style="font-size:11px;color:var(--muted)">💰 Máximo por acción:</span>
+      <span style="font-size:11px;color:var(--muted)">$</span>
+      <input type="number" id="filtro-precio-topd" placeholder="Sin límite"
+        style="width:90px;font-size:12px;padding:4px 8px;border:1px solid var(--brd);border-radius:6px;background:var(--surface2);color:var(--text)"
+        oninput="filtrarTopPorPrecio('topd', this.value)">
+      <button onclick="document.getElementById('filtro-precio-topd').value='';filtrarTopPorPrecio('topd','')"
+        style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer">✕</button>
+    </div>
+  </div>
     <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
       <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top del Día?</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
@@ -5147,7 +5274,7 @@ def render_tab_top_diario(top: list, tc: float) -> str:
       <div style="margin-top:8px;font-size:11px;color:var(--muted)">Se acumula todo el día — si escaneas 15 tickers y luego 15 más, el Top 5 final es de los 30. El mejor score de cada ticker persiste aunque cambie en scans posteriores.</div>
     </div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+  <div class="top-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
   </div>
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
@@ -5342,7 +5469,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         mc = medal_colors[i]
 
         cards.append(f'''
-        <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:20px;position:relative;overflow:hidden">
+        <div class="top-card" data-precio="{precio:.0f}" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:20px;position:relative;overflow:hidden">
           <!-- Número de puesto -->
           <div style="position:absolute;top:16px;right:16px;font-size:28px;opacity:0.15">{medals[i]}</div>
           <!-- Header -->
@@ -5400,9 +5527,21 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
 
     cards_html = "\n".join(cards)
     return f'''<div id="tab-top" class="tab">
-  <div style="padding:20px 0 14px">
-    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
-    <p class="hint">Los mejores de <strong>todos</strong> los tickers escaneados esta semana · Se acumula de lunes a viernes · Reset cada lunes 8:00 AM CDMX</p>
+  <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:8px 12px">
+      <span style="font-size:11px;color:var(--muted)">💰 Máximo por acción:</span>
+      <span style="font-size:11px;color:var(--muted)">$</span>
+      <input type="number" id="filtro-precio-top" placeholder="Sin límite"
+        style="width:90px;font-size:12px;padding:4px 8px;border:1px solid var(--brd);border-radius:6px;background:var(--surface2);color:var(--text)"
+        oninput="filtrarTopPorPrecio('top', this.value)">
+      <button onclick="document.getElementById('filtro-precio-top').value='';filtrarTopPorPrecio('top','')"
+        style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer">✕</button>
+    </div>
+  </div>
+<p class="hint">Los mejores de <strong>todos</strong> los tickers escaneados esta semana · Se acumula de lunes a viernes · Reset cada lunes 8:00 AM CDMX</p>
     <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
       <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top Semanal?</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
@@ -5416,7 +5555,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
       <div style="margin-top:8px;font-size:11px;color:var(--muted)">El ranking usa: 40% score técnico + 40% R:R normalizado + 20% badge. Se acumula toda la semana — si el lunes escaneas 10 tickers y el miércoles otros 10, el Top 5 es de los 20. Reset cada lunes 8:00 AM CDMX.</div>
     </div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+  <div class="top-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
     {cards_html}
   </div>
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
@@ -6179,13 +6318,13 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
 
     # ── TOP SEMANAL ACUMULADO ────────────────────────────────
     actualizar_top_semanal_acum(scan_data)
-    top_semanal     = obtener_top_semanal_acum(n=5)
+    top_semanal     = obtener_top_semanal_acum(n=20)
     top_banner_html = render_top_semanal_banner(top_semanal)
     top_tab_html    = render_tab_top_semanal(top_semanal, tc)
 
     # ── TOP DIARIO ACUMULADO ─────────────────────────────────
     actualizar_top_diario(scan_data)
-    top_diario      = obtener_top_diario(n=5)
+    top_diario      = obtener_top_diario(n=20)
     top_diario_banner_html = render_top_diario_banner(top_diario)
     top_diario_tab_html    = render_tab_top_diario(top_diario, tc)
 
@@ -8740,6 +8879,42 @@ function exportarExcel() {{
 function exportarPDF() {{
   showTab('rendimiento', document.querySelector('.nb[onclick*=rendimiento]'));
   setTimeout(() => window.print(), 300);
+}}
+
+// ── Filtrar Top por precio máximo — dinámico ─────────────
+function filtrarTopPorPrecio(tabId, valorStr) {{
+  const max = parseFloat(valorStr);
+  const tab = document.getElementById('tab-' + tabId);
+  if (!tab) return;
+
+  const cards = Array.from(tab.querySelectorAll('.top-card'));
+  let visibles = 0;
+
+  cards.forEach((card, idx) => {{
+    const precio = parseFloat(card.getAttribute('data-precio') || '0');
+    const cumple = !valorStr || isNaN(max) || precio <= max;
+
+    if (cumple && visibles < 5) {{
+      card.style.display = '';
+      // Actualizar número de posición visualmente
+      const posEl = card.querySelector('.top-pos');
+      if (posEl) posEl.textContent = (visibles + 1) + 'º';
+      visibles++;
+    }} else {{
+      card.style.display = 'none';
+    }}
+  }});
+
+  // Mensaje si no hay resultados
+  let msg = document.getElementById('top-empty-' + tabId);
+  if (!msg) {{
+    msg = document.createElement('div');
+    msg.id = 'top-empty-' + tabId;
+    msg.style.cssText = 'padding:20px;text-align:center;color:var(--muted);font-size:13px;display:none';
+    msg.innerHTML = '😅 Sin acciones en ese rango de precio. Prueba un monto mayor.';
+    tab.querySelector('.top-grid') && tab.querySelector('.top-grid').after(msg);
+  }}
+  msg.style.display = (visibles === 0 && valorStr) ? 'block' : 'none';
 }}
 
 // ── Watchlist toggle ──────────────────────────────────────
