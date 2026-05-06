@@ -4917,7 +4917,7 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
       {f'<div style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right">Cerrada: {e["fecha_cierre"]}</div>' if e.get("fecha_cierre") else ""}
     </div>'''
 
-    return f'''<div id="tab-diario" class="tab" style="display:none">
+    return f'''<div id="tab-diario" class="tab">
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📓 Diario de Trading</h2>
     <p class="hint">Cada operación que registres queda aquí con tu razonamiento. Con el tiempo verás qué setups y qué scores te funcionan mejor.</p>
@@ -4930,7 +4930,7 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
 def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> str:
     """Tab de rendimiento acumulado vs SPY con opción de exportar."""
     if not pnl_hist:
-        return '''<div id="tab-rendimiento" class="tab" style="display:none">
+        return '''<div id="tab-rendimiento" class="tab">
           <div style="padding:40px;text-align:center;color:var(--muted)">
             <div style="font-size:48px;margin-bottom:16px">📊</div>
             <div style="font-size:16px;font-weight:600">Sin historial de rendimiento todavía</div>
@@ -4977,7 +4977,7 @@ def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> 
                       f'<td class="num" style="color:var(--muted)">{fmt(h["spy_precio"]) if h["spy_precio"] else "—"}</td>'
                       f'</tr>')
 
-    return f'''<div id="tab-rendimiento" class="tab" style="display:none">
+    return f'''<div id="tab-rendimiento" class="tab">
   <div style="padding:20px 0 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📊 Rendimiento</h2>
@@ -5048,7 +5048,7 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
     """
     wl = get_watchlist()
     if not wl:
-        return '''<div id="tab-wl" class="tab" style="display:none">
+        return '''<div id="tab-wl" class="tab">
           <div style="padding:40px;text-align:center;color:var(--muted)">
             <div style="font-size:48px;margin-bottom:16px">👁</div>
             <div style="font-size:16px;font-weight:600">Watchlist vacía</div>
@@ -5164,7 +5164,7 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
 
     cards_html = "\n".join(cards)
     n = len(wl)
-    return f'''<div id="tab-wl" class="tab" style="display:none">
+    return f'''<div id="tab-wl" class="tab">
   <div style="padding:20px 0 14px;display:flex;align-items:center;justify-content:space-between">
     <div>
       <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">👁 Watchlist <span style="font-size:14px;color:var(--muted);font-weight:400">({n} candidatas)</span></h2>
@@ -5192,7 +5192,7 @@ def render_tab_top_diario(top: list, tc: float) -> str:
     hoy = _fecha_hoy_cdmx()
 
     if not top:
-        return f'''<div id="tab-topd" class="tab" style="display:none">
+        return f'''<div id="tab-topd" class="tab">
           <div style="padding:40px;text-align:center;color:var(--muted)">
             <div style="font-size:48px;margin-bottom:16px">📅</div>
             <div style="font-size:16px;font-weight:600">Sin candidatas hoy todavía</div>
@@ -5276,7 +5276,7 @@ def render_tab_top_diario(top: list, tc: float) -> str:
     </div>''')
 
     cards_html = "\n".join(cards)
-    return f'''<div id="tab-topd" class="tab" style="display:none">
+    return f'''<div id="tab-topd" class="tab">
   <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
@@ -5443,7 +5443,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
     }
 
     if not top:
-        return '''<div id="tab-top" class="tab" style="display:none">
+        return '''<div id="tab-top" class="tab">
           <div style="padding:40px;text-align:center;color:var(--muted)">
             <div style="font-size:48px;margin-bottom:16px">🏆</div>
             <div style="font-size:16px;font-weight:600">Sin candidatas esta semana</div>
@@ -5557,7 +5557,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         </div>''')
 
     cards_html = "\n".join(cards)
-    return f'''<div id="tab-top" class="tab" style="display:none">
+    return f'''<div id="tab-top" class="tab">
   <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
@@ -6443,7 +6443,7 @@ body{{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:1
 .nb.active{{color:var(--text);border-bottom-color:var(--red);font-weight:500}}
 .nb:hover:not(.active){{color:var(--text)}}
 .wrap{{max-width:1360px;margin:0 auto;padding:24px 20px 48px}}
-.tab{{display:none}}.tab.active{{display:block}}
+.tab{{display:none!important}}.tab.active{{display:block!important}}
 .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}}
 .kpi{{background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);padding:13px 15px}}
 .kpi .lbl{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}}
@@ -10906,7 +10906,7 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
   </div>
 </div>'''
 
-    return f'''<div id="tab-semis" class="tab" style="display:none">
+    return f'''<div id="tab-semis" class="tab">
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📡 Semis ETF — Detector de Cambio de Tendencia</h2>
     <p class="hint">SMH · SOXL · SOXS · SOXX · NVDA · AMD · ASML · AVGO · MU · QCOM · ARM · INTC · QQQ</p>
