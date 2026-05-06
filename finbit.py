@@ -5175,7 +5175,7 @@ def render_tab_top_diario(top: list, tc: float) -> str:
         </div>'''
 
     cards = []
-    for i, r in enumerate(top):
+    for i, r in enumerate(top[:20]):  # max 20
         nombre    = r.get("nombre", "—")
         precio    = r.get("precio_mxn", 0)
         rr        = r.get("rr", 0)
@@ -5410,7 +5410,7 @@ def render_top_semanal_banner(top: list) -> str:
 
 def render_tab_top_semanal(top: list, tc: float) -> str:
     """Renderiza el tab completo de Top Semanal."""
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","11","12","13","14","15","16","17","18","19","20"]
     razon_labels = {
         "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
         "listo":        ("🟢 Listo 5/5", "#15803d"),
@@ -5427,7 +5427,7 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         </div>'''
 
     cards = []
-    for i, r in enumerate(top):
+    for i, r in enumerate(top[:20]):  # max 20
         nombre  = r.get("nombre", "")
         precio  = r.get("precio_mxn", 0)
         rr      = r.get("rr", 0)
