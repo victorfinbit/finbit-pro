@@ -491,6 +491,7 @@ def init_db():
         pasos_ok    INTEGER DEFAULT 0,
         tipo        TEXT DEFAULT 'ETF'
     );
+    CREATE TABLE IF NOT EXISTS top_semanal_acumulado (
         ticker      TEXT PRIMARY KEY,
         semana      TEXT NOT NULL,
         puntuacion  REAL NOT NULL,
