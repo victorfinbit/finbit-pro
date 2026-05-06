@@ -5383,7 +5383,7 @@ def render_top_semanal_banner(top: list) -> str:
         return ""
     items = []
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    for i, r in enumerate(top):
+    for i, r in enumerate(top[:5]):  # banner solo muestra top 5
         nombre = r.get("nombre", "")
         rr     = r.get("rr", 0)
         badge  = ""
