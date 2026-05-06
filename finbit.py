@@ -4219,10 +4219,20 @@ def calcular_etapa(r: dict) -> tuple[str, str, str]:
 
 
 def _puntuacion_top(r: dict) -> float:
-    """Fórmula unificada de puntuación para Top Diario y Semanal."""
+    """
+    Fórmula de puntuación para Top Diario y Semanal.
+    Orden de prioridad:
+    1. ROCKET
+    2. Ganga
+    3. BUY
+    4. Listo 5/5
+    5. Pre-breakout 4/5
+    6. Acumulación / Capitulación
+    """
     score  = r.get("score_ajustado", r.get("score", 0))
-    total  = r.get("total_criterios", 11)
+    total  = r.get("total_criterios", 13)
     rr     = r.get("rr", 0)
+    estado = r.get("estado", "")
     ganga  = r.get("ganga", {})
     inicio = r.get("inicio", {})
     cap    = r.get("capitulacion", {})
@@ -4231,25 +4241,38 @@ def _puntuacion_top(r: dict) -> float:
     nivel_str = inicio.get("nivel", "") if isinstance(inicio, dict) and inicio.get("es_inicio") else ""
     es_cap    = isinstance(cap, dict) and cap.get("es_capitulacion", False)
     nivel_cap = cap.get("nivel", 0) if es_cap else 0
+    es_buy    = estado in ("BUY", "ROCKET")
 
-    # Bonus: Ganga=2, Capitulación nivel 3=2.5, nivel 2=1.8, Pre-breakout=1.5, Listo=0.5
-    if es_cap and nivel_cap == 3:
-        bonus = 2.5
-    elif es_cap and nivel_cap == 2:
-        bonus = 1.8
+    # Bonus por setup — orden de prioridad claro
+    if estado == "ROCKET":
+        bonus = 5.0    # #1 — máxima convicción
     elif es_ganga:
-        bonus = 2.0
-    elif nivel_str == "pre_breakout":
-        bonus = 1.5
+        bonus = 4.0    # #2 — precio castigado, entrada segura
+    elif es_buy:
+        bonus = 3.5    # #3 — BUY confirmado
     elif nivel_str == "listo":
-        bonus = 0.5
+        bonus = 3.0    # #4 — 5/5 criterios
+    elif nivel_str == "pre_breakout":
+        bonus = 2.0    # #5 — 4/5 criterios
+    elif es_cap and nivel_cap == 3:
+        bonus = 2.5    # Capitulación nivel 3 (muy fuerte)
+    elif es_cap and nivel_cap == 2:
+        bonus = 1.8    # Capitulación nivel 2
+    elif nivel_str == "acumulacion":
+        bonus = 1.5    # #6 — acumulación
     else:
         bonus = 0
 
     score_pct = (score / total) if total > 0 else 0
     rr_norm   = min(rr / 10.0, 1.0)
-    bonus_pct = bonus / 4.0
-    return (score_pct * 0.40) + (rr_norm * 0.40) + (bonus_pct * 0.20)
+    bonus_pct = bonus / 6.0  # normalizado sobre el máximo (5.0)
+
+    # Pesos profesionales: Badge 35% + R:R 35% + Score 30%
+    # Badge define el tipo de oportunidad
+    # R:R es sagrado — no se sacrifica por nada
+    # Score confirma los criterios técnicos
+    return (bonus_pct * 0.35) + (rr_norm * 0.35) + (score_pct * 0.30)
+
 
 
 def _fecha_hoy_cdmx() -> str:
