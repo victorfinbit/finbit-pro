@@ -5449,6 +5449,109 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
 </div>'''
 
 
+def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 160) -> str:
+    """
+    Mini gráfico de velas japonesas con EMAs 9, 21, 50 para los últimos 60 días.
+    Usa datos del cache — cero llamadas API.
+    """
+    try:
+        # Buscar en cache sin hacer llamada nueva
+        vals = None
+        for key in (_TD_CACHE or {}):
+            if nombre.upper() in key.upper() and "1day" in key.lower():
+                vals = _TD_CACHE[key]
+                break
+        if not vals or len(vals) < 10:
+            return ""
+
+        # Últimas 60 velas
+        data = vals[-60:]
+        n    = len(data)
+
+        closes = [float(x["close"]) for x in data]
+        opens  = [float(x.get("open",  x["close"])) for x in data]
+        highs  = [float(x.get("high",  x["close"])) for x in data]
+        lows   = [float(x.get("low",   x["close"])) for x in data]
+
+        # EMAs
+        c_s  = pd.Series(closes)
+        e9_s  = list(ema(c_s, 9))
+        e21_s = list(ema(c_s, 21))
+        e50_s = list(ema(c_s, 50))
+
+        # Rango de precios para escalar
+        all_prices = highs + lows + [v for v in e9_s + e21_s + e50_s if v and v == v]
+        p_min = min(all_prices) * 0.998
+        p_max = max(all_prices) * 1.002
+        p_rng = p_max - p_min if p_max != p_min else 1
+
+        pad_l, pad_r, pad_t, pad_b = 8, 8, 8, 20
+        w = width - pad_l - pad_r
+        h = height - pad_t - pad_b
+
+        def px(price):
+            return pad_t + h - (price - p_min) / p_rng * h
+
+        def py(i):
+            return pad_l + (i / (n - 1)) * w if n > 1 else pad_l
+
+        # Velas
+        candle_w = max(2, int(w / n * 0.7))
+        velas_svg = ""
+        for i, (o, c, hi, lo) in enumerate(zip(opens, closes, highs, lows)):
+            x     = py(i)
+            color = "#22c55e" if c >= o else "#ef4444"
+            y_hi  = px(hi)
+            y_lo  = px(lo)
+            y_o   = px(max(o, c))
+            y_c   = px(min(o, c))
+            body_h = max(1, y_lo - y_hi if c == o else abs(px(o) - px(c)))
+
+            # Mecha
+            velas_svg += f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{color}" stroke-width="1" opacity="0.7"/>'
+            # Cuerpo
+            velas_svg += f'<rect x="{x - candle_w/2:.1f}" y="{y_o:.1f}" width="{candle_w}" height="{max(1, abs(px(o)-px(c))):.1f}" fill="{color}" opacity="0.9"/>'
+
+        # EMAs como polylines
+        def make_ema_line(ema_vals, color, dash=""):
+            pts = " ".join(
+                f"{py(i):.1f},{px(v):.1f}"
+                for i, v in enumerate(ema_vals)
+                if v and v == v
+            )
+            dash_attr = f'stroke-dasharray="{dash}"' if dash else ""
+            return f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5" {dash_attr} opacity="0.9"/>'
+
+        ema9_line  = make_ema_line(e9_s,  "#60a5fa")       # azul — EMA9
+        ema21_line = make_ema_line(e21_s, "#f59e0b")       # naranja — EMA21
+        ema50_line = make_ema_line(e50_s, "#a78bfa", "4,2") # morado punteado — EMA50
+
+        # Precio actual y línea horizontal
+        precio_actual = closes[-1] * tc
+        y_actual = px(closes[-1])
+        precio_line = (f'<line x1="{pad_l}" y1="{y_actual:.1f}" x2="{pad_l+w}" y2="{y_actual:.1f}" '
+                       f'stroke="#94a3b8" stroke-width="0.5" stroke-dasharray="3,3"/>')
+
+        # Leyenda
+        leyenda = (f'<text x="{pad_l+2}" y="{height-6}" font-size="8" fill="#60a5fa">EMA9</text>'
+                   f'<text x="{pad_l+30}" y="{height-6}" font-size="8" fill="#f59e0b">EMA21</text>'
+                   f'<text x="{pad_l+58}" y="{height-6}" font-size="8" fill="#a78bfa">EMA50</text>'
+                   f'<text x="{pad_l+w-2}" y="{height-6}" font-size="8" fill="#94a3b8" text-anchor="end">${precio_actual:,.0f}</text>')
+
+        svg = (f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+               f'style="width:100%;height:{height}px;background:#0d1117;border-radius:8px;display:block">'
+               f'{velas_svg}{ema9_line}{ema21_line}{ema50_line}{precio_line}{leyenda}'
+               f'</svg>')
+
+        return (f'<div style="margin-bottom:12px">'
+                f'<div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-weight:600">'
+                f'📈 Gráfico 60 días — Velas diarias + EMA9/21/50</div>'
+                f'{svg}</div>')
+
+    except Exception as e:
+        return f'<div style="font-size:10px;color:var(--muted)">Gráfico no disponible: {e}</div>'
+
+
 def render_scan_rows(scanner, tc):
     h=""
     for r in scanner:
@@ -5556,7 +5659,9 @@ def render_scan_rows(scanner, tc):
         adx_label = "✅ Tendencia" if adx_val>=25 else "⚠️ Débil" if adx_val>=20 else "❌ Lateral"
 
         _n = r['nombre']
+        mini_chart = render_mini_chart(r['nombre'], tc)
         detail=(f'<div class="detail-panel">'
+                f'{mini_chart}'
                 f'{exit_html}'
                 f'{render_ganga_panel(r.get("ganga", {}))}'
                 f'{render_capitulacion_panel(r.get("capitulacion", {}))}'
