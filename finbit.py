@@ -9120,6 +9120,12 @@ function actualizarDashboard() {{
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
+// Ocultar tabs al cargar
+(function(){{
+  document.querySelectorAll('.tab').forEach(function(t){{
+    if(!t.classList.contains('active'))t.style.display='none';
+  }});
+}})();
 </script></body></html>"""
 
 
