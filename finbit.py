@@ -6824,8 +6824,6 @@ td strong{{font-size:13px;font-weight:500}}
 
 <!-- ══ SCANNER ══ -->
 <div id="tab-scanner" class="tab active">
-  {top_diario_banner_html}
-  {top_banner_html}
   {que_hago_hoy}
   <div style="padding:20px 0 14px">
     <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">Scanner de mercado</h2>
