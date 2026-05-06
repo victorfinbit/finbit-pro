@@ -1848,10 +1848,11 @@ def no_disponible_gbm(ticker: str) -> bool:
     return ticker.upper() in _NO_DISPONIBLE_GBM
 
 def score_minimo_entrada(ticker: str, vix: float) -> int:
-    """Score mínimo para señal BUY según tipo de activo y condición macro."""
+    """Score mínimo para señal BUY según tipo de activo y condición macro.
+    Con 13 criterios — 7/13 = 54% es razonable para acción normal."""
     if es_etf_apalancado(ticker):
-        return 8 if vix > 20 else 7   # ETF 3x: exige casi perfección
-    return 7 if vix > 20 else 6       # Acción normal: 6/8 en calma, 7/8 con miedo
+        return 9 if vix > 20 else 8   # ETF 3x: exige casi perfección (69%+)
+    return 7 if vix > 20 else 6       # Acción normal: 6/13 en calma (46%), 7/13 con miedo
 
 
 # ── HISTORIAL DE SCORES (BD) ──────────────────────────────
@@ -2618,9 +2619,11 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
         bloqueadores.append(f"ADX {adx_v:.0f} < 20 — mercado lateral, señales técnicas no son fiables")
         pasa_filtros = False
 
-    # R2: Precio bajo EMA9 — no entrar en debilidad
-    if precio < ema9:
-        bloqueadores.append(f"Precio ${precio:.2f} < EMA9 ${ema9:.2f} — entrada en debilidad prohibida")
+    # R2: Precio significativamente bajo EMA9 — bloquear solo si está >3% abajo
+    # Si está entre 0-3% bajo EMA9 es zona de pullback válida, no bloquear
+    distancia_ema9_pct = (ema9 - precio) / ema9 * 100 if ema9 > 0 else 0
+    if precio < ema9 * 0.97:  # más de 3% bajo EMA9
+        bloqueadores.append(f"Precio ${precio:.2f} muy bajo EMA9 ${ema9:.2f} ({distancia_ema9_pct:.1f}% abajo) — entrada en debilidad prohibida")
         pasa_filtros = False
 
     # R3: Soporte roto
@@ -4340,7 +4343,8 @@ def actualizar_top_semanal_acum(scan_data: list) -> None:
             es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
             nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
             es_cap_r    = isinstance(cap_r, dict) and cap_r.get("es_capitulacion", False)
-            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r):
+            es_buy_r = r.get("estado","") in ("BUY","ROCKET")
+            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r or es_buy_r):
                 continue
 
             ticker = r.get("nombre", "")
@@ -4438,7 +4442,8 @@ def actualizar_top_diario(scan_data: list) -> None:
             es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
             nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
             es_cap_r = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
-            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r):
+            es_buy_r = r.get("estado","") in ("BUY","ROCKET")
+            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r or es_buy_r):
                 continue
             ticker = r.get("nombre", "")
             if not ticker:
@@ -5361,7 +5366,8 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
         es_inicio = isinstance(inicio, dict) and inicio.get("es_inicio", False)
         nivel_str = inicio.get("nivel", "") if es_inicio else ""
         es_cap    = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
-        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion") or es_cap
+        es_buy = r.get("estado","") in ("BUY","ROCKET")
+        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion") or es_cap or es_buy
         if not tiene_setup:
             continue
         puntuacion = _puntuacion_top(r)
