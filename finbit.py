@@ -5471,8 +5471,8 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
             razon_txt  = "Score y R:R por encima del promedio del scanner"
 
         # Color del puesto
-        medal_colors = ["#ffd700", "#c0c0c0", "#cd7f32", "var(--text)", "var(--text)"]
-        mc = medal_colors[i]
+        medal_colors = ["#ffd700", "#c0c0c0", "#cd7f32"] + ["var(--text)"] * 17
+        mc = medal_colors[i] if i < len(medal_colors) else "var(--text)"
 
         cards.append(f'''
         <div class="top-card" data-precio="{precio:.0f}" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:20px;position:relative;overflow:hidden">
