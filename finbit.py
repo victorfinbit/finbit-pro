@@ -9946,25 +9946,69 @@ def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
 
 
 def _detectar_4_pasos(base: dict, tc: float) -> dict:
-    """Detecta los 4 pasos bajistas y los 4 alcistas."""
+    """Detecta los 4 pasos bajistas y alcistas + Estado Actual de la tendencia."""
     precio   = base["precio"]
     precio_1 = base["precio_1"]
     e9       = base["e9"]
+    e21      = base["e21"]
+    e50      = base["e50"]
     vol_rel  = base["vol_rel"]
     vela_roja   = base["vela_roja"]
     vela_verde  = base["vela_verde"]
     vela_fuerte = base["vela_fuerte"]
     macd_val    = base["macd_val"]
     signal_val  = base["signal_val"]
+    hist_val    = base["hist_val"]
+    hist_prev   = base["hist_prev"]
     low_h    = base["low_h"]
     high_h   = base["high_h"]
     min_prev = base["min_prev"]
     max_prev = base["max_prev"]
+    rsi_v    = base["rsi"]
+    tendencia = base["tendencia"]
+    cambio   = base["cambio_dia_pct"]
 
-    vela_anterior_verde = base["closes"][-2] > base["open_h"] if len(base["closes"]) > 1 else False
-    vela_anterior_roja  = base["closes"][-2] < base["open_h"] if len(base["closes"]) > 1 else False
+    closes = base["closes"]
+    vela_anterior_verde = closes[-2] > base["open_h"] if len(closes) > 1 else False
+    vela_anterior_roja  = closes[-2] < base["open_h"] if len(closes) > 1 else False
 
-    # ── 4 pasos bajistas ─────────────────────────────────────
+    # ── ESTADO ACTUAL (modo confirmación) ────────────────────
+    # Evalúa la condición ACTUAL del ETF sin requerir que sea un giro de HOY
+    alcista_fuerte   = (precio > e9 > e21 and macd_val > signal_val and
+                        hist_val > 0 and rsi_v > 55 and cambio > 2.0)
+    alcista_activo   = (precio > e9 and macd_val > signal_val and rsi_v > 45)
+    bajista_fuerte   = (precio < e9 < e21 and macd_val < signal_val and
+                        hist_val < 0 and rsi_v < 45 and cambio < -2.0)
+    bajista_activo   = (precio < e9 and macd_val < signal_val and rsi_v < 55)
+    lateral          = not alcista_activo and not bajista_activo
+
+    if alcista_fuerte:
+        estado       = "TENDENCIA_FUERTE_ALCISTA"
+        estado_desc  = "🚀 Tendencia alcista fuerte activa"
+        estado_color = "#22c55e"
+        estado_accion = "NO ENTRES AHORA — el tren ya salió. Espera que corrija y RSI baje a 45-55. Ahí compras SOXL más barato con mejor R:R."
+    elif alcista_activo:
+        estado       = "TENDENCIA_ALCISTA"
+        estado_desc  = "📈 Tendencia alcista activa"
+        estado_color = "#4ade80"
+        estado_accion = "VIGILA — mercado alcista pero sin señal de entrada nueva. Espera los 4 pasos de GIRO ALCISTA para entrar a SOXL."
+    elif bajista_fuerte:
+        estado       = "TENDENCIA_FUERTE_BAJISTA"
+        estado_desc  = "📉 Tendencia bajista fuerte activa"
+        estado_color = "#ef4444"
+        estado_accion = "SOXS EN TERRENO FAVORABLE — si ya tienes posición, mantén. Si no, espera los 4 pasos completos para entrar."
+    elif bajista_activo:
+        estado       = "TENDENCIA_BAJISTA"
+        estado_desc  = "🔻 Tendencia bajista activa"
+        estado_color = "#f87171"
+        estado_accion = "VIGILA SOXS — mercado bajista pero sin confirmación total. Espera los 4 pasos completos antes de entrar."
+    else:
+        estado       = "LATERAL"
+        estado_desc  = "⚪ Lateral — sin dirección"
+        estado_color = "var(--muted)"
+        estado_accion = "NO HAGAS NADA — mercado sin rumbo. SOXL y SOXS pierden dinero por decay en lateral. Espera señal clara."
+
+    # ── 4 pasos bajistas (modo cambio — detecta el GIRO) ─────
     p1b = precio < e9 and precio_1 >= e9 * 0.995
     p2b = vela_roja and vela_fuerte and vol_rel >= 1.3
     p3b = vela_anterior_verde and precio < e9 and macd_val < signal_val
@@ -9981,7 +10025,7 @@ def _detectar_4_pasos(base: dict, tc: float) -> dict:
          "detalle":f"${low_h*tc:,.2f} {'< mín ✅' if p4b else '>= mín ❌'} ${min_prev*tc:,.2f}"},
     ]
 
-    # ── 4 pasos alcistas ─────────────────────────────────────
+    # ── 4 pasos alcistas (modo cambio — detecta el GIRO) ─────
     p1a = precio > e9 and precio_1 <= e9 * 1.005
     p2a = vela_verde and vela_fuerte and vol_rel >= 1.3
     p3a = vela_anterior_roja and precio > e9 and macd_val > signal_val
@@ -10001,21 +10045,28 @@ def _detectar_4_pasos(base: dict, tc: float) -> dict:
     pb_ok = sum(1 for p in pasos_bajista if p["ok"])
     pa_ok = sum(1 for p in pasos_alcista if p["ok"])
 
+    # Señal de entrada (los 4 pasos completos)
     if pb_ok == 4:
-        senal="BAJISTA_FULL"; senal_desc="🔴 SEÑAL COMPLETA — Corrección confirmada"; senal_color="#ef4444"
+        senal="BAJISTA_FULL"; senal_desc="🔴 SEÑAL DE ENTRADA — 4/4 pasos bajistas · Entra a SOXS"; senal_color="#ef4444"
     elif pb_ok == 3:
-        senal="BAJISTA_PROB"; senal_desc="🟠 3/4 pasos bajistas — Preparar entrada SOXS"; senal_color="#f97316"
+        senal="BAJISTA_PROB"; senal_desc="🟠 3/4 pasos bajistas — Prepárate para SOXS"; senal_color="#f97316"
+    elif pb_ok == 2:
+        senal="BAJISTA_INIT"; senal_desc="🔶 2/4 pasos bajistas — Empieza a vigilar"; senal_color="#fb923c"
     elif pa_ok == 4:
-        senal="ALCISTA_FULL"; senal_desc="🟢 SEÑAL COMPLETA — Tendencia alcista confirmada"; senal_color="#22c55e"
+        senal="ALCISTA_FULL"; senal_desc="🟢 SEÑAL DE ENTRADA — 4/4 pasos alcistas · Entra a SOXL"; senal_color="#22c55e"
     elif pa_ok == 3:
-        senal="ALCISTA_PROB"; senal_desc="🟡 3/4 pasos alcistas — Preparar entrada SOXL"; senal_color="#eab308"
+        senal="ALCISTA_PROB"; senal_desc="🟡 3/4 pasos alcistas — Prepárate para SOXL"; senal_color="#eab308"
+    elif pa_ok == 2:
+        senal="ALCISTA_INIT"; senal_desc="🔷 2/4 pasos alcistas — Empieza a vigilar"; senal_color="#60a5fa"
     else:
-        senal="NEUTRAL"; senal_desc=f"⚪ Sin señal · {pb_ok}/4 bajistas · {pa_ok}/4 alcistas"; senal_color="var(--muted)"
+        senal="NEUTRAL"; senal_desc=f"⚪ Sin señal de cambio · {pb_ok}/4 bajistas · {pa_ok}/4 alcistas"; senal_color="var(--muted)"
 
     return {
         "pasos_bajista": pasos_bajista, "pasos_bajista_ok": pb_ok,
         "pasos_alcista": pasos_alcista, "pasos_alcista_ok": pa_ok,
         "senal": senal, "senal_desc": senal_desc, "senal_color": senal_color,
+        "estado": estado, "estado_desc": estado_desc,
+        "estado_color": estado_color, "estado_accion": estado_accion,
     }
 
 
@@ -10218,6 +10269,70 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
   {f'<div style="font-size:11px;color:var(--muted)">{"  ·  ".join(impacto_hoy[:5])}</div>' if impacto_hoy else ""}
 </div>'''
 
+    # ── Alerta SOXS — cuándo entrar ─────────────────────────
+    smh_r  = etfs.get("SMH", {})
+    soxs_r = etfs.get("SOXS", {})
+    soxl_r = etfs.get("SOXL", {})
+
+    # Evaluar condiciones para entrar a SOXS
+    smh_bajista  = smh_r.get("estado","") in ("TENDENCIA_BAJISTA","TENDENCIA_FUERTE_BAJISTA")
+    soxl_bajista = soxl_r.get("estado","") in ("TENDENCIA_BAJISTA","TENDENCIA_FUERTE_BAJISTA")
+    pasos_soxs   = soxs_r.get("pasos_bajista_ok", 0) if soxs_r.get("valido") else 0
+    # SOXS sube cuando semis bajan — sus pasos alcistas son la señal
+    pasos_soxs_entrada = soxs_r.get("pasos_alcista_ok", 0) if soxs_r.get("valido") else 0
+
+    # Determinar nivel de alerta
+    if smh_bajista and soxl_bajista and pasos_soxs_entrada >= 4:
+        alerta_nivel  = "ENTRAR"
+        alerta_bg     = "linear-gradient(135deg,#1a0a0a,#450a0a)"
+        alerta_borde  = "#ef4444"
+        alerta_titulo = "🚨 MOMENTO DE ENTRAR A SOXS"
+        alerta_texto  = "SMH bajista + SOXL bajista + 4/4 señales confirmadas. ES EL MOMENTO. Entra a SOXS ahora con stop loss definido."
+        alerta_accion = "COMPRA SOXS"
+        alerta_col    = "#ef4444"
+    elif smh_bajista and soxl_bajista and pasos_soxs_entrada >= 3:
+        alerta_nivel  = "PREPARAR"
+        alerta_bg     = "linear-gradient(135deg,#1c0a00,#431407)"
+        alerta_borde  = "#f97316"
+        alerta_titulo = "⚡ CASI LISTO PARA SOXS — Prepárate"
+        alerta_texto  = "SMH bajista + SOXL bajista + 3/4 señales. Falta 1 paso. Ten el dinero listo, define tu stop loss. Puede ser mañana."
+        alerta_accion = "PREPARA LA ORDEN"
+        alerta_col    = "#f97316"
+    elif smh_bajista and pasos_soxs_entrada >= 2:
+        alerta_nivel  = "VIGILAR"
+        alerta_bg     = "linear-gradient(135deg,#1c1400,#451a03)"
+        alerta_borde  = "#eab308"
+        alerta_titulo = "👁 EMPIEZA A VIGILAR SOXS"
+        alerta_texto  = "SMH bajista + 2/4 señales. El movimiento está empezando. No entres todavía — espera 3/4 o 4/4."
+        alerta_accion = "SOLO VIGILAR"
+        alerta_col    = "#eab308"
+    else:
+        alerta_nivel  = "ESPERAR"
+        alerta_bg     = "var(--surface)"
+        alerta_borde  = "var(--brd)"
+        alerta_titulo = "⏳ AÚN NO ES MOMENTO PARA SOXS"
+        alerta_texto  = "El sector no muestra señales bajistas suficientes. Mantén tu posición actual si ya tienes SOXS, pero no agregues más todavía."
+        alerta_accion = "ESPERA"
+        alerta_col    = "var(--muted)"
+
+    alerta_soxs_html = f'''
+<div style="background:{alerta_bg};border:2px solid {alerta_borde};border-radius:14px;padding:20px;margin-bottom:20px">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:16px;font-weight:800;color:{alerta_col};margin-bottom:6px">{alerta_titulo}</div>
+      <div style="font-size:12px;color:var(--muted);max-width:500px;line-height:1.6">{alerta_texto}</div>
+    </div>
+    <div style="background:{alerta_borde};color:#fff;font-weight:800;font-size:13px;padding:12px 20px;border-radius:10px;text-align:center;min-width:120px">
+      {alerta_accion}
+    </div>
+  </div>
+  <div style="display:flex;gap:16px;margin-top:12px;font-size:11px;flex-wrap:wrap">
+    <div>SMH: <span style="color:{"#ef4444" if smh_bajista else "#22c55e"};font-weight:700">{"🔴 Bajista" if smh_bajista else "🟢 Alcista"}</span></div>
+    <div>SOXL: <span style="color:{"#ef4444" if soxl_bajista else "#22c55e"};font-weight:700">{"🔴 Bajista" if soxl_bajista else "🟢 Alcista"}</span></div>
+    <div>Señales SOXS: <span style="color:{alerta_col};font-weight:700">{pasos_soxs_entrada}/4</span></div>
+  </div>
+</div>'''
+
     # ── Cards ETFs con 4 pasos ───────────────────────────────
     etf_cards = ""
     for nombre in ["SMH", "SOXL", "SOXS", "SOXX"]:
@@ -10229,6 +10344,12 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
         borde_w = "2px" if r.get("senal","NEUTRAL") != "NEUTRAL" else "1px"
         pb_ok = r.get("pasos_bajista_ok",0)
         pa_ok = r.get("pasos_alcista_ok",0)
+        estado_desc   = r.get("estado_desc", "")
+        estado_color  = r.get("estado_color", "var(--muted)")
+        estado_accion = r.get("estado_accion", "")
+
+        # Borde de la card según Estado Actual (no solo señal de cambio)
+        borde_col = estado_color if r.get("estado","") != "LATERAL" else senal_col
 
         pasos_b = "".join(
             f'<div style="font-size:10px;color:{"#22c55e" if p["ok"] else "var(--muted)"};margin-top:2px">{"✅" if p["ok"] else "❌"} {p["desc"]}</div>'
@@ -10239,8 +10360,8 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
             for p in r.get("pasos_alcista",[])
         )
         etf_cards += f'''
-<div style="background:var(--surface);border:{borde_w} solid {senal_col};border-radius:14px;padding:18px;position:relative;overflow:hidden">
-  <div style="position:absolute;top:0;left:0;right:0;height:3px;background:{senal_col}"></div>
+<div style="background:var(--surface);border:2px solid {borde_col};border-radius:14px;padding:18px;position:relative;overflow:hidden">
+  <div style="position:absolute;top:0;left:0;right:0;height:4px;background:{estado_color}"></div>
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
     <div>
       <div style="font-size:20px;font-weight:800">{nombre}</div>
@@ -10249,17 +10370,25 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
     <div style="text-align:right;font-size:10px;color:var(--muted)">
       <div>EMA9 ${r["e9_mxn"]:,.2f}</div>
       <div>EMA50 ${r["e50_mxn"]:,.2f}</div>
-      <div>Tendencia: {r["tendencia"]}</div>
     </div>
   </div>
-  <div style="background:var(--surface2);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;font-weight:700;color:{senal_col}">{r.get("senal_desc","")}</div>
+
+  <!-- ESTADO ACTUAL — lo más importante -->
+  <div style="background:var(--surface2);border-left:4px solid {estado_color};border-radius:0 8px 8px 0;padding:10px 12px;margin-bottom:10px">
+    <div style="font-size:13px;font-weight:800;color:{estado_color};margin-bottom:3px">{estado_desc}</div>
+    <div style="font-size:11px;color:var(--muted)">{estado_accion}</div>
+  </div>
+
+  <!-- SEÑAL DE CAMBIO (los 4 pasos) -->
+  <div style="background:var(--surface2);border-radius:8px;padding:7px 10px;margin-bottom:10px;font-size:11px;font-weight:600;color:{senal_col}">{r.get("senal_desc","")}</div>
+
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
     <div>
-      <div style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:3px">🔴 BAJISTA ({pb_ok}/4)</div>
+      <div style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:3px">🔴 GIRO BAJISTA ({pb_ok}/4)</div>
       {pasos_b}
     </div>
     <div>
-      <div style="font-size:10px;font-weight:700;color:#22c55e;margin-bottom:3px">🟢 ALCISTA ({pa_ok}/4)</div>
+      <div style="font-size:10px;font-weight:700;color:#22c55e;margin-bottom:3px">🟢 GIRO ALCISTA ({pa_ok}/4)</div>
       {pasos_a}
     </div>
   </div>
@@ -10333,7 +10462,17 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
     notas_html = '''
 <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:16px;font-size:12px;line-height:1.8">
   <div style="font-weight:700;font-size:13px;margin-bottom:12px">📖 Manual del operador de Semis ETF</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:14px">
+    <div style="background:linear-gradient(135deg,#052e16,#14532d);border:1px solid #22c55e;border-radius:10px;padding:14px 16px;margin-bottom:14px">
+      <div style="font-weight:700;color:#22c55e;margin-bottom:8px;font-size:13px">💡 Estrategia del Pullback — cómo entrar a SOXL cuando ya está alcista</div>
+      <div style="font-size:12px;color:#86efac;line-height:1.8">
+        <div>1. SOXL está en tendencia alcista fuerte (🚀) → <strong>NO entres todavía</strong></div>
+        <div>2. Espera que corrija 2-3 días → RSI baja de 77 a zona 45-55</div>
+        <div>3. El precio toca EMA9 o EMA21 y rebota → aparece vela verde fuerte</div>
+        <div>4. Los 4 pasos de GIRO ALCISTA empiezan a activarse</div>
+        <div>5. Cuando llega a 3/4 o 4/4 → <strong>ESE es tu momento de entrar</strong></div>
+        <div style="margin-top:8px;color:#4ade80">✅ Así compras SOXL 10-15% más barato que si entras cuando ya está arriba</div>
+      </div>
+    </div>
     <div>
       <div style="font-weight:600;color:#ef4444;margin-bottom:6px">🔴 Los 4 pasos bajistas → SOXS</div>
       <div style="color:var(--muted)">
@@ -10380,6 +10519,7 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
   </div>
 
   {posicion_html}
+  {alerta_soxs_html}
   {qqq_html}
   {semaforo_html}
 
