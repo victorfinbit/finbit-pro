@@ -6443,7 +6443,7 @@ body{{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:1
 .nb.active{{color:var(--text);border-bottom-color:var(--red);font-weight:500}}
 .nb:hover:not(.active){{color:var(--text)}}
 .wrap{{max-width:1360px;margin:0 auto;padding:24px 20px 48px}}
-.tab{{display:none!important}}.tab.active{{display:block!important}}
+.tab{{display:none}}.tab.active{{display:block}}
 .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}}
 .kpi{{background:var(--surface);border:1px solid var(--brd);border-radius:var(--r2);padding:13px 15px}}
 .kpi .lbl{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}}
@@ -8345,11 +8345,24 @@ const PORT_BASE = {port_json};
 
 // ── Tabs ─────────────────────────────────────────────────
 function showTab(name,btn){{
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>{{
+    t.classList.remove('active');
+    t.style.display='none';
+  }});
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
-  document.getElementById('tab-'+name).classList.add('active');
-  btn.classList.add('active');
+  const tab = document.getElementById('tab-'+name);
+  if(tab){{tab.classList.add('active');tab.style.display='block';}}
+  if(btn)btn.classList.add('active');
 }}
+
+// Inicializar — ocultar todos los tabs excepto el scanner
+document.addEventListener('DOMContentLoaded', function(){{
+  document.querySelectorAll('.tab').forEach(t=>{{
+    if(!t.classList.contains('active')){{
+      t.style.display='none';
+    }}
+  }});
+}});
 function toggle(id){{
   const el=document.getElementById(id); if(!el)return;
   const open=el.classList.contains('open');
