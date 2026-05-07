@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║          FINBIT PRO  v3.2  — build 15/04/2026               ║
-║  python finbit.py → abre dashboard.html                     ║
+║  python finbit.py → abre dashboard.html                    ║
 ╚══════════════════════════════════════════════════════════════╝
 
 INSTALACIÓN (solo la primera vez):
