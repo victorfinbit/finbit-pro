@@ -6680,7 +6680,7 @@ td strong{{font-size:13px;font-weight:500}}
 </div>
 
 <footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
-TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
+TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.3-tabs</footer>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
