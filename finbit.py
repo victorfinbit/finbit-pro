@@ -8345,24 +8345,11 @@ const PORT_BASE = {port_json};
 
 // ── Tabs ─────────────────────────────────────────────────
 function showTab(name,btn){{
-  document.querySelectorAll('.tab').forEach(t=>{{
-    t.classList.remove('active');
-    t.style.display='none';
-  }});
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
-  const tab = document.getElementById('tab-'+name);
-  if(tab){{tab.classList.add('active');tab.style.display='block';}}
+  document.getElementById('tab-'+name).classList.add('active');
   if(btn)btn.classList.add('active');
 }}
-
-// Inicializar — ocultar todos los tabs excepto el scanner
-document.addEventListener('DOMContentLoaded', function(){{
-  document.querySelectorAll('.tab').forEach(t=>{{
-    if(!t.classList.contains('active')){{
-      t.style.display='none';
-    }}
-  }});
-}});
 function toggle(id){{
   const el=document.getElementById(id); if(!el)return;
   const open=el.classList.contains('open');
@@ -9120,12 +9107,6 @@ function actualizarDashboard() {{
     }})
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
-// Ocultar tabs al cargar
-(function(){{
-  document.querySelectorAll('.tab').forEach(function(t){{
-    if(!t.classList.contains('active'))t.style.display='none';
-  }});
-}})();
 </script></body></html>"""
 
 
