@@ -178,29 +178,6 @@ def _loop_backup_github():
             ultimo_dia = dia_actual
             print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
         hora_cdmx = _hora_cdmx()
-        if hora_cdmx == 8 and ultimo_reset_top != dia_actual:
-            try:
-                con = sqlite3.connect(DB_FILE)
-                con.execute("DELETE FROM top_diario_acumulado")
-                con.commit()
-                con.close()
-                ultimo_reset_top = dia_actual
-                print("[top_diario] 🔄 Reset a las 8:00 AM CDMX — Top del Día limpiado")
-            except Exception as e:
-                print(f"[top_diario] ⚠️ Error en reset: {e}")
-        ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
-        es_lunes   = ahora_cdmx.weekday() == 0  # 0 = lunes
-        semana_act = ahora_cdmx.strftime("%G-W%V")
-        if es_lunes and hora_cdmx == 8 and ultima_semana_reset != semana_act:
-            try:
-                con = sqlite3.connect(DB_FILE)
-                con.execute("DELETE FROM top_semanal_acumulado")
-                con.commit()
-                con.close()
-                ultima_semana_reset = semana_act
-                print(f"[top_semanal] 🔄 Reset lunes 8:00 AM CDMX — semana {semana_act} iniciada")
-            except Exception as e:
-                print(f"[top_semanal] ⚠️ Error en reset: {e}")
         time.sleep(3600)  # cada hora
 
 # ── ALERTAS TELEGRAM — monitoreo automático ────────────────
@@ -4052,221 +4029,6 @@ def _semana_actual_cdmx() -> str:
     ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
     return ahora_cdmx.strftime("%G-W%V")
 
-def actualizar_top_semanal_acum(scan_data: list) -> None:
-    """
-    Persiste el mejor score de cada ticker visto esta semana (lunes-viernes).
-    Reset automático cada lunes a las 8:00 AM CDMX.
-    Misma lógica que top diario pero con ventana semanal.
-    """
-    semana = _semana_actual_cdmx()
-    try:
-        con = sqlite3.connect(DB_FILE)
-        con.execute("DELETE FROM top_semanal_acumulado WHERE semana != ?", (semana,))
-        con.commit()
-
-        for r in scan_data:
-            if r.get("rr", 0) < 3.0:
-                continue
-            if es_etf_apalancado(r.get("nombre", "")):
-                continue
-            if no_disponible_gbm(r.get("nombre", "")):
-                continue
-            score = r.get("score_ajustado", r.get("score", 0))
-            total = r.get("total_criterios", 13) or 13
-            if total > 0 and (score / total) < (5 / 13):
-                continue
-            estado = r.get("estado", "")
-            if estado in ("EXIT", "SHORT"):
-                continue
-            rsi = r.get("rsi", 50)
-            if not (30 <= rsi <= 65):
-                continue
-            inicio_r  = r.get("inicio", {}) or {}
-            ganga_r   = r.get("ganga", {}) or {}
-            cap_r     = r.get("capitulacion", {}) or {}
-            es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
-            es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
-            nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
-            es_cap_r    = isinstance(cap_r, dict) and cap_r.get("es_capitulacion", False)
-            es_buy_r = r.get("estado","") in ("BUY","ROCKET")
-            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r or es_buy_r):
-                continue
-
-            ticker = r.get("nombre", "")
-            if not ticker:
-                continue
-            puntuacion = _puntuacion_top(r)
-            datos_json = json.dumps({
-                **r,
-                "_puntuacion": puntuacion,
-                "_es_ganga": es_ganga_r,
-                "_nivel": nivel_r,
-                "_es_cap": es_cap_r,
-            }, ensure_ascii=False)
-
-            cur = con.execute(
-                "SELECT puntuacion FROM top_semanal_acumulado WHERE ticker=? AND semana=?",
-                (ticker, semana)
-            )
-            row = cur.fetchone()
-            if row is None:
-                con.execute(
-                    "INSERT INTO top_semanal_acumulado (ticker, semana, puntuacion, datos_json) VALUES (?,?,?,?)",
-                    (ticker, semana, puntuacion, datos_json)
-                )
-            elif puntuacion > row[0]:
-                con.execute(
-                    "UPDATE top_semanal_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND semana=?",
-                    (puntuacion, datos_json, ticker, semana)
-                )
-        con.commit()
-        con.close()
-    except Exception as e:
-        print(f"[top_semanal] ⚠️ Error al actualizar: {e}")
-
-def obtener_top_semanal_acum(n: int = 5) -> list:
-    """Devuelve el Top N acumulado de la semana desde la DB."""
-    semana = _semana_actual_cdmx()
-    resultado = []
-    try:
-        con = sqlite3.connect(DB_FILE)
-        cur = con.execute(
-            "SELECT datos_json FROM top_semanal_acumulado WHERE semana=? ORDER BY puntuacion DESC LIMIT ?",
-            (semana, n)
-        )
-        for row in cur.fetchall():
-            try:
-                resultado.append(json.loads(row[0]))
-            except Exception:
-                pass
-        con.close()
-    except Exception as e:
-        print(f"[top_semanal] ⚠️ Error al obtener: {e}")
-    return resultado
-
-def actualizar_top_diario(scan_data: list) -> None:
-    """
-    Persiste el mejor score de cada ticker visto hoy.
-    - Limpia registros de días anteriores.
-    - Ignora tickers con R:R < 3.
-    - Si el ticker ya existe hoy, actualiza solo si la puntuación mejoró.
-    - Reset automático: si el día cambió, borra todo antes de insertar.
-    """
-    hoy = _fecha_hoy_cdmx()
-    try:
-        con = sqlite3.connect(DB_FILE)
-        con.execute("DELETE FROM top_diario_acumulado WHERE fecha != ?", (hoy,))
-        con.commit()
-
-        for r in scan_data:
-            if r.get("rr", 0) < 3.0:
-                continue
-            if es_etf_apalancado(r.get("nombre", "")):
-                continue
-            score = r.get("score_ajustado", r.get("score", 0))
-            total = r.get("total_criterios", 11)
-            if total > 0 and (score / total) < (5 / 11):
-                continue
-            estado = r.get("estado", "")
-            if estado in ("EXIT", "SHORT"):
-                continue
-            rsi = r.get("rsi", 50)
-            if not (30 <= rsi <= 65):
-                continue
-            inicio_r  = r.get("inicio", {}) or {}
-            ganga_r   = r.get("ganga", {}) or {}
-            es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
-            es_inicio_r = isinstance(inicio_r, dict) and inicio_r.get("es_inicio", False)
-            nivel_r     = inicio_r.get("nivel", "") if es_inicio_r else ""
-            es_cap_r = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
-            es_buy_r = r.get("estado","") in ("BUY","ROCKET")
-            if not (es_ganga_r or nivel_r in ("pre_breakout", "listo", "acumulacion") or es_cap_r or es_buy_r):
-                continue
-            ticker = r.get("nombre", "")
-            if not ticker:
-                continue
-            puntuacion = _puntuacion_top(r)
-            datos_json = json.dumps({
-                **r,
-                "_puntuacion": puntuacion,
-                "_es_ganga": isinstance(r.get("ganga", {}), dict) and r.get("ganga", {}).get("es_ganga", False),
-                "_nivel": (r.get("inicio", {}) or {}).get("nivel", "") if (r.get("inicio", {}) or {}).get("es_inicio") else "",
-            }, ensure_ascii=False)
-
-            cur = con.execute(
-                "SELECT puntuacion FROM top_diario_acumulado WHERE ticker=? AND fecha=?",
-                (ticker, hoy)
-            )
-            row = cur.fetchone()
-            if row is None:
-                con.execute(
-                    "INSERT INTO top_diario_acumulado (ticker, fecha, puntuacion, datos_json) VALUES (?,?,?,?)",
-                    (ticker, hoy, puntuacion, datos_json)
-                )
-            elif puntuacion > row[0]:
-                con.execute(
-                    "UPDATE top_diario_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND fecha=?",
-                    (puntuacion, datos_json, ticker, hoy)
-                )
-        con.commit()
-        con.close()
-    except Exception as e:
-        print(f"[top_diario] ⚠️ Error al actualizar: {e}")
-
-def obtener_top_diario(n: int = 5) -> list:
-    """Devuelve el Top N acumulado del día desde la DB."""
-    hoy = _fecha_hoy_cdmx()
-    resultado = []
-    try:
-        con = sqlite3.connect(DB_FILE)
-        cur = con.execute(
-            "SELECT datos_json FROM top_diario_acumulado WHERE fecha=? ORDER BY puntuacion DESC LIMIT ?",
-            (hoy, n)
-        )
-        for row in cur.fetchall():
-            try:
-                resultado.append(json.loads(row[0]))
-            except Exception:
-                pass
-        con.close()
-    except Exception as e:
-        print(f"[top_diario] ⚠️ Error al obtener: {e}")
-    return resultado
-
-def render_top_diario_banner(top: list) -> str:
-    """Banner compacto del Top Diario para mostrar arriba del scanner."""
-    if not top:
-        return ""
-    items = []
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    for i, r in enumerate(top[:5]):  # banner muestra solo top 5
-        nombre = r.get("nombre", "")
-        rr     = r.get("rr", 0)
-        badge  = ""
-        if r.get("_es_ganga"):
-            badge = ' <span style="color:#d4a017;font-size:9px">Ganga</span>'
-        elif r.get("_nivel") == "pre_breakout":
-            badge = ' <span style="color:#b45309;font-size:9px">4/5</span>'
-        items.append(
-            f'<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface);'
-            f'border:1px solid var(--brd);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer" '
-            f'onclick="showTab(\'topd\',document.querySelector(\'.nb[onclick*=topd]\'))" title="Ver Top Diario completo">'
-            f'{medals[i]} <strong>{nombre}</strong>{badge}'
-            f' <span style="color:var(--green);font-family:var(--mono)">{rr:.1f}x</span></span>'
-        )
-    hoy = _fecha_hoy_cdmx()
-    return (
-        f'<div style="background:linear-gradient(135deg,#0d1b2a,#1b2838);border:1px solid #00bfff33;'
-        f'border-radius:10px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;'
-        f'flex-wrap:wrap;gap:8px">'
-        f'<span style="color:#00bfff;font-weight:700;font-size:12px;margin-right:4px">📅 TOP DÍA {hoy}</span>'
-        f'{"".join(items)}'
-        f'</div>'
-    )
-
-# ═══════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════
-
 def guardar_entrada_diario(ticker: str, tipo: str, precio_mxn: float, titulos: float,
                             score_entrada: int, total_criterios: int, razon_entrada: str,
                             setup_tipo: str = "", rr_esperado: float = 0,
@@ -4855,452 +4617,6 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
   </div>
   <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
     💡 Para agregar tickers a la Watchlist: búscalos en el scanner y usa el botón "👁 Watchlist". Para quitarlos usa la ✕ en cada card.
-  </div>
-</div>'''
-
-def render_tab_top_diario(top: list, tc: float) -> str:
-    """Renderiza el tab completo de Top Diario Acumulado."""
-    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
-              "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"]
-    razon_labels = {
-        "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
-        "listo":        ("🟢 Listo 5/5", "#15803d"),
-        "acumulacion":  ("🟡 Acumulación 3/5", "#d46b08"),
-    }
-    hoy = _fecha_hoy_cdmx()
-
-    if not top:
-        return f'''<div id="tab-topd" class="tab">
-          <div style="padding:40px;text-align:center;color:var(--muted)">
-            <div style="font-size:48px;margin-bottom:16px">📅</div>
-            <div style="font-size:16px;font-weight:600">Sin candidatas hoy todavía</div>
-            <div style="font-size:13px;margin-top:8px">Corre el scanner para poblar el Top del Día. Se reinicia a las 8:00 AM CDMX.</div>
-          </div>
-        </div>'''
-
-    cards = []
-    for i, r in enumerate(top[:20]):  # max 20
-        nombre    = r.get("nombre", "—")
-        precio    = r.get("precio_mxn", 0)
-        rr        = r.get("rr", 0)
-        score     = r.get("score_ajustado", r.get("score", 0))
-        total_c   = r.get("total_criterios", 11)
-        puntuacion = r.get("_puntuacion", 0)
-        es_ganga  = r.get("_es_ganga", False)
-        nivel     = r.get("_nivel", "")
-        inicio    = r.get("inicio", {}) or {}
-        sizing    = r.get("sizing", {}) or {}
-        ganga_d   = r.get("ganga", {}) or {}
-
-        label_txt, label_col = razon_labels.get(nivel, ("—", "var(--muted)"))
-        if es_ganga:
-            badge_html = f'<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">🏷️ Ganga</span>'
-        elif nivel == "pre_breakout":
-            badge_html = f'<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">⚡ Pre-breakout</span>'
-        else:
-            badge_html = ""
-
-        sl  = (sizing.get("sl_mxn") or
-               inicio.get("sl_mxn") or
-               ganga_d.get("sl_mxn") or
-               r.get("stop_mxn") or
-               r.get("sl_mxn") or 0)
-        obj = (sizing.get("objetivo_mxn") or
-               inicio.get("objetivo_mxn") or
-               ganga_d.get("objetivo_mxn") or
-               r.get("obj_mxn") or
-               r.get("objetivo_mxn") or 0)
-        if not sl and precio and rr >= 3:
-            atr_est = precio * 0.03  # estimado 3% como ATR
-            sl  = round(precio - atr_est, 2)
-            obj = round(precio + atr_est * rr, 2)
-        pct_score = int((score / total_c * 100)) if total_c else 0
-        pct_puntuacion = int(puntuacion * 100)
-
-        cards.append(f'''
-    <div class="top-card" data-precio="{precio:.0f}" style="background:var(--surface);border:1px solid var(--brd);border-radius:14px;padding:20px;position:relative;overflow:hidden">
-      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#00bfff,#0077b6)"></div>
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
-        <div>
-          <div style="font-size:28px;font-weight:800;letter-spacing:-1px;color:var(--text)">{medals[i]} {nombre}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">${precio:,.2f} MXN</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:22px;font-weight:700;color:var(--green)">{rr:.1f}x</div>
-          <div style="font-size:11px;color:var(--muted)">R:R</div>
-        </div>
-      </div>
-      <div style="margin-bottom:10px">{badge_html}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;font-size:12px">
-        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
-          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">SCORE</div>
-          <div style="font-weight:700">{score}/{total_c} <span style="color:var(--muted);font-weight:400">({pct_score}%)</span></div>
-        </div>
-        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
-          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">PUNTUACIÓN</div>
-          <div style="font-weight:700;color:#00bfff">{pct_puntuacion}%</div>
-        </div>
-        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
-          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">STOP LOSS</div>
-          <div style="font-weight:600;color:var(--red)">${sl:,.2f}</div>
-        </div>
-        <div style="background:var(--bg);border-radius:8px;padding:8px 10px">
-          <div style="color:var(--muted);font-size:10px;margin-bottom:2px">OBJETIVO</div>
-          <div style="font-weight:600;color:var(--green)">${obj:,.2f}</div>
-        </div>
-      </div>
-      <div style="font-size:10px;color:var(--muted);text-align:right">Acumulado del día · Reset 8:00 AM CDMX</div>
-    </div>''')
-
-    cards_html = "\n".join(cards)
-    return f'''<div id="tab-topd" class="tab">
-  <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-    <div>
-      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">📅 Top del Día — {hoy}</h2>
-      <p class="hint">Los mejores 5 de <strong>todos</strong> los tickers escaneados hoy · Se actualiza con cada scan · Se reinicia a las 8:00 AM CDMX</p>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:8px 12px">
-      <span style="font-size:11px;color:var(--muted)">💰 Máximo por acción:</span>
-      <span style="font-size:11px;color:var(--muted)">$</span>
-      <input type="number" id="filtro-precio-topd" placeholder="Sin límite"
-        style="width:90px;font-size:12px;padding:4px 8px;border:1px solid var(--brd);border-radius:6px;background:var(--surface2);color:var(--text)"
-        oninput="filtrarTopPorPrecio('topd', this.value)">
-      <button onclick="document.getElementById('filtro-precio-topd').value='';filtrarTopPorPrecio('topd','')"
-        style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer">✕</button>
-    </div>
-  </div>
-    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
-      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top del Día?</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
-        <div>✅ <strong>R:R ≥ 3x</strong> — riesgo/recompensa mínimo</div>
-        <div>✅ <strong>Score ≥ 5/13</strong> — mayoría de criterios confirmados</div>
-        <div>✅ <strong>RSI entre 30-65</strong> — zona de oportunidad real</div>
-        <div>✅ <strong>Setup definido</strong> — Ganga, Pre-breakout 4/5, Listo 5/5 o Acumulación</div>
-        <div>✅ <strong>Sin ETFs apalancados</strong> — excluidos por decay diario</div>
-        <div>✅ <strong>No en EXIT ni SHORT</strong> — solo tickers con potencial alcista</div>
-      </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">Se acumula todo el día — si escaneas 15 tickers y luego 15 más, el Top 5 final es de los 30. El mejor score de cada ticker persiste aunque cambie en scans posteriores.</div>
-    </div>
-  </div>
-  <div class="top-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
-    {cards_html}
-  </div>
-  <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
-    💡 <strong>Recuerda:</strong> El Top del Día acumula los mejores scores de cada scan. Si escaneas 15 tickers y luego otros 15, el Top 5 definitivo vendrá de los 30. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado.
-  </div>
-
-  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:14px;font-size:12px;line-height:1.8">
-    <div style="font-weight:700;font-size:13px;margin-bottom:10px">📖 Estrategia de entrada — léela hasta aprenderla</div>
-
-    <div style="margin-bottom:10px">
-      <span style="color:var(--green);font-weight:700">Señal más fuerte:</span> cuando un ticker aparece en el Top Diario <strong>Y</strong> en el Top Semanal al mismo tiempo. Significa que es bueno hoy y ha sido bueno toda la semana.
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">⏰ ¿Cuándo usar cada Top?</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>• <strong>Lunes-miércoles</strong> — confía más en el Top Diario. La semana apenas empieza y el Semanal tiene pocos datos.</div>
-      <div>• <strong>Jueves-viernes</strong> — el Top Semanal ya tiene 3-4 días acumulados y es más confiable. Si algo sigue ahí al jueves, lleva varios días siendo la mejor oportunidad.</div>
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">✅ Flujo exacto antes de comprar</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>1. Pre-apertura 8-9 AM — revisas ambos tops</div>
-      <div>2. El ticker aparece en los dos → lo abres en el scanner</div>
-      <div>3. Pasa los 10 puntos de verificación → lo agregas a Watchlist</div>
-      <div>4. Esperas que el precio toque el nivel E1 del DCA</div>
-      <div>5. Entras con 1 título — no te aventures con todo de golpe</div>
-      <div>6. Si baja a E2 y el setup sigue válido → agregas otro título</div>
-      <div>7. Si baja a E3 y sigue válido → último título</div>
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">🔟 Los 10 puntos de verificación antes de entrar</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>1. ¿Aparece en Top Diario y Top Semanal?</div>
-      <div>2. Score ≥ 8/13</div>
-      <div>3. R:R ≥ 3x — sin esto no entras, sin excepción</div>
-      <div>4. RSI entre 30-65</div>
-      <div>5. ¿Tiene badge Ganga, Pre-breakout o Capitulación?</div>
-      <div>6. ¿Divergencia RSI alcista?</div>
-      <div>7. ¿Patrón de vela? (martillo, envolvente o estrella de la mañana)</div>
-      <div>8. ¿Distancia al soporte ≤ 3%? (badge verde 🎯)</div>
-      <div>9. ¿Sector alcista?</div>
-      <div>10. Registrar con diario obligatorio — escribe por qué entras antes de ejecutar</div>
-    </div>
-
-    <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--muted)">
-      ⚠️ <strong>La clave es la paciencia</strong> — no entres solo porque aparece en el Top. Espera que el precio llegue a tu nivel E1 del DCA. Si no llega, no pasa nada — habrá otra oportunidad. Más vale perderse una entrada que entrar mal.
-    </div>
-  </div>
-</div>'''
-
-def calcular_top_semanal(scanner: list, n: int = 5) -> list:
-    """Calcula el Top N del scanner usando Score + R:R + badge como fórmula."""
-    candidatas = []
-    for r in scanner:
-        # ── Filtro 1: R:R mínimo ──────────────────────────────────
-        if r.get("rr", 0) < 3.0:
-            continue
-        # ── Filtro 2: Sin ETFs apalancados/inversos ───────────────
-        if es_etf_apalancado(r.get("nombre", "")):
-            continue
-        # ── Filtro 3: Sin tickers no disponibles en GBM/SIC ───────
-        if no_disponible_gbm(r.get("nombre", "")):
-            continue
-        # ── Filtro 3: Score mínimo 5/11 ───────────────────────────
-        score = r.get("score_ajustado", r.get("score", 0))
-        total = r.get("total_criterios", 11)
-        if total > 0 and (score / total) < (5 / 11):
-            continue
-        estado = r.get("estado", "")
-        if estado in ("EXIT", "SHORT"):
-            continue
-        # ── Filtro 5: RSI en zona de oportunidad (30-65) ──────────
-        rsi = r.get("rsi", 50)
-        if not (30 <= rsi <= 65):
-            continue
-        # ── Filtro 6: Debe tener setup de entrada definido ────────
-        inicio   = r.get("inicio", {}) or {}
-        ganga    = r.get("ganga", {}) or {}
-        es_ganga = isinstance(ganga, dict) and ganga.get("es_ganga", False)
-        es_inicio = isinstance(inicio, dict) and inicio.get("es_inicio", False)
-        nivel_str = inicio.get("nivel", "") if es_inicio else ""
-        es_cap    = isinstance(r.get("capitulacion", {}), dict) and r.get("capitulacion", {}).get("es_capitulacion", False)
-        es_buy = r.get("estado","") in ("BUY","ROCKET")
-        tiene_setup = es_ganga or nivel_str in ("pre_breakout", "listo", "acumulacion") or es_cap or es_buy
-        if not tiene_setup:
-            continue
-        puntuacion = _puntuacion_top(r)
-        candidatas.append({**r, "_puntuacion": puntuacion, "_es_ganga": es_ganga, "_nivel": nivel_str})
-
-    candidatas.sort(key=lambda x: x["_puntuacion"], reverse=True)
-    return candidatas[:n]
-
-def render_top_semanal_banner(top: list) -> str:
-    """Banner compacto del Top 5 para mostrar arriba del scanner."""
-    if not top:
-        return ""
-    items = []
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    for i, r in enumerate(top[:5]):  # banner solo muestra top 5
-        nombre = r.get("nombre", "")
-        rr     = r.get("rr", 0)
-        badge  = ""
-        if r.get("_es_ganga"):
-            badge = ' <span style="color:#d4a017;font-size:9px">Ganga</span>'
-        elif r.get("_nivel") == "pre_breakout":
-            badge = ' <span style="color:#b45309;font-size:9px">4/5</span>'
-        items.append(
-            f'<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface);'
-            f'border:1px solid var(--brd);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer" '
-            f'onclick="showTab(\'top\',document.querySelector(\'.nb[onclick*=top]\'))" title="Ver Top Semanal completo">'
-            f'{medals[i]} <strong>{nombre}</strong>{badge}'
-            f' <span style="color:var(--green);font-family:var(--mono)">{rr:.1f}x</span></span>'
-        )
-    return (
-        f'<div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border:1px solid #ffd70033;'
-        f'border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;'
-        f'flex-wrap:wrap;gap:8px">'
-        f'<span style="color:#ffd700;font-weight:700;font-size:12px;margin-right:4px">🏆 TOP SEMANA</span>'
-        f'{"".join(items)}'
-        f'</div>'
-    )
-
-def render_tab_top_semanal(top: list, tc: float) -> str:
-    """Renderiza el tab completo de Top Semanal."""
-    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","11","12","13","14","15","16","17","18","19","20"]
-    razon_labels = {
-        "pre_breakout": ("🟠 Pre-breakout 4/5", "#b45309"),
-        "listo":        ("🟢 Listo 5/5", "#15803d"),
-        "acumulacion":  ("🟡 Acumulación 3/5", "#d46b08"),
-    }
-
-    if not top:
-        return '''<div id="tab-top" class="tab">
-          <div style="padding:40px;text-align:center;color:var(--muted)">
-            <div style="font-size:48px;margin-bottom:16px">🏆</div>
-            <div style="font-size:16px;font-weight:600">Sin candidatas esta semana</div>
-            <div style="font-size:13px;margin-top:8px">Ninguna acción cumple R:R ≥ 3x. Espera mejores setups.</div>
-          </div>
-        </div>'''
-
-    cards = []
-    for i, r in enumerate(top[:20]):  # max 20
-        nombre  = r.get("nombre", "")
-        precio  = r.get("precio_mxn", 0)
-        rr      = r.get("rr", 0)
-        rsi     = r.get("rsi", 0)
-        score   = r.get("score_ajustado", r.get("score", 0))
-        total   = r.get("total_criterios", 11)
-        fuente  = r.get("objetivo_fuente", "ATR")
-        punt    = r.get("_puntuacion", 0)
-        es_ganga = r.get("_es_ganga", False)
-        nivel   = r.get("_nivel", "")
-        sizing  = r.get("sizing", {}) or {}
-        inicio  = r.get("inicio", {}) or {}
-        ganga_d = r.get("ganga", {}) or {}
-
-        stop = (r.get("stop_mxn") or
-                sizing.get("sl_mxn") or
-                inicio.get("sl_mxn") or
-                ganga_d.get("sl_mxn") or 0)
-        obj  = (r.get("obj_mxn") or
-                sizing.get("objetivo_mxn") or
-                inicio.get("objetivo_mxn") or
-                ganga_d.get("objetivo_mxn") or 0)
-        ema200 = r.get("ema200_mxn", 0)
-        if not stop and precio and rr >= 3:
-            atr_est = precio * 0.03
-            stop = round(precio - atr_est, 2)
-            obj  = round(precio + atr_est * rr, 2)
-
-        if es_ganga:
-            badge_html = '<span style="background:#fef3c7;color:#d4a017;border:1px solid #fcd34d;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">🟡 Ganga +15%</span>'
-            razon_txt  = "Precio castigado con soporte confirmado — zona ideal de acumulación"
-        elif nivel in razon_labels:
-            label, color = razon_labels[nivel]
-            badge_html = f'<span style="background:#fff7ed;color:{color};border:1px solid {color}44;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">{label}</span>'
-            razon_txt  = "Señales de momentum alineadas — movimiento inminente"
-        else:
-            badge_html = '<span style="background:var(--surface);color:var(--muted);border:1px solid var(--brd);border-radius:4px;padding:2px 8px;font-size:10px">Setup técnico sólido</span>'
-            razon_txt  = "Score y R:R por encima del promedio del scanner"
-
-        medal_colors = ["#ffd700", "#c0c0c0", "#cd7f32"] + ["var(--text)"] * 17
-        mc = medal_colors[i] if i < len(medal_colors) else "var(--text)"
-
-        cards.append(f'''
-        <div class="top-card" data-precio="{precio:.0f}" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:20px;position:relative;overflow:hidden">
-          <!-- Número de puesto -->
-          <div style="position:absolute;top:16px;right:16px;font-size:28px;opacity:0.15">{medals[i]}</div>
-          <!-- Header -->
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-            <div style="font-size:22px;font-weight:800;color:{mc};min-width:32px">{medals[i]}</div>
-            <div>
-              <div style="font-size:20px;font-weight:700;letter-spacing:-.5px">{nombre}</div>
-              <div style="font-size:11px;color:var(--muted);margin-top:2px">{razon_txt}</div>
-            </div>
-            <div style="margin-left:auto">{badge_html}</div>
-          </div>
-          <!-- Métricas -->
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
-            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">PRECIO</div>
-              <div style="font-family:var(--mono);font-weight:700;font-size:14px">{fmt(precio)}</div>
-            </div>
-            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">R:R</div>
-              <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:var(--green)">{rr:.1f}x <span style="font-size:9px;color:var(--muted)">({fuente})</span></div>
-            </div>
-            <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--muted);margin-bottom:4px">SCORE</div>
-              <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:{'var(--green)' if score>=7 else 'var(--yellow)' if score>=5 else 'var(--red)'}">{score}/{total}</div>
-            </div>
-          </div>
-          <!-- Niveles clave -->
-          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:11px">
-            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
-              <span style="color:var(--muted)">Stop dinámico</span>
-              <span style="font-family:var(--mono);color:#ef4444">{fmt(stop) if stop else "—"}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
-              <span style="color:var(--muted)">Objetivo</span>
-              <span style="font-family:var(--mono);color:var(--green)">{fmt(obj) if obj else "—"}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
-              <span style="color:var(--muted)">RSI</span>
-              <span style="font-family:var(--mono);color:{'var(--red)' if rsi>70 else 'var(--green)' if rsi<40 else 'var(--text)'}">{rsi:.0f}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:6px">
-              <span style="color:var(--muted)">R EMA200</span>
-              <span style="font-family:var(--mono);color:#ff7875">{fmt(ema200) if ema200 else "—"}</span>
-            </div>
-          </div>
-          <!-- Puntuación interna -->
-          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--brd);display:flex;align-items:center;gap:8px">
-            <span style="font-size:10px;color:var(--muted)">Puntuación Finbit</span>
-            <div style="flex:1;height:4px;background:var(--brd);border-radius:2px">
-              <div style="width:{punt*100:.0f}%;height:4px;background:linear-gradient(90deg,#22c55e,#ffd700);border-radius:2px"></div>
-            </div>
-            <span style="font-size:10px;font-family:var(--mono);color:var(--muted)">{punt*100:.0f}%</span>
-          </div>
-        </div>''')
-
-    cards_html = "\n".join(cards)
-    return f'''<div id="tab-top" class="tab">
-  <div style="padding:20px 0 10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-    <div>
-      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🏆 Top Semanal</h2>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:8px 12px">
-      <span style="font-size:11px;color:var(--muted)">💰 Máximo por acción:</span>
-      <span style="font-size:11px;color:var(--muted)">$</span>
-      <input type="number" id="filtro-precio-top" placeholder="Sin límite"
-        style="width:90px;font-size:12px;padding:4px 8px;border:1px solid var(--brd);border-radius:6px;background:var(--surface2);color:var(--text)"
-        oninput="filtrarTopPorPrecio('top', this.value)">
-      <button onclick="document.getElementById('filtro-precio-top').value='';filtrarTopPorPrecio('top','')"
-        style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer">✕</button>
-    </div>
-  </div>
-<p class="hint">Los mejores de <strong>todos</strong> los tickers escaneados esta semana · Se acumula de lunes a viernes · Reset cada lunes 8:00 AM CDMX</p>
-    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12px">
-      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📋 ¿Cómo entra un ticker al Top Semanal?</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;color:var(--muted)">
-        <div>✅ <strong>R:R ≥ 3x</strong> — riesgo/recompensa mínimo</div>
-        <div>✅ <strong>Score ≥ 5/13</strong> — mayoría de criterios confirmados</div>
-        <div>✅ <strong>RSI entre 30-65</strong> — zona de oportunidad, ni sobrevendido extremo ni sobrecomprado</div>
-        <div>✅ <strong>Setup definido</strong> — Ganga, Pre-breakout 4/5, Listo 5/5 o Acumulación</div>
-        <div>✅ <strong>Sin ETFs apalancados</strong> — SOXS, SOXL, TQQQ etc. excluidos por decay</div>
-        <div>✅ <strong>No en EXIT ni SHORT</strong> — ticker técnicamente deteriorado queda fuera</div>
-      </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">El ranking usa: 40% score técnico + 40% R:R normalizado + 20% badge. Se acumula toda la semana — si el lunes escaneas 10 tickers y el miércoles otros 10, el Top 5 es de los 20. Reset cada lunes 8:00 AM CDMX.</div>
-    </div>
-  </div>
-  <div class="top-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
-    {cards_html}
-  </div>
-  <div style="margin-top:20px;padding:14px 16px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;font-size:11px;color:var(--muted)">
-    💡 <strong>Recuerda:</strong> El Top Semanal acumula toda la semana. Si algo sigue aquí el jueves, lleva días siendo la mejor oportunidad. Siempre verifica R:R ≥ 3x, stop loss definido y que el sistema no esté Bloqueado antes de operar.
-  </div>
-
-  <div style="background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:16px 18px;margin-top:14px;font-size:12px;line-height:1.8">
-    <div style="font-weight:700;font-size:13px;margin-bottom:10px">📖 Estrategia de entrada — léela hasta aprenderla</div>
-
-    <div style="margin-bottom:10px">
-      <span style="color:var(--green);font-weight:700">Señal más fuerte:</span> cuando un ticker aparece en el Top Semanal <strong>Y</strong> en el Top Diario al mismo tiempo. Significa que es bueno hoy y ha sido bueno toda la semana.
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">⏰ ¿Cuándo usar cada Top?</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>• <strong>Lunes-miércoles</strong> — confía más en el Top Diario. La semana apenas empieza y el Semanal tiene pocos datos.</div>
-      <div>• <strong>Jueves-viernes</strong> — el Top Semanal ya tiene 3-4 días acumulados y es más confiable. Si algo sigue aquí al jueves, lleva varios días siendo la mejor oportunidad.</div>
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">✅ Flujo exacto antes de comprar</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>1. Pre-apertura 8-9 AM — revisas ambos tops</div>
-      <div>2. El ticker aparece en los dos → lo abres en el scanner</div>
-      <div>3. Pasa los 10 puntos de verificación → lo agregas a Watchlist</div>
-      <div>4. Esperas que el precio toque el nivel E1 del DCA</div>
-      <div>5. Entras con 1 título — no te aventures con todo de golpe</div>
-      <div>6. Si baja a E2 y el setup sigue válido → agregas otro título</div>
-      <div>7. Si baja a E3 y sigue válido → último título</div>
-    </div>
-
-    <div style="font-weight:600;margin-bottom:6px">🔟 Los 10 puntos de verificación antes de entrar</div>
-    <div style="color:var(--muted);margin-bottom:10px">
-      <div>1. ¿Aparece en Top Diario y Top Semanal?</div>
-      <div>2. Score ≥ 8/13</div>
-      <div>3. R:R ≥ 3x — sin esto no entras, sin excepción</div>
-      <div>4. RSI entre 30-65</div>
-      <div>5. ¿Tiene badge Ganga, Pre-breakout o Capitulación?</div>
-      <div>6. ¿Divergencia RSI alcista?</div>
-      <div>7. ¿Patrón de vela? (martillo, envolvente o estrella de la mañana)</div>
-      <div>8. ¿Distancia al soporte ≤ 3%? (badge verde 🎯)</div>
-      <div>9. ¿Sector alcista?</div>
-      <div>10. Registrar con diario obligatorio — escribe por qué entras antes de ejecutar</div>
-    </div>
-
-    <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--muted)">
-      ⚠️ <strong>La clave es la paciencia</strong> — no entres solo porque aparece en el Top. Espera que el precio llegue a tu nivel E1 del DCA. Si no llega, no pasa nada — habrá otra oportunidad. Más vale perderse una entrada que entrar mal.
   </div>
 </div>'''
 
@@ -5932,6 +5248,259 @@ def render_que_hago_hoy(scan_data: list, port_data: list) -> str:
         '</div>'
     )
 
+# ═══════════════════════════════════════════════════════════
+#   TOP DIARIO Y SEMANAL — v2 con ordenamiento correcto
+# ═══════════════════════════════════════════════════════════
+
+def _calcular_puntuacion_top(r: dict) -> tuple:
+    """Devuelve (prioridad, puntuacion) para ordenar.
+    Prioridad: 0=ROCKET/5/5, 1=BUY, 2=Ganga, 3=Pre-breakout 4/5, 4=resto
+    """
+    estado  = r.get("estado", "")
+    score   = r.get("score_ajustado", r.get("score", 0))
+    total_c = r.get("total_criterios", 9)
+    rr      = r.get("rr", 0)
+    es_ganga = r.get("ganga", {}).get("es_ganga", False) if r.get("ganga") else False
+    nivel    = r.get("inicio", {}).get("nivel", "") if r.get("inicio") else ""
+    es_pre   = nivel == "pre_breakout"
+
+    if estado in ("ROCKET", "Explosión") or score >= total_c:
+        prioridad = 0
+    elif estado in ("BUY", "Compra") and not es_ganga and not es_pre:
+        prioridad = 1
+    elif es_ganga:
+        prioridad = 2
+    elif es_pre:
+        prioridad = 3
+    else:
+        prioridad = 4
+
+    puntuacion = (score / total_c * 0.5) + (min(rr, 10) / 10 * 0.5)
+    return (prioridad, -puntuacion)
+
+
+def actualizar_top_diario(scan_data: list) -> None:
+    """Guarda el top del día en DB."""
+    hoy = _fecha_hoy_cdmx()
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.execute("DELETE FROM top_diario_acumulado WHERE fecha != ?", (hoy,))
+        for r in scan_data:
+            if r.get("rr", 0) < RR_MINIMO:
+                continue
+            prioridad, neg_punt = _calcular_puntuacion_top(r)
+            puntuacion = -neg_punt
+            ticker = r["nombre"]
+            existing = con.execute(
+                "SELECT puntuacion FROM top_diario_acumulado WHERE ticker=? AND fecha=?",
+                (ticker, hoy)
+            ).fetchone()
+            datos = json.dumps(r, ensure_ascii=False, default=str)
+            if existing is None:
+                con.execute(
+                    "INSERT INTO top_diario_acumulado (ticker, fecha, puntuacion, datos_json) VALUES (?,?,?,?)",
+                    (ticker, hoy, puntuacion, datos)
+                )
+            elif puntuacion > existing[0]:
+                con.execute(
+                    "UPDATE top_diario_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND fecha=?",
+                    (puntuacion, datos, ticker, hoy)
+                )
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[top_diario] ⚠️ Error: {e}")
+
+
+def obtener_top_diario(n: int = 20) -> list:
+    hoy = _fecha_hoy_cdmx()
+    resultado = []
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.execute(
+            "SELECT datos_json FROM top_diario_acumulado WHERE fecha=? ORDER BY puntuacion DESC LIMIT ?",
+            (hoy, n)
+        )
+        for row in cur.fetchall():
+            try: resultado.append(json.loads(row[0]))
+            except: pass
+        con.close()
+    except Exception as e:
+        print(f"[top_diario] ⚠️ Error: {e}")
+    return sorted(resultado, key=_calcular_puntuacion_top)
+
+
+def actualizar_top_semanal_acum(scan_data: list) -> None:
+    """Guarda el top semanal en DB."""
+    semana = _semana_actual_cdmx() if callable(globals().get("_semana_actual_cdmx")) else datetime.utcnow().strftime("%G-W%V")
+    try:
+        con = sqlite3.connect(DB_FILE)
+        for r in scan_data:
+            if r.get("rr", 0) < RR_MINIMO:
+                continue
+            prioridad, neg_punt = _calcular_puntuacion_top(r)
+            puntuacion = -neg_punt
+            ticker = r["nombre"]
+            existing = con.execute(
+                "SELECT puntuacion FROM top_semanal_acumulado WHERE ticker=? AND semana=?",
+                (ticker, semana)
+            ).fetchone()
+            datos = json.dumps(r, ensure_ascii=False, default=str)
+            if existing is None:
+                con.execute(
+                    "INSERT INTO top_semanal_acumulado (ticker, semana, puntuacion, datos_json) VALUES (?,?,?,?)",
+                    (ticker, semana, puntuacion, datos)
+                )
+            elif puntuacion > existing[0]:
+                con.execute(
+                    "UPDATE top_semanal_acumulado SET puntuacion=?, datos_json=? WHERE ticker=? AND semana=?",
+                    (puntuacion, datos, ticker, semana)
+                )
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[top_semanal] ⚠️ Error: {e}")
+
+
+def obtener_top_semanal_acum(n: int = 20) -> list:
+    semana = _semana_actual_cdmx() if callable(globals().get("_semana_actual_cdmx")) else datetime.utcnow().strftime("%G-W%V")
+    resultado = []
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.execute(
+            "SELECT datos_json FROM top_semanal_acumulado WHERE semana=? ORDER BY puntuacion DESC LIMIT ?",
+            (semana, n)
+        )
+        for row in cur.fetchall():
+            try: resultado.append(json.loads(row[0]))
+            except: pass
+        con.close()
+    except Exception as e:
+        print(f"[top_semanal] ⚠️ Error: {e}")
+    return sorted(resultado, key=_calcular_puntuacion_top)
+
+
+def _render_top_cards(items: list, tab_id: str, titulo: str, subtitulo: str) -> str:
+    """Renderiza las tarjetas del top con secciones por categoría."""
+    if not items:
+        return f'''<div id="{tab_id}" class="tab" style="display:none">
+  <div style="padding:40px;text-align:center;color:var(--muted)">
+    <div style="font-size:48px;margin-bottom:16px">📊</div>
+    <div style="font-size:16px;font-weight:600">Sin candidatas todavía</div>
+    <div style="font-size:13px;margin-top:8px">Corre el scanner para poblar el Top. Necesitas R:R ≥ {RR_MINIMO}x.</div>
+  </div>
+</div>'''
+
+    # Agrupar por prioridad
+    grupos = {0: [], 1: [], 2: [], 3: [], 4: []}
+    for r in items:
+        p, _ = _calcular_puntuacion_top(r)
+        grupos[p].append(r)
+
+    etiquetas = {
+        0: ("🚀 ROCKET / Máximo Score", "#7c3aed", "#f5f3ff"),
+        1: ("↑ BUY — Entrada válida", "#16a34a", "#f0fdf4"),
+        2: ("🏷️ Gangas — Precio castigado", "#d97706", "#fffbeb"),
+        3: ("⚡ Pre-breakout 4/5", "#b45309", "#fef3c7"),
+        4: ("📋 Otros candidatos", "#6b7280", "#f9fafb"),
+    }
+
+    secciones_html = ""
+    medal_counter = 0
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
+              "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"]
+
+    for prioridad in range(5):
+        grupo = grupos[prioridad]
+        if not grupo:
+            continue
+        label, color, bg = etiquetas[prioridad]
+        cards_html = ""
+        for r in grupo:
+            if medal_counter >= len(medals):
+                break
+            medal = medals[medal_counter]
+            medal_counter += 1
+            nombre  = r.get("nombre", "—")
+            precio  = r.get("precio_mxn", 0)
+            rr      = r.get("rr", 0)
+            score   = r.get("score_ajustado", r.get("score", 0))
+            total_c = r.get("total_criterios", 9)
+            estado  = r.get("estado", "—")
+            sl      = r.get("stop_mxn") or r.get("sizing", {}).get("sl_mxn") or 0
+            obj     = r.get("obj_mxn") or r.get("sizing", {}).get("objetivo_mxn") or 0
+            entrada = r.get("entrada_mxn") or precio
+            rsi     = r.get("rsi", 0)
+
+            cards_html += f'''
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:18px;position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:{color}"></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:24px;font-weight:800;letter-spacing:-1px">{medal} {nombre}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${precio:,.2f} MXN · RSI {rsi:.0f}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:700;color:var(--green)">{rr:.1f}x</div>
+          <div style="font-size:10px;color:var(--muted)">R:R</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;margin-bottom:10px">
+        <div style="background:var(--bg);border-radius:6px;padding:7px 9px">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">SCORE</div>
+          <div style="font-weight:700">{score}/{total_c}</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:7px 9px">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">STOP</div>
+          <div style="font-weight:600;color:var(--red)">${sl:,.2f}</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:7px 9px">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">OBJETIVO</div>
+          <div style="font-weight:600;color:var(--green)">${obj:,.2f}</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted)">Entrada EMA9: <strong style="color:var(--green)">${entrada:,.2f}</strong> · Estado: {estado}</div>
+    </div>'''
+
+        secciones_html += f'''
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:{bg};border-radius:8px;border-left:3px solid {color}">
+      <span style="font-weight:700;font-size:13px;color:{color}">{label}</span>
+      <span style="font-size:11px;color:var(--muted)">{len(grupo)} acciones</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+      {cards_html}
+    </div>
+  </div>'''
+
+    return f'''<div id="{tab_id}" class="tab" style="display:none">
+  <div style="padding:20px 0 14px">
+    <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">{titulo}</h2>
+    <p class="hint">{subtitulo}</p>
+  </div>
+  {secciones_html}
+</div>'''
+
+
+def render_tab_top_semanal(top: list, tc: float) -> str:
+    hoy = _fecha_hoy_cdmx()
+    return _render_top_cards(
+        top,
+        tab_id="tab-top",
+        titulo="🏆 Top Semanal",
+        subtitulo=f"Mejores candidatas de la semana · Ordenadas por prioridad · {len(top)} acciones · {hoy}"
+    )
+
+
+def render_tab_top_diario(top: list, tc: float) -> str:
+    hoy = _fecha_hoy_cdmx()
+    return _render_top_cards(
+        top,
+        tab_id="tab-topd",
+        titulo="📅 Top Diario",
+        subtitulo=f"Mejores candidatas de hoy · Ordenadas por prioridad · {len(top)} acciones · {hoy}"
+    )
+
 def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct, rr_min,
                  vix: float = 20.0, spy: dict | None = None, regimen: dict | None = None):
     if spy     is None: spy     = {"sobre_ema200": True}
@@ -5985,17 +5554,16 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     radar_rows = render_radar_rows(radar_data, tc)
     hist_rows  = render_hist_rows(ops)
 
-    # ── TOP SEMANAL ACUMULADO ────────────────────────────────
-    actualizar_top_semanal_acum(scan_data)
-    top_semanal     = obtener_top_semanal_acum(n=20)
-    top_banner_html = render_top_semanal_banner(top_semanal)
-    top_tab_html    = render_tab_top_semanal(top_semanal, tc)
 
-    # ── TOP DIARIO ACUMULADO ─────────────────────────────────
+
+    # ── TOP SEMANAL Y DIARIO ────────────────────────────────
+    actualizar_top_semanal_acum(scan_data)
+    top_semanal         = obtener_top_semanal_acum(n=20)
+    top_tab_html        = render_tab_top_semanal(top_semanal, tc)
+
     actualizar_top_diario(scan_data)
-    top_diario      = obtener_top_diario(n=20)
-    top_diario_banner_html = render_top_diario_banner(top_diario)
-    top_diario_tab_html    = render_tab_top_diario(top_diario, tc)
+    top_diario          = obtener_top_diario(n=20)
+    top_diario_tab_html = render_tab_top_diario(top_diario, tc)
 
     # ── SEMIS ETF ────────────────────────────────────────────
     semis_data     = analizar_todos_semis(tc)
@@ -6587,6 +6155,8 @@ td strong{{font-size:13px;font-weight:500}}
     </table></div>
   </div>
 </div>
+
+
 
 {top_tab_html}
 
