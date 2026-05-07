@@ -2727,11 +2727,10 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         atr_val       = 0.0
         trailing_stop = float(c.rolling(min(5,n)).min().iloc[-1]) * 0.97
 
-    # Stop: usar mínimo de 10 días * 0.98 — más ajustado que trailing
-    stop_min10 = float(c.rolling(min(10, n)).min().iloc[-1]) * 0.98
-    stop = max(trailing_stop, stop_min10)
-    # Cap: stop no puede estar más de 8% abajo del precio
-    stop = max(stop, precio * 0.92)
+    # Stop: trailing stop con cap entre 5% y 12% del precio
+    stop = max(trailing_stop, float(c.rolling(min(10, n)).min().iloc[-1]) * 0.97)
+    stop = max(stop, precio * 0.88)   # máximo 12% abajo
+    stop = min(stop, precio * 0.95)   # mínimo 5% abajo
     riesgo_acc = precio - stop
 
     # ── OBJETIVO REALISTA POR ATR + EMA50/EMA200 ─────────────────────────
