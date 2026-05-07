@@ -20,17 +20,12 @@ from collections import defaultdict
 from flask import Flask, Response, request as flask_req, jsonify
 
 # ═══════════════════════════════════════════════════════════
-#   ⚙️  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════
-# API keys: se leen de variables de entorno si existen (recomendado en Render)
-# Si no existen, usa el valor hardcodeado (para desarrollo local)
 API_KEY     = os.environ.get("TWELVEDATA_API_KEY",  "2431ce60befa48bebfdaa7fcf3c864e4")
 API_KEY_2   = os.environ.get("TWELVEDATA_API_KEY_2","3c4971fd74eb4363bcbf877edb1616b4")
 API_KEY_3   = os.environ.get("TWELVEDATA_API_KEY_3","0ce51f56198e4184841be0c52565b847")
 API_KEY_4   = os.environ.get("TWELVEDATA_API_KEY_4","cca9055d9d654e479dd68b14a2bacd34")
 
-# Keys en cascada: KEY4 primero (fresca hoy), luego las demás
-# Cada key tiene 800 calls/día. Total: 3,200 calls/día.
 _TD_KEYS    = [k for k in [API_KEY_4, API_KEY_3, API_KEY, API_KEY_2] if k not in ("","TU_KEY_AQUI")]
 
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
@@ -62,7 +57,6 @@ GITHUB_BRANCH_DB = "db-backup"  # rama separada para DB — Render no la monitor
 
 PORTAFOLIO_INICIAL = [
    
-  
 ]
 
 # ── Exchanges vacíos "" = auto-detect TwelveData (más estable) ──
@@ -72,8 +66,6 @@ SCANNER_TICKERS = {
     "PYPL":("PYPL",""),
 }
 
-# Tickers del módulo Semis ETF — se pre-cachean con el build normal
-# Así el tab Semis no gasta créditos extra al abrirse
 _SEMIS_CACHE_TICKERS = {
     "SMH":  ("SMH",  ""),
     "SOXX": ("SOXX", ""),
@@ -87,13 +79,8 @@ _SEMIS_CACHE_TICKERS = {
     "INTC": ("INTC", ""),
 }
 
-# SerpApi eliminado completamente — todos los tickers usan TwelveData dual-key
-
-
-# Universo para el radar (mismo que scanner — el usuario agrega los que necesite)
 _UNIVERSO_EXTRA = {}
 UNIVERSO = {**SCANNER_TICKERS, **_UNIVERSO_EXTRA}
-
 
 # ── BASE DE DATOS ─────────────────────────────────────────
 # ── SYNC DB ↔ GITHUB ─────────────────────────────────────
@@ -108,7 +95,6 @@ def db_restore_from_github():
         return
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
-        # Intentar primero desde rama db-backup, luego main como fallback
         r = requests.get(url + f"?ref={GITHUB_BRANCH_DB}", headers=_gh_headers(), timeout=15)
         if r.status_code == 404:
             print("[github] DB no encontrada en db-backup — intentando main...")
@@ -137,7 +123,6 @@ def db_backup_to_github():
         return
     if not os.path.exists(DB_FILE):
         return
-    # Si ya hay un backup en curso, no lanzar otro
     if not _backup_lock.acquire(blocking=False):
         print("[github] ⏭️  Backup ya en curso — omitiendo")
         return
@@ -149,7 +134,6 @@ def db_backup_to_github():
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
 
         for intento in range(2):  # máximo 2 intentos si hay conflicto de SHA
-            # Obtener SHA fresco en cada intento — buscar en rama db-backup
             sha = None
             r = requests.get(url + f"?ref={GITHUB_BRANCH_DB}", headers=_gh_headers(), timeout=10)
             if r.status_code == 200:
@@ -187,14 +171,12 @@ def _loop_backup_github():
     ultima_semana_reset = ""   # semana del último reset semanal
     while True:
         db_backup_to_github()
-        # Resetear keys agotadas a medianoche (nuevo día = nuevos créditos)
         dia_actual = datetime.now().day
         if dia_actual != ultimo_dia:
             global _KEYS_AGOTADAS
             _KEYS_AGOTADAS = set()
             ultimo_dia = dia_actual
             print("[keys] ✅ Nuevo día — créditos de TwelveData renovados, keys reseteadas")
-        # Reset del Top Diario a las 8:00 AM CDMX (una vez por día)
         hora_cdmx = _hora_cdmx()
         if hora_cdmx == 8 and ultimo_reset_top != dia_actual:
             try:
@@ -206,7 +188,6 @@ def _loop_backup_github():
                 print("[top_diario] 🔄 Reset a las 8:00 AM CDMX — Top del Día limpiado")
             except Exception as e:
                 print(f"[top_diario] ⚠️ Error en reset: {e}")
-        # Reset del Top Semanal los LUNES a las 8:00 AM CDMX
         ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
         es_lunes   = ahora_cdmx.weekday() == 0  # 0 = lunes
         semana_act = ahora_cdmx.strftime("%G-W%V")
@@ -222,7 +203,6 @@ def _loop_backup_github():
                 print(f"[top_semanal] ⚠️ Error en reset: {e}")
         time.sleep(3600)  # cada hora
 
-
 # ── ALERTAS TELEGRAM — monitoreo automático ────────────────
 _alertas_enviadas: dict = {}  # {ticker: {"ganga": timestamp, "pre4": timestamp, "pre5": timestamp}}
 
@@ -231,7 +211,6 @@ def _en_horario_mercado() -> bool:
     Usa UTC-4 (EDT activo abril-noviembre)."""
     ahora_utc = datetime.utcnow()
     minutos_utc = ahora_utc.hour * 60 + ahora_utc.minute
-    # EDT = UTC-4: apertura 9:30 ET = 13:30 UTC, cierre 16:00 ET = 20:00 UTC
     apertura_utc = 13 * 60 + 30
     cierre_utc   = 20 * 60
     dia = ahora_utc.weekday()  # 0=lunes, 6=domingo
@@ -317,7 +296,6 @@ def _loop_alertas_telegram():
 
             print("[alertas] 🔄 Iniciando análisis autónomo...")
 
-            # Obtener TC y parámetros básicos
             try:
                 tc = obtener_tipo_cambio()
             except Exception:
@@ -327,7 +305,6 @@ def _loop_alertas_telegram():
             riesgo_pct = RIESGO_POR_TRADE
             rr_min     = RR_MINIMO
 
-            # Obtener VIX via Yahoo Finance (TwelveData no soporta VIX)
             vix = 20.0
             spy = {}
             try:
@@ -335,10 +312,8 @@ def _loop_alertas_telegram():
             except Exception:
                 pass
 
-            # Correr scanner autónomamente
             try:
                 resultados = correr_scanner(tc, capital, riesgo_pct, rr_min, vix=vix, spy=spy)
-                # Actualizar _scan_resultados para que el dashboard también los use
                 _scan_resultados = resultados or []
                 print(f"[alertas] ✅ Scanner autónomo: {len(_scan_resultados)} tickers analizados")
             except Exception as e:
@@ -346,7 +321,6 @@ def _loop_alertas_telegram():
                 time.sleep(1800)
                 continue
 
-            # Revisar alertas de ENTRADA
             alertas = 0
             port_tickers = {p["ticker"].upper() for p in get_portafolio()}
 
@@ -366,7 +340,6 @@ def _loop_alertas_telegram():
 
                 # ── ALERTAS DE ENTRADA ──────────────────────────────────
                 if rr >= rr_min:
-                    # Alerta Ganga
                     es_ganga = isinstance(ganga_d, dict) and ganga_d.get("es_ganga", False)
                     if es_ganga and _puede_enviar_alerta(nombre, "ganga", 120):
                         msg = _formatear_alerta_ganga(r)
@@ -374,7 +347,6 @@ def _loop_alertas_telegram():
                             print(f"[alertas] ✅ Ganga enviada — {nombre}")
                             alertas += 1
 
-                    # Alerta Pre-breakout 4/5 o Listo 5/5
                     es_inicio = isinstance(inicio_d, dict) and inicio_d.get("es_inicio", False)
                     nivel_str = inicio_d.get("nivel", "") if es_inicio else ""
                     if nivel_str in ("pre_breakout", "listo") and _puede_enviar_alerta(nombre, "pre4", 120):
@@ -388,7 +360,6 @@ def _loop_alertas_telegram():
                 if not en_cartera:
                     continue
 
-                # 1. Score Drop severo — aviso temprano
                 try:
                     sd = analizar_score_drop(nombre, score)
                     if sd["severidad"] in ("alert", "critical") and _puede_enviar_alerta(nombre, "score_drop", 240):
@@ -408,7 +379,6 @@ def _loop_alertas_telegram():
                 except Exception:
                     pass
 
-                # 2. EXIT YA en posición tuya
                 señal_d = r.get("señal", {})
                 es_exit = r.get("nivel_señal", "") == "exit" or (isinstance(señal_d, dict) and señal_d.get("nivel") == "exit")
                 if es_exit and _puede_enviar_alerta(nombre, "exit_ya", 120):
@@ -425,7 +395,6 @@ def _loop_alertas_telegram():
                         print(f"[alertas] ✅ EXIT YA enviada — {nombre}")
                         alertas += 1
 
-                # 3. Stop Loss tocado
                 if stop > 0 and precio > 0 and precio <= stop * 1.005 and _puede_enviar_alerta(nombre, "stop", 60):
                     msg = (f"🚨 <b>STOP TOCADO — {nombre}</b>\n"
                            f"━━━━━━━━━━━━━━━\n"
@@ -438,7 +407,6 @@ def _loop_alertas_telegram():
                         print(f"[alertas] ✅ Stop tocado enviada — {nombre}")
                         alertas += 1
 
-                # 4. RSI sobrecomprado en posición tuya
                 if rsi >= 72 and _puede_enviar_alerta(nombre, "rsi_alto", 240):
                     msg = (f"📈 <b>RSI SOBRECOMPRADO — {nombre}</b>\n"
                            f"━━━━━━━━━━━━━━━\n"
@@ -452,7 +420,6 @@ def _loop_alertas_telegram():
                         print(f"[alertas] ✅ RSI alto enviada — {nombre}")
                         alertas += 1
 
-                # 5. Precio llegó a objetivo EMA200
                 if ema200 > 0 and precio >= ema200 * 0.995 and _puede_enviar_alerta(nombre, "objetivo", 480):
                     msg = (f"🎯 <b>OBJETIVO EMA200 — {nombre}</b>\n"
                            f"━━━━━━━━━━━━━━━\n"
@@ -480,7 +447,6 @@ def _loop_alertas_telegram():
                     hora_txt   = datetime.now().strftime("%H:%M")
 
                     if etf_nom == "SOXS":
-                        # SOXS sube cuando semis caen → bajista de semis = bueno para SOXS
                         if pb_ok == 4 and _puede_enviar_alerta("SOXS", "entrada_4", 240):
                             msg = (f"🚨 <b>ENTRA A SOXS AHORA</b>\n"
                                    f"━━━━━━━━━━━━━━━\n"
@@ -529,7 +495,6 @@ def _loop_alertas_telegram():
                                 print("[alertas] ✅ SOXS SAL AHORA enviada")
 
                     elif etf_nom == "SOXL":
-                        # SOXL sube cuando semis suben → alcista de semis = bueno para SOXL
                         if pa_ok == 4 and _puede_enviar_alerta("SOXL", "entrada_4", 240):
                             msg = (f"🚀 <b>ENTRA A SOXL AHORA</b>\n"
                                    f"━━━━━━━━━━━━━━━\n"
@@ -587,7 +552,6 @@ def _loop_alertas_telegram():
             print(f"[alertas] ❌ Error general: {e}")
             traceback.print_exc()
             time.sleep(600)
-
 
 def init_db():
     con = sqlite3.connect(DB_FILE)
@@ -668,7 +632,6 @@ def init_db():
     );
     """)
     con.commit()
-    # Migración segura: agregar columnas nuevas si no existen (DB de versiones anteriores)
     migrations = [
         "ALTER TABLE tickers ADD COLUMN origen TEXT DEFAULT 'USA'",
         "ALTER TABLE portafolio ADD COLUMN mercado TEXT DEFAULT 'SIC'",
@@ -706,7 +669,6 @@ def get_portafolio():
 
     return [dict(r) for r in rows]
 
-
 def get_tickers_db() -> dict:
     """Retorna tickers registrados por el usuario para el scanner/buscador."""
     con = sqlite3.connect(DB_FILE)
@@ -724,7 +686,6 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
     Guarda también el exchange en la DB para SerpApi.
     """
     ticker = ticker.upper().strip()
-    # Validar: solo letras y puntos (TLEVISA.CPO), longitud razonable
     import re as _re
     if not ticker or not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
         print(f"  ⚠️  Ticker inválido: '{ticker}'")
@@ -738,7 +699,6 @@ def add_ticker_db(ticker: str, exchange: str = "", origen: str = "USA"):
     except Exception as e:
         print(f"  Error agregando ticker: {e}")
     con.close()
-
 
 def get_all_scanner_tickers() -> dict:
     """
@@ -757,12 +717,10 @@ def get_all_scanner_tickers() -> dict:
     db_map = {r["ticker"]: (r["activo"], r["exchange"] or "") for r in rows}
 
     combinados = {}
-    # Hardcoded — solo si no están eliminados en DB
     for t, val in SCANNER_TICKERS.items():
         estado = db_map.get(t)
         if estado is None or estado[0] == 1:
             combinados[t] = val
-    # Custom de DB con activo=1
     for t, (activo, exchange) in db_map.items():
         if activo == 1:
             combinados[t] = (t, exchange)
@@ -775,7 +733,6 @@ def remove_ticker_db(ticker: str):
     Hace INSERT OR REPLACE con activo=0 para que la DB prevalezca sobre el código.
     """
     t = ticker.upper()
-    # Buscar el exchange del ticker hardcoded si existe
     exchange = ""
     for src in (SCANNER_TICKERS, UNIVERSO):
         if t in src:
@@ -820,21 +777,17 @@ def upsert_portafolio_from_op(op: dict):
             cur.execute("UPDATE portafolio SET titulos=? WHERE ticker=?", (round(rest,6), op["ticker"]))
     con.commit(); con.close()
 
-
 # ── TIPO DE CAMBIO ────────────────────────────────────────
 def get_tipo_cambio(key: str) -> float:
-    # Fuente 1: Frankfurter (gratis, sin créditos)
     try:
         r = requests.get("https://api.frankfurter.app/latest?from=USD&to=MXN", timeout=4)
         return float(r.json()["rates"]["MXN"])
     except Exception: pass
-    # Fuente 2: Banxico (gratis, sin créditos)
     try:
         url = "https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno"
         r = requests.get(url, headers={"Bmx-Token":"adec2b6a30609a9e4f696c3b44f32d16b8a6ab3b0e83da2e18b0c2e24f892abc"}, timeout=4)
         return float(r.json()["bmx"]["series"][0]["datos"][0]["dato"].replace(",",""))
     except Exception: pass
-    # Fuente 3: TwelveData (solo si las anteriores fallan)
     if key and key not in ("TU_KEY_AQUI", ""):
         try:
             r = requests.get("https://api.twelvedata.com/exchange_rate",
@@ -842,10 +795,8 @@ def get_tipo_cambio(key: str) -> float:
             d = r.json()
             if "rate" in d: return float(d["rate"])
         except Exception: pass
-    # Fallback fijo — nunca bloquear el build por el TC
     print("[TC] ⚠️ Todas las fuentes fallaron — usando TC fijo 17.50")
     return 17.50
-
 
 # ── TELEGRAM ──────────────────────────────────────────────
 def tg_send(msg: str) -> bool:
@@ -856,13 +807,10 @@ def tg_send(msg: str) -> bool:
         return r.status_code == 200
     except Exception: return False
 
-
 # ── API DE DATOS — DUAL KEY ────────────────────────────────
 API_BASE = "https://api.twelvedata.com"
 
-# Índice global del pool de keys (alterna entre KEY_1 y KEY_2)
 _KEY_IDX: int = 0
-# Set de keys agotadas en esta corrida (se resetea en cada build)
 _KEYS_AGOTADAS: set = set()
 
 def _es_error_creditos(d: dict) -> bool:
@@ -877,16 +825,13 @@ def _next_key() -> str:
     global _KEY_IDX
     if not _TD_KEYS:
         return ""
-    # Intentar cada key hasta encontrar una no agotada
     for _ in range(len(_TD_KEYS)):
         key = _TD_KEYS[_KEY_IDX % len(_TD_KEYS)]
         _KEY_IDX += 1
         if key not in _KEYS_AGOTADAS:
             return key
-    # Todas agotadas — NO resetear, devolver vacío para que falle limpiamente
     print("  ⚠️  Todas las API keys agotadas por hoy — espera a mañana o agrega más keys")
     return ""
-
 
 def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "", key: str = "") -> list | None:
@@ -898,9 +843,7 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     global _KEYS_AGOTADAS
     out = min(outputsize, 5000)
 
-    # Intentar con hasta N keys disponibles
     keys_a_probar = [key] if key else [_next_key()]
-    # Si hay más keys en el pool, agregarlas como fallback
     if not key and len(_TD_KEYS) > 1:
         for k in _TD_KEYS:
             if k not in keys_a_probar:
@@ -940,7 +883,6 @@ def api_timeseries(symbol: str, interval: str, outputsize: int = 200,
     print(f"    ❌ TD ({symbol}): todas las keys fallaron o agotadas")
     return None
 
-
 def api_timeseries_batch(symbols: list, interval: str,
                           outputsize: int = 100, key: str = "") -> dict:
     """
@@ -953,7 +895,6 @@ def api_timeseries_batch(symbols: list, interval: str,
     out = min(outputsize, 5000)
     sym_str = ",".join(s.upper() for s in symbols)
 
-    # Keys a probar en orden
     keys_a_probar = [key] if key else [_next_key()]
     if len(_TD_KEYS) > 1:
         for k in _TD_KEYS:
@@ -1001,10 +942,8 @@ def api_timeseries_batch(symbols: list, interval: str,
 
     return {}
 
-
 def ohlcv_to_close(v): return [float(x["close"]) for x in v]
 def ohlcv_to_volume(v): return [float(x.get("volume",0)) for x in v]
-
 
 def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
                    exchange: str = "") -> list | None:
@@ -1022,8 +961,6 @@ def get_timeseries(symbol: str, interval: str, outputsize: int = 200,
             return result
     print(f"    Sin datos para {symbol} {interval} — continúa con otros")
     return None
-
-
 
 # ── INDICADORES TÉCNICOS ──────────────────────────────────
 def ema(s: pd.Series, n: int) -> pd.Series:
@@ -1059,7 +996,6 @@ def obv(closes: list, volumes: list) -> dict:
         else:
             obv_vals.append(obv_vals[-1])
 
-    # Tendencia OBV: comparar última ventana de 10 velas
     ventana = 10
     obv_reciente = obv_vals[-ventana:]
     precio_reciente = c[-ventana:]
@@ -1067,7 +1003,6 @@ def obv(closes: list, volumes: list) -> dict:
     obv_sube   = obv_reciente[-1] > obv_reciente[0]
     precio_sube= precio_reciente[-1] > precio_reciente[0]
 
-    # Divergencia: precio y OBV van en direcciones opuestas
     div_bajista = precio_sube and not obv_sube   # precio sube, OBV baja → venta institucional
     div_alcista = not precio_sube and obv_sube   # precio baja, OBV sube → acumulación
 
@@ -1094,21 +1029,13 @@ def obv(closes: list, volumes: list) -> dict:
         "ok":          not div_bajista,   # False si hay divergencia bajista = señal de alerta
     }
 
-
 # ── SECTORES ETF — contexto macro por sector ──────────────
-# Para cada ticker del scanner, se verifica si su sector ETF está alcista.
-# Fuente: TwelveData (ya tenemos la key). Se cachea igual que cualquier otro ticker.
 _SECTOR_MAP = {
-    # Semiconductores
     "NVDA":"SMH","SOXL":"SMH","AMD":"SMH",
-    # Tech/QQQ
     "AAPL":"QQQ","META":"QQQ","GOOGL":"QQQ","MSFT":"QQQ","AMZN":"QQQ",
     "TQQQ":"QQQ","NFLX":"QQQ","PYPL":"QQQ",
-    # Financieros
     "PLTR":"XLF",
-    # Consumo discrecional
     "TSLA":"XLY","ABNB":"XLY","UBER":"XLY","NKE":"XLY","DIS":"XLY",
-    # Broad market
     "SPXL":"SPY","UPRO":"SPY","TQQQ":"QQQ",
 }
 
@@ -1143,7 +1070,6 @@ def get_sector_estado(ticker: str) -> dict:
                     f"EMA50 ({pct:+.1f}%) — sector {'alcista' if sobre else 'BAJISTA'}"),
     }
 
-
 def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
                       stop_mxn: float, objetivo_mxn: float,
                       titulos: float) -> dict:
@@ -1162,10 +1088,8 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
     riesgo_orig  = precio_entrada_mxn - stop_mxn if stop_mxn else 0
     objetivo_pct = (objetivo_mxn - precio_entrada_mxn) / precio_entrada_mxn * 100 if objetivo_mxn else 0
 
-    # Breakeven: stop se mueve a entrada + comision GBM (~0.3%)
     breakeven = precio_entrada_mxn * 1.003
 
-    # Niveles de la estrategia escalonada
     nivel1_precio = precio_entrada_mxn * 1.09   # +9% — punto medio de 8-10%
     nivel2_precio = precio_entrada_mxn * 1.15   # +15%
     nivel3_precio = objetivo_mxn or (precio_entrada_mxn * 1.25)  # EMA200 u objetivo
@@ -1174,10 +1098,8 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
     tit_vender_n2 = max(1, round(titulos * 0.25))
     tit_vender_n3 = max(1, round(titulos * 0.25))
 
-    # Trailing stop: 3% debajo del precio actual (protege ganancia en Nivel 4)
     trailing_stop = precio_actual_mxn * 0.97
 
-    # Determinar en qué nivel estamos
     if ganancia_pct < -8:
         nivel_actual = "stop"
         estado_op    = "🔴 Stop loss — SALIR YA"
@@ -1259,7 +1181,6 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
         "parciales_50":   round(nivel1_precio, 2),  # compatibilidad legacy
     }
 
-
 def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
                  capital_total: float, es_etf_3x: bool = False) -> dict:
     """
@@ -1277,7 +1198,6 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
     mult        = 1.5 if es_etf_3x else 1.0
     cap_escalon = round(capital_total / 3, 2)
 
-    # Soportes ya en MXN — filtrar los que están bajo el precio actual
     soportes_validos = [
         z for z in soportes_mxn
         if z.get("fuerza", 0) >= 2 and z.get("precio_mxn", 0) < precio_actual_mxn
@@ -1299,7 +1219,6 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
         e3_precio = precio_actual_mxn * (0.79 if es_etf_3x else 0.85)
         metodo = "porcentual"
 
-    # Asegurar que los escalones tengan precios positivos y descendentes
     e1_precio = max(e1_precio, precio_actual_mxn * 0.01)
     e2_precio = max(e2_precio, precio_actual_mxn * 0.01)
     e3_precio = max(e3_precio, precio_actual_mxn * 0.01)
@@ -1335,7 +1254,6 @@ def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
         "activo":        True,
     }
 
-
 # ── MODO GANGA (señal adicional de precio) ───────────────
 def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float) -> dict:
     """
@@ -1354,14 +1272,11 @@ def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float
     if objetivo_mxn <= precio_mxn:
         return {"es_ganga": False}
 
-    # Criterio 1: margen al objetivo >= 15% — ambos en MXN
     margen_pct = (objetivo_mxn - precio_mxn) / precio_mxn * 100
     c1 = margen_pct >= 15.0
 
-    # Criterio 2: RSI en zona deprimida/neutral
     c2 = 30 <= rsi <= 55
 
-    # Criterio 3: soporte con >= 2 toques debajo del precio (en USD, precio de la vela)
     precio_usd = tf_1d.get("precio", 0)
     soportes = [z for z in sr.get("soportes", [])
                 if z.get("fuerza", 0) >= 2 and z.get("precio", precio_usd + 1) < precio_usd]
@@ -1378,7 +1293,6 @@ def detectar_ganga(tf_1d: dict, sr: dict, objetivo_mxn: float, precio_mxn: float
         "objetivo_mxn": round(objetivo_mxn, 2),
         "precio_mxn":  round(precio_mxn, 2),
     }
-
 
 def detectar_inicio_movimiento(tf_1d: dict) -> dict:
     """
@@ -1409,19 +1323,14 @@ def detectar_inicio_movimiento(tf_1d: dict) -> dict:
     if not precio:
         return {"es_inicio": False}
 
-    # C1: RSI saliendo de zona débil (25-50 Y subiendo)
     c1 = 25 <= rsi <= 50 and rsi > rsi_ant
 
-    # C2: MACD histograma girando al alza (puede ser negativo)
     c2 = mh_v > mh_ant
 
-    # C3: Precio sobre soporte — no rompió el piso
     c3 = precio > soporte if soporte else False
 
-    # C4: Volumen despertando (>= 0.7x — umbral bajo para detectar temprano)
     c4 = vol_rel >= 0.7 if vol_rel > 0 else False
 
-    # C5: Estructura HH/HL — mínimos más altos (acumulación confirmada)
     estructura = struct.get("estructura", "") if isinstance(struct, dict) else ""
     c5 = estructura == "alcista" or struct.get("hl", False) if isinstance(struct, dict) else False
 
@@ -1431,7 +1340,6 @@ def detectar_inicio_movimiento(tf_1d: dict) -> dict:
     if n_cumplidas < 3:
         return {"es_inicio": False}
 
-    # Nivel de señal
     if n_cumplidas >= 5:
         nivel = "listo"
     elif n_cumplidas >= 4:
@@ -1446,7 +1354,6 @@ def detectar_inicio_movimiento(tf_1d: dict) -> dict:
         "rsi":          round(rsi, 1),
         "c1": c1, "c2": c2, "c3": c3, "c4": c4, "c5": c5,
     }
-
 
 def badge_inicio_movimiento(inicio: dict) -> str:
     """Badge con 3 niveles de acumulación."""
@@ -1464,7 +1371,6 @@ def badge_inicio_movimiento(inicio: dict) -> str:
             f'font-size:9px;font-weight:700;white-space:nowrap;'
             f'background:{bg};color:{color};border:2px solid {brd};margin-left:4px">'
             f'{label}</span>')
-
 
 def render_inicio_movimiento_panel(inicio: dict) -> str:
     """Panel en el detail — explica por qué detectó inicio de movimiento."""
@@ -1510,7 +1416,6 @@ def render_inicio_movimiento_panel(inicio: dict) -> str:
             f'{titulo}</div>'
             f'<div style="font-size:11px;color:{col};opacity:.85;margin-bottom:10px">{msg}</div>'
             f'{filas_html}</div>')
-
 
 def detectar_capitulacion(tf_1d: dict, values_raw: list) -> dict:
     """
@@ -1560,7 +1465,6 @@ def detectar_capitulacion(tf_1d: dict, values_raw: list) -> dict:
     if rsi_sobreventa:
         criterios.append(f"📉 RSI {rsi:.0f} — sobreventa, presión vendedora casi agotada")
 
-    # Contar criterios principales (vol + patron + div_rsi)
     principales = sum([vol_cap or vol_mod, tiene_patron, tiene_div_rsi])
 
     if principales == 3 and vol_cap:
@@ -1590,7 +1494,6 @@ def detectar_capitulacion(tf_1d: dict, values_raw: list) -> dict:
         "rsi_sobreventa":  rsi_sobreventa,
     }
 
-
 def badge_capitulacion(cap: dict) -> str:
     """Badge compacto para la tabla del scanner."""
     if not cap or not cap.get("es_capitulacion"):
@@ -1611,7 +1514,6 @@ def badge_capitulacion(cap: dict) -> str:
                 'font-size:9px;font-weight:700;white-space:nowrap;'
                 'background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;margin-left:4px">'
                 '👁 Cap. moderada</span>')
-
 
 def render_capitulacion_panel(cap: dict) -> str:
     """Panel detallado en el detail del scanner."""
@@ -1636,7 +1538,6 @@ def render_capitulacion_panel(cap: dict) -> str:
             f'Confirma con el precio del día siguiente antes de entrar.</div>'
             f'</div>')
 
-
 def badge_ganga(ganga: dict) -> str:
     """Badge compacto para la tabla — solo aparece si es_ganga=True."""
     if not ganga or not ganga.get("es_ganga"):
@@ -1646,7 +1547,6 @@ def badge_ganga(ganga: dict) -> str:
             f'font-size:9px;font-weight:700;white-space:nowrap;'
             f'background:#f0fdf4;color:#14532d;border:2px solid #86efac;margin-left:4px">'
             f'🏷️ Ganga +{margen:.0f}%</span>')
-
 
 def render_ganga_panel(ganga: dict) -> str:
     """Panel en el detail — explica por qué es ganga y cómo acumular."""
@@ -1682,7 +1582,6 @@ def render_ganga_panel(ganga: dict) -> str:
             f'Stop obligatorio bajo el piso ({sop_txt.replace("<strong>","").replace("</strong>","")}).'
             f'</div></div>')
 
-
 def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
     """
     Panel visual del plan DCA — claro, accionable, sin tecnicismos.
@@ -1709,7 +1608,6 @@ def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
          f'· Método: {metodo}</div>'
          f'{aviso_etf}')
 
-    # Precio actual como referencia
     h += (f'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;'
           f'border-bottom:2px solid var(--text);margin-bottom:4px">'
           f'<span style="width:22px;font-size:11px">◆</span>'
@@ -1741,8 +1639,6 @@ def render_dca_panel(dca: dict, precio_actual_mxn: float) -> str:
 
     return h
 
-
-
 def adx(highs: list, lows: list, closes: list, n: int = 14) -> float:
     """Average Directional Index — mide fuerza de tendencia. >25 = tendencia real."""
     if len(closes) < n+5: return 0.0
@@ -1758,9 +1654,7 @@ def adx(highs: list, lows: list, closes: list, n: int = 14) -> float:
     dx   = (100 * (pdi-ndi).abs() / (pdi+ndi).replace(0, 1e-9))
     return float(dx.ewm(span=n, adjust=False).mean().iloc[-1])
 
-
 # ── FILTROS MACRO ──────────────────────────────────────────
-# Cache de macro para no repetir calls en la misma corrida
 _MACRO_CACHE: dict = {}
 
 def get_vix() -> float:
@@ -1769,7 +1663,6 @@ def get_vix() -> float:
     if "vix" in _MACRO_CACHE:
         return _MACRO_CACHE["vix"]
     try:
-        # Yahoo Finance sí soporta ^VIX sin API key
         r = requests.get(
             "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX",
             params={"interval": "1d", "range": "5d"},
@@ -1778,7 +1671,6 @@ def get_vix() -> float:
         )
         data = r.json()
         closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        # Filtrar Nones y tomar el último valor válido
         closes = [c for c in closes if c is not None]
         if closes:
             v = round(float(closes[-1]), 2)
@@ -1827,7 +1719,6 @@ def regimen_mercado(vix: float, spy: dict) -> dict:
         return {"color":"amarillo","label":"🟡 Mercado precavido","penalizacion":1,
                 "mensaje":"Cautela: solo entrar con score ≥7/8 y tendencia muy clara."}
 
-
 # ── ETFs APALANCADOS ───────────────────────────────────────
 _ETFS_APALANCADOS = {
     "SOXL","TQQQ","SPXL","UPRO","LABU","TECL","FNGU",
@@ -1835,8 +1726,6 @@ _ETFS_APALANCADOS = {
     "WEBL","DFEN","WANT","PILL","CURE","MIDU",
 }
 
-# Tickers que TwelveData reconoce pero NO están disponibles en GBM/SIC
-# Si encuentras más, avísame y los agrego aquí
 _NO_DISPONIBLE_GBM = {
     "FUJIY",  # No disponible en GBM/SIC
 }
@@ -1853,7 +1742,6 @@ def score_minimo_entrada(ticker: str, vix: float) -> int:
     if es_etf_apalancado(ticker):
         return 9 if vix > 20 else 8   # ETF 3x: exige casi perfección (69%+)
     return 7 if vix > 20 else 6       # Acción normal: 6/13 en calma (46%), 7/13 con miedo
-
 
 # ── HISTORIAL DE SCORES (BD) ──────────────────────────────
 def init_score_history():
@@ -1884,7 +1772,6 @@ def guardar_score(ticker: str, score: int, senal: str, vix: float,
     ahora  = datetime.now(tz_mx).strftime("%Y-%m-%d %H:%M")
     hace30 = (datetime.now(tz_mx) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
     con    = sqlite3.connect(DB_FILE)
-    # Solo actualizar si hay una entrada de los últimos 30 minutos (misma corrida)
     existe = con.execute(
         "SELECT id FROM score_history WHERE ticker=? AND fecha >= ?",
         (ticker.upper(), hace30)
@@ -1895,7 +1782,6 @@ def guardar_score(ticker: str, score: int, senal: str, vix: float,
             (ahora, score, senal, round(vix,2), round(precio,4), estado, existe[0])
         )
     else:
-        # Nueva entrada — acumula histórico
         con.execute(
             "INSERT INTO score_history (ticker,fecha,score,senal,vix,precio,estado) VALUES(?,?,?,?,?,?,?)",
             (ticker.upper(), ahora, score, senal, round(vix,2), round(precio,4), estado)
@@ -1913,7 +1799,6 @@ def get_score_previo(ticker: str) -> dict | None:
     if len(rows) >= 2:
         return dict(rows[1])   # penúltimo = sesión anterior
     return None
-
 
 def analizar_score_drop(ticker: str, score_actual: int) -> dict:
     """
@@ -1973,15 +1858,7 @@ def analizar_score_drop(ticker: str, score_actual: int) -> dict:
         "hist_scores":   hist[:5],
     }
 
-
-
 # ══════════════════════════════════════════════════════════
-#   MÓDULO DE ZONAS DE SOPORTE / RESISTENCIA
-#   Detecta automáticamente zonas clave usando:
-#     · Pivotes de precio (máximos/mínimos locales)
-#     · Clustering de zonas cercanas (tolerancia 1.5%)
-#     · Clasificación por fuerza (toques × volumen)
-#     · Relación precio actual → SOPORTE / RESISTENCIA / EN ZONA
 # ══════════════════════════════════════════════════════════
 
 def detectar_pivotes(highs: list, lows: list, closes: list,
@@ -2009,7 +1886,6 @@ def detectar_pivotes(highs: list, lows: list, closes: list,
             bajos.append({"precio": lows[i],  "idx": i, "vol": vol_zona})
 
     return {"altos": altos, "bajos": bajos}
-
 
 def agrupar_zonas(pivotes: list, precio_ref: float,
                   tolerancia_pct: float = 0.015) -> list:
@@ -2048,7 +1924,6 @@ def agrupar_zonas(pivotes: list, precio_ref: float,
 
     return sorted(resultado, key=lambda x: abs(x["distancia_pct"]))
 
-
 def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) -> dict:
     """
     Detecta los 3 patrones de velas más confiables en soporte:
@@ -2061,11 +1936,8 @@ def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) 
 
     o, h, l, c = opens, highs, lows, closes
 
-    # Última vela
     o1, h1, l1, c1 = float(o[-1]), float(h[-1]), float(l[-1]), float(c[-1])
-    # Penúltima vela
     o2, h2, l2, c2 = float(o[-2]), float(h[-2]), float(l[-2]), float(c[-2])
-    # Antepenúltima vela
     o3, h3, l3, c3 = float(o[-3]), float(h[-3]), float(l[-3]), float(c[-3])
 
     cuerpo1 = abs(c1 - o1)
@@ -2077,7 +1949,6 @@ def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) 
     rango2  = h2 - l2
 
     # ── Martillo ────────────────────────────────────────────────────────
-    # Mecha inferior >= 2x el cuerpo, cuerpo pequeño, mecha superior mínima
     es_martillo = (
         rango1 > 0 and
         cuerpo1 > 0 and
@@ -2087,7 +1958,6 @@ def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) 
     )
 
     # ── Envolvente alcista ───────────────────────────────────────────────
-    # Vela anterior bajista, vela actual alcista y envuelve completamente
     vela2_bajista = c2 < o2
     vela1_alcista = c1 > o1
     es_envolvente = (
@@ -2098,7 +1968,6 @@ def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) 
     )
 
     # ── Estrella de la mañana ────────────────────────────────────────────
-    # 1) Vela bajista fuerte, 2) Doji o vela pequeña, 3) Vela alcista fuerte
     vela3_bajista = c3 < o3 and abs(c3 - o3) > rango2 * 0.5 if rango2 > 0 else False
     vela2_pequena = cuerpo2 <= (h2 - l2) * 0.3 if (h2 - l2) > 0 else False
     vela1_alcista_fuerte = c1 > o1 and cuerpo1 >= abs(c3 - o3) * 0.5
@@ -2112,7 +1981,6 @@ def detectar_patrones_velas(opens: list, highs: list, lows: list, closes: list) 
         return {"patron": "martillo", "desc": "🔨 Martillo — rechazo de mínimos, presión compradora", "ok": True}
 
     return {"patron": None, "desc": "", "ok": False}
-
 
 def detectar_divergencia_rsi(closes: list, rsi_series: list, ventana: int = 14) -> dict:
     """
@@ -2136,12 +2004,10 @@ def detectar_divergencia_rsi(closes: list, rsi_series: list, ventana: int = 14) 
     rsi_max_reciente    = max(rs[-ventana//2:])
     rsi_max_anterior    = max(rs[:ventana//2])
 
-    # Divergencia alcista: precio baja más pero RSI no confirma
     div_alcista = (
         precio_min_reciente < precio_min_anterior * 0.99 and
         rsi_min_reciente > rsi_min_anterior + 2
     )
-    # Divergencia bajista: precio sube más pero RSI no confirma
     div_bajista = (
         precio_max_reciente > precio_max_anterior * 1.01 and
         rsi_max_reciente < rsi_max_anterior - 2
@@ -2157,7 +2023,6 @@ def detectar_divergencia_rsi(closes: list, rsi_series: list, ventana: int = 14) 
                 "alcista": False, "bajista": True}
 
     return {"divergencia": False, "tipo": "", "desc": "", "alcista": False, "bajista": False}
-
 
 def calcular_zonas_sr(highs: list, lows: list, closes: list,
                        volumes: list, tc: float = 1.0,
@@ -2185,15 +2050,12 @@ def calcular_zonas_sr(highs: list, lows: list, closes: list,
     zonas_a = agrupar_zonas(pivotes["altos"], precio)
     zonas_b = agrupar_zonas(pivotes["bajos"],  precio)
 
-    # Clasificar: soportes = zonas BAJO el precio, resistencias = zonas SOBRE
     soportes     = [z for z in zonas_b if z["distancia_pct"] <= 0]
     resistencias = [z for z in zonas_a if z["distancia_pct"] >= 0]
 
-    # Ordenar: soportes de más cercano a más lejano (menos negativo primero)
     soportes     = sorted(soportes,     key=lambda x: -x["distancia_pct"])
     resistencias = sorted(resistencias, key=lambda x:  x["distancia_pct"])
 
-    # Zona actual: ¿está el precio dentro de ±1% de una zona clave?
     en_zona, zona_actual = False, ""
     todas = zonas_a + zonas_b
     for z in todas:
@@ -2207,7 +2069,6 @@ def calcular_zonas_sr(highs: list, lows: list, closes: list,
     objetivo_sr = resistencias[0]["precio"] * mult if resistencias else None
     stop_sr     = soportes[0]["precio"]     * mult if soportes     else None
 
-    # Contexto narrativo
     n_sop  = len(soportes)
     n_res  = len(resistencias)
     if en_zona:
@@ -2233,7 +2094,6 @@ def calcular_zonas_sr(highs: list, lows: list, closes: list,
         "mult":         mult,
     }
 
-
 def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
     """
     Renderiza el panel de zonas S/R para insertar en el detail-panel
@@ -2248,16 +2108,13 @@ def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
     en_zona    = sr.get("en_zona", False)
     contexto   = sr.get("contexto", "")
 
-    # Cabecera de contexto
     ctx_color = "#0958d9" if en_zona else "var(--muted)"
     ctx_bg    = "#e6f4ff" if en_zona else "var(--surface2)"
     h = (f'<div style="background:{ctx_bg};border-radius:5px;padding:7px 10px;'
          f'margin-bottom:8px;font-size:11px;color:{ctx_color}">{contexto}</div>')
 
-    # Tabla unificada: resistencias arriba, precio en el medio, soportes abajo
     h += '<div style="font-size:11px">'
 
-    # Resistencias (de más lejana a más cercana = orden descendente de precio)
     for z in reversed(resistencias[:4]):
         p_mxn  = z["precio"] * mult
         dist   = z["distancia_pct"]
@@ -2275,7 +2132,6 @@ def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
               f'<div style="width:{bar_w}%;height:100%;background:var(--red);border-radius:2px"></div></div>'
               f'<span style="font-size:9px;color:var(--muted)">{fuerza}×</span></div>')
 
-    # Precio actual
     h += (f'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;'
           f'border-bottom:1px solid var(--brd);border-top:2px solid var(--text)">'
           f'<span style="width:20px;font-size:10px;color:var(--text)">◆</span>'
@@ -2283,7 +2139,6 @@ def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
           f'${precio_actual_mxn:,.2f} <span style="font-size:10px;font-weight:400;color:var(--muted)">precio actual</span></span>'
           f'</div>')
 
-    # Soportes (de más cercano a más lejano = orden descendente de precio)
     for z in soportes[:4]:
         p_mxn  = z["precio"] * mult
         dist   = z["distancia_pct"]
@@ -2305,7 +2160,6 @@ def render_zonas_sr(sr: dict, precio_actual_mxn: float, tc: float) -> str:
     h += '<p style="font-size:9px;color:var(--hint);margin-top:5px">R=resistencia · S=soporte · ×=toques históricos</p>'
     return h
 
-
 def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -> str:
     """
     Renderiza el mini-historial de scores de las últimas 6 sesiones.
@@ -2326,7 +2180,6 @@ def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -
              "estado": r["estado"], "precio": r["precio"]} for r in rows]
     hist_scores = [h["score"] for h in hist]
 
-    # Tendencia
     if len(hist_scores) >= 2:
         delta = hist_scores[0] - hist_scores[1]
         if delta > 0:   tend_icon, tend_col, tend_txt = "↑", "var(--green)", f"+{delta} pts"
@@ -2335,7 +2188,6 @@ def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -
     else:
         tend_icon, tend_col, tend_txt = "—", "var(--muted)", "primera sesión"
 
-    # Sparkline SVG (mini gráfico de línea)
     total_c = 10   # máximo teórico
     max_s   = max(hist_scores + [1])
     pts     = hist_scores[::-1]   # cronológico: más antiguo → más reciente
@@ -2351,7 +2203,6 @@ def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -
                  f'<circle cx="{dot_x}" cy="{dot_y}" r="2" fill="var(--red)"/>'
                  f'</svg>')
 
-    # Tabla compacta
     rows_html = ""
     for i, h_row in enumerate(hist):
         s    = h_row["score"]
@@ -2371,7 +2222,6 @@ def render_score_history(ticker: str, score_actual: int, tc_mult: float = 1.0) -
             f'<span style="font-size:12px;font-weight:600;color:{tend_col}">'
             f'{tend_icon} {tend_txt}</span></div>'
             f'{rows_html}')
-
 
 def render_obv_panel(obv_info: dict) -> str:
     """Panel OBV — flujo institucional. Claro y directo."""
@@ -2402,7 +2252,6 @@ def render_obv_panel(obv_info: dict) -> str:
             f'{"<div style=margin-top:4px;font-size:10px;font-style:italic>" + div_t + "</div>" if div_t else ""}'
             f'</div>')
 
-
 def render_sector_panel(sector_info: dict) -> str:
     """Panel de sector ETF — contexto del mercado para ese ticker."""
     if not sector_info or not sector_info.get("etf"):
@@ -2429,7 +2278,6 @@ def render_sector_panel(sector_info: dict) -> str:
             f'{"<div style=margin-top:4px;font-family:var(--mono);font-size:10px>ETF precio: $" + str(precio) + " · EMA50: $" + str(ema50) + "</div>" if precio else ""}'
             f'</div>')
 
-
 def render_gestion_panel(gestion: dict, precio_actual_mxn: float, stop_mxn: float) -> str:
     """Panel de estrategia de salida escalonada — 4 niveles claros."""
     if not gestion:
@@ -2449,7 +2297,6 @@ def render_gestion_panel(gestion: dict, precio_actual_mxn: float, stop_mxn: floa
     pct_col    = "var(--green)" if pct >= 0 else "var(--red)"
     borde      = "2px solid var(--red)" if urgente else f"2px solid {color}"
 
-    # Mapa visual de los 4 niveles
     def _nivel_dot(n_id, label, precio, activo, completado):
         if completado:
             bg, txt, ring = "#14532d", "#86efac", "var(--green)"
@@ -2491,7 +2338,6 @@ def render_gestion_panel(gestion: dict, precio_actual_mxn: float, stop_mxn: floa
         f'</div>'
     )
 
-    # Stats rápidos
     stats = (
         f'<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;margin-top:8px">'
         f'<div><span style="color:var(--muted)">P&L: </span>'
@@ -2514,7 +2360,6 @@ def render_gestion_panel(gestion: dict, precio_actual_mxn: float, stop_mxn: floa
         f'</div>'
     )
 
-
 def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
     """
     Evalúa si hay señal de salida. Devuelve dict con flag y razones.
@@ -2534,28 +2379,23 @@ def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
     ema9    = tf_1d.get("ema9", 0)
     criterios = tf_1d.get("criterios", {})
 
-    # Criterio 1: precio debajo de EMA9
     if precio < ema9:
         razones.append(f"Precio ${precio:.2f} < EMA9 ${ema9:.2f} — soporte perdido")
         nivel = "warning"
 
-    # Criterio 2: RSI debajo de 50
     if rsi_val < 50:
         razones.append(f"RSI {rsi_val:.0f} < 50 — momentum muerto")
         nivel = "warning"
 
-    # Criterio 3: MACD negativo
     if not criterios.get("macd", {}).get("ok", True):
         razones.append("MACD bajista — vendedores en control")
 
-    # Criterio 4: Score Drop usando historial real
     score_drop = analizar_score_drop(ticker, score_actual)
     caida_score = score_drop["caida_pts"]
     if score_drop["severidad"] in ("alert", "critical"):
         razones.append(f"Score Drop {score_drop['severidad'].upper()}: {score_drop['desc']}")
         nivel = "exit" if score_drop["severidad"] == "critical" else "warning"
 
-    # EXIT definitivo: ≥3 razones O score drop critico O precio+RSI ambos malos
     precio_bajo = precio < ema9
     rsi_bajo    = rsi_val < 50
     if len(razones) >= 3 or score_drop["severidad"] == "critical" or (precio_bajo and rsi_bajo):
@@ -2565,9 +2405,6 @@ def detectar_exit(ticker: str, tf_1d: dict, score_actual: int) -> dict:
             "score_drop": score_drop}
 
 # ══════════════════════════════════════════════════════════
-#   MOTOR DE DECISIÓN — evaluar_setup()
-#   Aplica las 14 reglas en orden jerárquico.
-#   Devuelve: estado, tipo_setup, bloqueadores, advertencias, decision_final
 # ══════════════════════════════════════════════════════════
 def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
                   vix: float, spy: dict, tit_cartera: float,
@@ -2614,51 +2451,41 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
 
     # ── BLOQUEOS DUROS (cualquiera cancela la entrada) ────────────────────
 
-    # R1: Mercado lateral — ADX < 20
     if adx_v < 20:
         bloqueadores.append(f"ADX {adx_v:.0f} < 20 — mercado lateral, señales técnicas no son fiables")
         pasa_filtros = False
 
-    # R2: Precio significativamente bajo EMA9 — bloquear solo si está >3% abajo
-    # Si está entre 0-3% bajo EMA9 es zona de pullback válida, no bloquear
     distancia_ema9_pct = (ema9 - precio) / ema9 * 100 if ema9 > 0 else 0
     if precio < ema9 * 0.97:  # más de 3% bajo EMA9
         bloqueadores.append(f"Precio ${precio:.2f} muy bajo EMA9 ${ema9:.2f} ({distancia_ema9_pct:.1f}% abajo) — entrada en debilidad prohibida")
         pasa_filtros = False
 
-    # R3: Soporte roto
     if not c.get("soporte", True):
         bloqueadores.append(f"Soporte ${soporte:.2f} roto — señal de ruptura bajista")
         pasa_filtros = False
 
-    # R4: Volumen sin confirmación (obligatorio para entrada)
     if not vol_ok:
         bloqueadores.append("Volumen < 1.5x media — movimiento sin confirmación institucional")
         pasa_filtros = False
 
-    # R5: Filtro régimen SPY
     if not spy_ok:
         bloqueadores.append("S&P500 bajo EMA200 — mercado bajista macro, no comprar")
         pasa_filtros = False
 
-    # R6: VIX en pánico y es ETF apalancado
     if etf_3x and vix > 20:
         bloqueadores.append(f"ETF 3x con VIX {vix:.1f} > 20 — volatility decay activo, prohibido")
         pasa_filtros = False
 
     # ── ADVERTENCIAS (no bloquean pero reducen confianza) ─────────────────
 
-    # R7: MULTI-TIMEFRAME — solo 1W bloquea (1H eliminado, no disponible en plan free)
     tf_1w = tfs.get("1W", {})
     w1_senal = tf_1w.get("senal") if tf_1w.get("valido") else None
     w1_score = tf_1w.get("score", 0) if tf_1w.get("valido") else None
 
-    # 1W vendiendo = bloqueo duro (operar contra tendencia semanal es suicidio)
     if w1_senal == "VENDER":
         bloqueadores.append(f"1W en VENDER (score {w1_score}/10) — tendencia semanal bajista, NO entrar")
         pasa_filtros = False
 
-    # R8: SCORE DROP — usa historial real de BD
     score_drop = analizar_score_drop(nombre, score)
     if score_drop["severidad"] == "critical":
         bloqueadores.append(f"SCORE DROP CRITICO: {score_drop['desc']}")
@@ -2668,23 +2495,19 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
     elif score_drop["severidad"] == "warning":
         advertencias.append(f"Score Drop: {score_drop['desc']}")
 
-    # R9: ESTRUCTURA HH/HL bajista = bloqueo duro
     estructura_1d = tf_1d.get("estructura", {})
     if estructura_1d.get("estructura") == "bajista":
         bloqueadores.append(f"Estructura LH+LL en 1D — price action bajista confirmado, NO entrar")
         pasa_filtros = False
 
-    # R10: RSI sobrecomprado (advertencia)
     if rsi_v > 72:
         advertencias.append(f"RSI {rsi_v:.0f} > 72 — sobrecomprado, riesgo de pullback inmediato")
 
-    # R11: R:R insuficiente (advertencia)
     if rr_v < 3:
         advertencias.append(f"R:R {rr_v:.1f}x < 3x — recompensa insuficiente para el riesgo")
 
     # ── DETECTAR ESTADO BASE ──────────────────────────────────────────────
 
-    # Prioridad máxima: EXIT en posición abierta
     if exit_info and exit_info.get("exit") and tit_cartera > 0:
         return {
             "estado": "EXIT",
@@ -2697,7 +2520,6 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
             "score_drop": score_drop,
         }
 
-    # Estado por bloqueadores
     if not pasa_filtros:
         if adx_v < 20:
             estado_base = "LATERAL"
@@ -2719,13 +2541,10 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
 
     # ── CLASIFICAR SETUP (solo si pasó todos los filtros) ────────────────
 
-    # Pullback: precio retraza hacia EMA9/21, MACD ligeramente negativo pero RSI en zona neutra
-    # Breakout: precio supera máximo reciente con volumen, MACD positivo, ADX acelerando
     precio_cerca_ema9 = abs(precio - ema9) / ema9 < 0.015   # dentro del 1.5% de EMA9
     nuevo_maximo_20   = precio >= obj * 0.97                 # cerca del máximo de 20 velas
     adx_acelerando    = adx_v >= 25
 
-    # Breakout requiere volumen REAL >= 1.5x media — no aplica si no hay datos o es bajo
     vol_rel = tf_1d.get("vol_rel", 0)
     vol_ok_breakout = vol_ok and vol_rel >= 1.5
     if nuevo_maximo_20 and adx_acelerando and vol_ok_breakout:
@@ -2778,7 +2597,6 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
         "score_drop":     score_drop,
     }
 
-
 def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dict:
     """
     ESTRUCTURA HH/HL (Higher High / Higher Low) — Wyckoff/price action puro.
@@ -2805,7 +2623,6 @@ def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dic
     l = lows
     n = len(h)
 
-    # Detectar pivotes locales (ventana de 2 velas)
     pivot_highs = []
     pivot_lows  = []
     for i in range(2, n - 2):
@@ -2814,7 +2631,6 @@ def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dic
         if l[i] < l[i-1] and l[i] < l[i-2] and l[i] < l[i+1] and l[i] < l[i+2]:
             pivot_lows.append(l[i])
 
-    # Tomar los ultimos n_pivotes
     ph = pivot_highs[-n_pivotes:] if len(pivot_highs) >= 2 else []
     pl = pivot_lows[-n_pivotes:]  if len(pivot_lows)  >= 2 else []
 
@@ -2822,13 +2638,11 @@ def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dic
         return {"estructura":"indefinida","hh":False,"hl":False,
                 "lh":False,"ll":False,"desc":"Pocos pivotes detectados","score_extra":0}
 
-    # Contar secuencias
     hh = all(ph[i] > ph[i-1] for i in range(1, len(ph)))   # cada maximo mayor al anterior
     hl = all(pl[i] > pl[i-1] for i in range(1, len(pl)))   # cada minimo mayor al anterior
     lh = all(ph[i] < ph[i-1] for i in range(1, len(ph)))   # cada maximo menor al anterior
     ll = all(pl[i] < pl[i-1] for i in range(1, len(pl)))   # cada minimo menor al anterior
 
-    # Condiciones relajadas (mayoria, no todos)
     hh_pct = sum(ph[i] > ph[i-1] for i in range(1, len(ph))) / max(len(ph)-1, 1)
     hl_pct = sum(pl[i] > pl[i-1] for i in range(1, len(pl))) / max(len(pl)-1, 1)
     lh_pct = sum(ph[i] < ph[i-1] for i in range(1, len(ph))) / max(len(ph)-1, 1)
@@ -2861,7 +2675,6 @@ def detectar_estructura_hhhl(highs: list, lows: list, n_pivotes: int = 5) -> dic
         "n_pl":        len(pl),
     }
 
-
 def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
                 titulos_en_cartera=0.0, tc=17.5, origen="USA",
                 highs=None, lows=None, opens=None) -> dict:
@@ -2883,13 +2696,11 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     rv     = float(rsi(c).iloc[-1])
     rv_ant = float(rsi(c).iloc[-2]) if n >= 2 else rv         # RSI anterior
 
-    # ADX — fuerza de tendencia
     adx_val = 0.0
     if highs and lows and len(highs) == len(closes):
         try: adx_val = adx(highs, lows, closes)
         except Exception: adx_val = 0.0
 
-    # ESTRUCTURA HH/HL — price action puro
     estructura_info = {"estructura":"indefinida","hh":False,"hl":False,
                        "lh":False,"ll":False,"desc":"","score_extra":0}
     if highs and lows and len(highs) == len(closes):
@@ -2898,31 +2709,24 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
 
     vol_now = float(v.iloc[-1])
     vol_avg = float(v.rolling(min(20,n)).mean().iloc[-1])
-    # Sin volumen real (algunos tickers de plan free no lo reportan) → no bloquear
     _sin_volumen = (vol_avg < 1.0)
     vol_ok   = _sin_volumen or (vol_now >= vol_avg * 1.5)
 
-    # OBV — detecta divergencias institucionales
     obv_info = obv(closes, volumes) if not _sin_volumen else {"tendencia":"sin datos","divergencia":False,"div_tipo":"","ok":True}
 
-    # OBV: divergencia ALCISTA es señal positiva (institucionales acumulando)
-    # Reescribir "ok" para que divergencia alcista cuente como positivo
     if obv_info.get("div_alcista"):
         obv_info["ok"] = True   # acumulación institucional — es buena señal
     elif obv_info.get("div_bajista"):
         obv_info["ok"] = False  # distribución institucional — señal negativa
 
-    # RSI series para divergencia
     rsi_series = list(rsi(c, 14))
     div_rsi = detectar_divergencia_rsi(closes, rsi_series)
 
-    # Patrones de velas — solo si tenemos opens
     opens_list = opens if opens and len(opens) >= 3 else None
     patron_velas = detectar_patrones_velas(
         opens_list or closes, highs or closes, lows or closes, closes
     ) if opens_list else {"patron": None, "desc": "", "ok": False}
 
-    # Sector: ok si alcista o no mapeado
     sector_ok = True   # se sobreescribe en analizar_ticker si aplica
 
     precio   = float(c.iloc[-1])
@@ -2950,10 +2754,6 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     riesgo_acc = precio - stop
 
     # ── OBJETIVO REALISTA POR ATR + EMA50/EMA200 ─────────────────────────
-    # 1. Calculamos objetivo base por ATR (3x volatilidad real de 10 días)
-    # 2. Si ese objetivo queda por debajo o muy cerca del precio → escalamos a EMA50
-    # 3. Si EMA50 también está por debajo del precio → escalamos a EMA200
-    # 4. Guardamos la fuente del objetivo para mostrarlo en el semáforo
     if atr_val > 0:
         objetivo_atr = precio + (atr_val * 3.0)
         objetivo = min(objetivo_atr, max_20) if max_20 < objetivo_atr else objetivo_atr
@@ -2962,16 +2762,12 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
 
     _objetivo_fuente = "ATR"  # fuente por defecto
 
-    # Si el objetivo ATR queda al nivel del precio o por debajo → usar EMA50
     if objetivo <= precio * 1.005 and e50 > precio:
         objetivo = e50
         _objetivo_fuente = "EMA50"
-    # Si EMA50 también está por debajo del precio → usar EMA200
     elif objetivo <= precio * 1.005 and e50 <= precio and e200 > precio:
         objetivo = e200
         _objetivo_fuente = "EMA200"
-    # Caso especial: objetivo ATR es válido pero EMA50 está más lejos y arriba → preferir EMA50
-    # Solo si EMA50 representa un objetivo técnico más significativo (>5% más lejos)
     elif e50 > precio and e50 > objetivo * 1.05:
         objetivo = e50
         _objetivo_fuente = "EMA50"
@@ -2989,7 +2785,6 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
     adx_ok   = adx_val >= 20
     hhhl_ok  = estructura_info["estructura"] == "alcista"   # HH+HL confirmado
 
-    # mult necesario para mostrar valores en MXN en el semáforo
     mult = tc if origen == "USA" else 1.0
 
     criterios = {
@@ -3089,8 +2884,6 @@ def analizar_tf(closes, volumes, tf_label, capital, riesgo_pct, rr_min,
         },
     }
 
-
-# Cache de series históricas — se llena con batch al inicio de cada corrida
 _TD_CACHE: dict = {}
 
 def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
@@ -3123,7 +2916,6 @@ def _get_cached(symbol: str, interval: str, exchange: str = "") -> list | None:
                 break
 
     return _TD_CACHE[key]
-
 
 def _precargar_cache_batch(symbols: list, intervals: list = None):
     """
@@ -3163,7 +2955,6 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
 
             batch = api_timeseries_batch(chunk, interval, outputsize=200, key=key_use)
 
-            # Reintentar faltantes individualmente — más robusto que batch fallido
             faltantes = [s for s in chunk if s.upper() not in batch]
             if faltantes:
                 print(f"  [batch] {len(faltantes)} faltantes — reintentando individualmente...")
@@ -3178,16 +2969,13 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                         print(f"  [batch] ✅ Recuperado {sym_f}")
                     time.sleep(1)
 
-            # Guardar en cache
             for sym, vals in batch.items():
                 _TD_CACHE[f"{sym}:{interval}"] = vals
 
-            # Marcar como None los que no llegaron
             for sym in chunk:
                 if f"{sym}:{interval}" not in _TD_CACHE:
                     _TD_CACHE[f"{sym}:{interval}"] = None
 
-            # Pausa entre chunks — plan Grow: 55+/min, mucho más holgado
             if idx < len(chunks) - 1:
                 time.sleep(1)
 
@@ -3196,9 +2984,6 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
     print(f"  [batch] ✅ Listo: {con_datos} con datos, {sin_datos} sin datos")
-
-
-
 
 def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
                         titulos_en_cartera=0.0, tc=17.5, origen="USA",
@@ -3229,7 +3014,6 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
     score_1d = tf_1d.get("score", 0)
     tfs = {"1D": tf_1d, "1H": {"tf":"1H","valido":False}, "1W": {"tf":"1W","valido":False}}
 
-    # Solo pedir 1W si el score 1D es prometedor (1H eliminado — no disponible en plan free)
     if score_1d >= 5 and not skip_mtf:
         try:
             vals_1w = _get_cached(symbol, "1week", exchange)
@@ -3258,7 +3042,6 @@ def analizar_ticker_1d(nombre, symbol, exchange, capital, riesgo_pct, rr_min,
             "precio_actual":precio_actual,"score_global":score_global,
             "confluencia":confluencia,"sr":sr}
 
-
 # ── ANÁLISIS PORTAFOLIO ───────────────────────────────────
 def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
@@ -3268,7 +3051,6 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
 
     tickers_db = get_tickers_db()
 
-    # Precargar datos de tickers del portafolio que no estén ya en caché
     syms_port = []
     for pos in posiciones:
         ticker = pos["ticker"]
@@ -3356,7 +3138,6 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
                 "recomendacion":recomendacion})
     return resultados
 
-
 def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) -> dict:
     """
     Genera una recomendación clara y accionable para cada posición del portafolio.
@@ -3378,7 +3159,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
     dist_stop_pct = ((precio_mxn - stop) / precio_mxn * 100) if stop else 0
     dist_obj_pct  = ((obj - precio_mxn) / precio_mxn * 100) if obj else 0
 
-    # SALIR: múltiples señales de deterioro
     if senal == "VENDER" or (score <= 3) or (rsi < 35 and pl_pct < -5):
         return {
             "accion":   "SALIR",
@@ -3389,7 +3169,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # TOMAR GANANCIAS: primero verificar si ya estamos en objetivo (prioridad sobre AGREGAR)
     if obj and precio_mxn >= obj * 0.92 and pl_pct > 3:
         return {
             "accion":   "TOMAR GANANCIAS",
@@ -3400,7 +3179,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # AGREGAR: señal fuerte de compra con posición existente (solo si aún hay recorrido al objetivo)
     if senal == "COMPRAR" and score >= 7 and macd_ok and adx >= 20 and pl_pct > -3:
         return {
             "accion":   "AGREGAR",
@@ -3411,7 +3189,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # EN PÉRDIDA CONTROLADA: pérdida pequeña, stop no tocado
     if pl_pct < -3 and pl_pct >= -8:
         return {
             "accion":   "VIGILAR",
@@ -3422,7 +3199,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # STOP INMINENTE: pérdida grande
     if pl_pct < -8:
         return {
             "accion":   "SALIR",
@@ -3433,7 +3209,6 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
             "objetivo": obj,
         }
 
-    # MANTENER: todo en orden
     estado_pl = f"+{pl_pct:.1f}% ganancia" if pl_pct > 0 else f"{pl_pct:.1f}% pérdida pequeña"
     return {
         "accion":   "MANTENER",
@@ -3444,14 +3219,10 @@ def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) 
         "objetivo": obj,
     }
 
-
 def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None = None,
                    vix: float = 20.0, spy: dict | None = None):
     global _TD_CACHE, _KEYS_AGOTADAS, _KEY_IDX
     _TD_CACHE      = {}
-    # NO resetear _KEYS_AGOTADAS — si KEY1 y KEY2 están agotadas para el día,
-    # no queremos volver a intentarlas y desperdiciar créditos de KEY3
-    # _KEYS_AGOTADAS se resetea solo a medianoche cuando se renuevan los créditos
     _KEY_IDX       = 0
 
     if spy is None: spy = {}
@@ -3469,21 +3240,16 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     print(f"  Régimen: {regimen['label']} | VIX={vix:.1f} | SPY {'✅' if spy.get('sobre_ema200') else '❌'} EMA200")
 
     # ── PRECARGAR CACHE CON BATCH ─────────────────────────────────────────
-    # Tickers USA → batch normal (rápido)
-    # Tickers BMV → llamada individual con exchange=BMV (TwelveData no los encuentra en batch)
     _sector_etfs = []  # No precargar sector ETFs — ahorrar créditos de API
     syms_usa = list(set([v[0] for v in combinados.values() if v[1] != "BMV"]))
     syms_bmv = [(v[0], v[1]) for v in combinados.values() if v[1] == "BMV"]
 
-    # Scanner normal — descarga 1day + 1week para análisis multi-timeframe
     _precargar_cache_batch(syms_usa, ["1day", "1week"])
 
-    # Semis — solo 1day, sin 1week (ahorra 10 créditos por actualización)
     syms_semis = [v[0] for v in _SEMIS_CACHE_TICKERS.values()
                   if v[0] not in syms_usa]  # solo los que no están ya en scanner
     if syms_semis:
         _precargar_cache_batch(syms_semis, ["1day"])
-    # Cargar tickers BMV individualmente con exchange explícito
     if syms_bmv:
         print(f"  [batch] {len(syms_bmv)} tickers BMV — cargando individualmente con exchange=BMV")
         for sym_bmv, exch_bmv in syms_bmv:
@@ -3536,9 +3302,6 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
             score         = tf_1d["score"]
             score_ajustado= setup.get("score_ajustado", max(0, score - regimen["penalizacion"]))
 
-            # Sector afecta el score numéricamente:
-            # alcista → +1 punto (contexto favorable)
-            # bajista → -1 punto (contexto desfavorable) y degrada BUY→WATCH
             etf_sector = sector_info.get("etf")
             if etf_sector:
                 if sector_info["alcista"]:
@@ -3618,7 +3381,6 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
     resultados.sort(key=lambda x: (orden.get(x["estado"], 9), -x["rr"]))
     return resultados
 
-
 def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = None,
                  vix: float = 20.0, spy: dict | None = None):
     """Radar: analiza UNIVERSO + DB en modo 1D. Reutiliza cache del scanner."""
@@ -3629,17 +3391,13 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
     total             = len(universo_completo)
     print(f"  Radar: {total} acciones (VIX={vix:.1f})...")
 
-    # Límite de tiempo para que el radar no cuelgue indefinidamente
     _radar_start  = time.time()
     _RADAR_TIMEOUT = 540  # 9 minutos — suficiente para 17 tickers con pausas batch
 
     # Precargar TODO el universo del radar + sector ETFs en batch desde el inicio.
-    # Antes solo precargaba los "faltantes" pero eso causaba que el cache del scanner
-    # no tuviera los sector ETFs → requests individuales durante análisis → rate limit silencioso.
     _sector_etfs_r = []  # No precargar sector ETFs en radar — ahorrar créditos
     todos_radar    = list(set([v[0] for v in universo_completo.values()]))
     syms_sin_cache = [s for s in todos_radar if f"{s.upper()}:1day" not in _TD_CACHE]
-    # Separar USA vs BMV — BMV necesita exchange explícito
     syms_sin_cache_usa = [s for s in syms_sin_cache
                           if universo_completo.get(s, ("", ""))[1] != "BMV"]
     syms_sin_cache_bmv = [(s, universo_completo[s][1]) for s in syms_sin_cache
@@ -3658,7 +3416,6 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
 
     resultados = []
     for i, (nombre, (symbol, exchange)) in enumerate(universo_completo.items()):
-        # Abort si llevamos más de 2 minutos en el radar
         if time.time() - _radar_start > _RADAR_TIMEOUT:
             print(f"  [Radar] Timeout — procesados {i}/{total}")
             break
@@ -3677,10 +3434,8 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
                           tit, tc=tc, origen="USA", highs=highs, lows=lows)
         if not tf["valido"]: continue
 
-        # S/R para el radar
         sr_radar = calcular_zonas_sr(highs, lows, closes, volumes, tc=tc, origen="USA")
 
-        # Construir tfs mínimo para evaluar_setup (radar solo tiene 1D)
         tfs_radar = {"1D": tf, "1H": {"valido":False}, "1W": {"valido":False}}
         exit_info = detectar_exit(nombre, tf, tf.get("score",0))
 
@@ -3695,7 +3450,6 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
         objetivo = tf["objetivo"]
         pot_alza = ((objetivo-precio)/precio*100) if precio else 0
 
-        # Sector bajista → degradar BUY a WATCH
         if not sector_info["alcista"] and estado == "BUY":
             estado = "WATCH"
             setup["advertencias"].append(
@@ -3753,9 +3507,7 @@ def radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results: list | None = No
     resultados.sort(key=lambda x:(orden.get(x["estado"],9),-x["pot_alza"]))
     return resultados
 
-
 # ══════════════════════════════════════════════════════════
-#   HELPERS HTML
 # ══════════════════════════════════════════════════════════
 def fmt(n, dec=2):
     if n is None: return "—"
@@ -3800,7 +3552,6 @@ def render_decision_box(setup: dict) -> str:
     confianza = setup.get("confianza",0)
     tipo      = setup.get("tipo_setup","—")
 
-    # Color por estado
     if estado in ("BUY","ROCKET"):
         bg,brd,col = "#f6ffed","#b7eb8f","#135200"
     elif estado == "EXIT":
@@ -3812,20 +3563,17 @@ def render_decision_box(setup: dict) -> str:
     else:
         bg,brd,col = "var(--surface2)","var(--brd)","var(--muted)"
 
-    # Barra de confianza
     conf_color = "#52c41a" if confianza>=70 else "#faad14" if confianza>=40 else "#ff4d4f"
     conf_bar   = (f'<div style="margin:8px 0 4px"><div style="font-size:10px;color:var(--muted);margin-bottom:3px">'
                   f'Confianza del setup: {confianza}%</div>'
                   f'<div style="height:5px;background:var(--brd2);border-radius:3px;overflow:hidden">'
                   f'<div style="height:100%;width:{confianza}%;background:{conf_color};border-radius:3px"></div></div></div>')
 
-    # Bloqueadores
     bloqueos_html = ""
     if bloqueos:
         items = "".join(f'<li style="margin:2px 0">{b}</li>' for b in bloqueos)
         bloqueos_html = f'<ul style="margin:6px 0 0 14px;font-size:10px;color:#7f1d1d">{items}</ul>'
 
-    # Advertencias
     adverts_html = ""
     if adverts:
         items = "".join(f'<li style="margin:2px 0">{a}</li>' for a in adverts)
@@ -3978,7 +3726,6 @@ def gbm_cell(entrada_mxn, stop_mxn, obj_mxn) -> str:
             f'<div>🛑 <span style="color:var(--red)">{fmt(stop_mxn)}</span></div>'
             f'<div>✅ <span style="color:var(--green)">{fmt(obj_mxn)}</span></div></div>')
 
-
 def _render_rec_badge(rec: dict) -> str:
     """Badge compacto de recomendación para la tabla del portafolio."""
     if not rec or rec.get("accion") == "SIN DATOS":
@@ -4010,7 +3757,6 @@ def _render_rec_badge(rec: dict) -> str:
     return (f'<div style="background:{bg};border:1px solid {brd};border-radius:6px;'
             f'padding:5px 8px;min-width:110px">{"".join(lines)}</div>')
 
-
 def _render_rec_panel(rec: dict) -> str:
     """Panel completo de recomendación en el detail del portafolio."""
     if not rec or rec.get("accion") == "SIN DATOS":
@@ -4029,7 +3775,6 @@ def _render_rec_panel(rec: dict) -> str:
             f'{icono} {accion}</div>'
             f'<div style="font-size:12px;color:{color};opacity:.9">{mensaje}</div>'
             f'</div>')
-
 
 # ── RENDER ROWS ───────────────────────────────────────────
 def render_port_rows(posiciones, tc):
@@ -4053,7 +3798,6 @@ def render_port_rows(posiciones, tc):
 
         alertas_h="".join(f'<div class="alert-pill">{a}</div>' for a in pos.get("alertas",[]))
 
-        # Score block central con señal
         score_block = render_score_badge(score, total_c, senal) if tf_1d.get("valido") else ""
 
         # ── S/R del portafolio ───────────────────────────────────────
@@ -4063,7 +3807,6 @@ def render_port_rows(posiciones, tc):
         obj_sr_port  = sr_port.get("objetivo_sr")
         precio_ref   = pos.get("precio_actual_mxn") or pos["cto_prom_mxn"]
         ema200_port  = round(tf_1d.get("ema200", 0) * tc, 2) if tf_1d.get("valido") else 0
-        # Celda S/R inline: "S $X (-Y%) / R $X (+Z%)"
         lines_port = []
         if stop_sr_port:
             lines_port.append(f'<div style="white-space:nowrap"><span style="color:var(--green);font-size:9px;font-weight:600">S</span> '
@@ -4102,7 +3845,6 @@ def render_port_rows(posiciones, tc):
             pos.get("stop_mxn"),
         )
 
-        # OBV del portafolio
         obv_port  = tf_1d.get("obv", {}) if tf_1d.get("valido") else {}
         obv_html_port = render_obv_panel(obv_port)
 
@@ -4170,8 +3912,6 @@ def render_port_rows(posiciones, tc):
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
-
-
 def calcular_etapa(r: dict) -> tuple[str, str, str]:
     """
     Determina en qué etapa del ciclo está el ticker para swing trading.
@@ -4195,28 +3935,22 @@ def calcular_etapa(r: dict) -> tuple[str, str, str]:
     bloqueado= r.get("estado", "") == "Bloqueado"
     vol_rel  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0)
 
-    # 🚀 Ya arrancó: precio >5% sobre EMA9, RSI alto — tren salió, no persigas
     dist_ema9 = ((precio - entrada) / entrada * 100) if entrada else 0
     if dist_ema9 > 5 and rsi > 65 and score >= 7:
         return ("🚀", "Ya arrancó", "Ya arrancó — tren salió, no persigas")
 
-    # 🟢 Entrar: todos los criterios cumplidos — este es el momento
     if (score >= 7 and senal_1d == "COMPRAR" and vol_rel >= 1.5
             and rr >= 3.0 and not bloqueado):
         return ("🟢", "Entrar", "✅ Entrar — Score≥7 | Señal=COMPRAR | Vol≥1.5x | RR≥3.0 | No bloqueado")
 
-    # 🟠 A punto: casi listo, vigilar de cerca
     if 48 <= rsi <= 65 and macd_ok and ema200 and score >= 6 and rr >= 1.5:
         return ("🟠", "A punto", "A punto — RSI 48-65 | MACD alcista | Score≥6 | RR≥1.5. Vigilar.")
 
-    # 🟡 Preparándose: aún no es momento, acumulando fuerza
     hay_soporte = any(z.get("fuerza", 0) >= 2 for z in soportes)
     if rsi < 52 and adx < 30 and hay_soporte and ema200:
         return ("🟡", "Preparándose", "Preparándose — RSI bajo | ADX tranquilo | Sobre soporte. Aún no.")
 
-    # Default: sin etapa clara
     return ("⬜", "Sin etapa", "Sin etapa clara definida")
-
 
 def _puntuacion_top(r: dict) -> float:
     """
@@ -4243,7 +3977,6 @@ def _puntuacion_top(r: dict) -> float:
     nivel_cap = cap.get("nivel", 0) if es_cap else 0
     es_buy    = estado in ("BUY", "ROCKET")
 
-    # Bonus por setup — orden de prioridad claro
     if estado == "ROCKET":
         bonus = 5.0    # #1 — máxima convicción
     elif es_ganga:
@@ -4267,24 +4000,16 @@ def _puntuacion_top(r: dict) -> float:
     rr_norm   = min(rr / 10.0, 1.0)
     bonus_pct = bonus / 6.0  # normalizado sobre el máximo (5.0)
 
-    # Pesos profesionales: Badge 35% + R:R 35% + Score 30%
-    # Badge define el tipo de oportunidad
-    # R:R es sagrado — no se sacrifica por nada
-    # Score confirma los criterios técnicos
     return (bonus_pct * 0.35) + (rr_norm * 0.35) + (score_pct * 0.30)
-
-
 
 def _fecha_hoy_cdmx() -> str:
     """Fecha actual en formato YYYY-MM-DD para horario CDMX (UTC-6)."""
     ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
     return ahora_cdmx.strftime("%Y-%m-%d")
 
-
 def _hora_cdmx() -> int:
     """Hora actual en CDMX (UTC-6) como entero."""
     return (datetime.utcnow() - timedelta(hours=6)).hour
-
 
 def guardar_senal_semis(simbolo: str, senal: str, precio_mxn: float,
                          pasos_ok: int, tipo: str = "ETF") -> None:
@@ -4294,7 +4019,6 @@ def guardar_senal_semis(simbolo: str, senal: str, precio_mxn: float,
     hoy = _fecha_hoy_cdmx()
     try:
         con = sqlite3.connect(DB_FILE)
-        # Solo una señal por símbolo por día
         existe = con.execute(
             "SELECT id FROM semis_senales WHERE fecha=? AND simbolo=? AND senal=?",
             (hoy, simbolo, senal)
@@ -4308,7 +4032,6 @@ def guardar_senal_semis(simbolo: str, senal: str, precio_mxn: float,
         con.close()
     except Exception as e:
         print(f"[semis] Error guardando señal: {e}")
-
 
 def get_historial_señales(limite: int = 30) -> list:
     """Devuelve historial de señales de semis."""
@@ -4324,13 +4047,10 @@ def get_historial_señales(limite: int = 30) -> list:
     except Exception:
         return []
 
-
 def _semana_actual_cdmx() -> str:
     """Devuelve la semana actual como 'YYYY-WXX' basado en el lunes de la semana CDMX."""
     ahora_cdmx = datetime.utcnow() - timedelta(hours=6)
-    # ISO week: lunes=inicio de semana
     return ahora_cdmx.strftime("%G-W%V")
-
 
 def actualizar_top_semanal_acum(scan_data: list) -> None:
     """
@@ -4341,7 +4061,6 @@ def actualizar_top_semanal_acum(scan_data: list) -> None:
     semana = _semana_actual_cdmx()
     try:
         con = sqlite3.connect(DB_FILE)
-        # Borrar semanas anteriores
         con.execute("DELETE FROM top_semanal_acumulado WHERE semana != ?", (semana,))
         con.commit()
 
@@ -4405,7 +4124,6 @@ def actualizar_top_semanal_acum(scan_data: list) -> None:
     except Exception as e:
         print(f"[top_semanal] ⚠️ Error al actualizar: {e}")
 
-
 def obtener_top_semanal_acum(n: int = 5) -> list:
     """Devuelve el Top N acumulado de la semana desde la DB."""
     semana = _semana_actual_cdmx()
@@ -4426,7 +4144,6 @@ def obtener_top_semanal_acum(n: int = 5) -> list:
         print(f"[top_semanal] ⚠️ Error al obtener: {e}")
     return resultado
 
-
 def actualizar_top_diario(scan_data: list) -> None:
     """
     Persiste el mejor score de cada ticker visto hoy.
@@ -4438,30 +4155,24 @@ def actualizar_top_diario(scan_data: list) -> None:
     hoy = _fecha_hoy_cdmx()
     try:
         con = sqlite3.connect(DB_FILE)
-        # Borrar registros de días anteriores (reset diario)
         con.execute("DELETE FROM top_diario_acumulado WHERE fecha != ?", (hoy,))
         con.commit()
 
         for r in scan_data:
             if r.get("rr", 0) < 3.0:
                 continue
-            # Excluir ETFs apalancados/inversos
             if es_etf_apalancado(r.get("nombre", "")):
                 continue
-            # Score mínimo 5/11
             score = r.get("score_ajustado", r.get("score", 0))
             total = r.get("total_criterios", 11)
             if total > 0 and (score / total) < (5 / 11):
                 continue
-            # Solo excluir EXIT y SHORT (deterioro técnico real del ticker)
             estado = r.get("estado", "")
             if estado in ("EXIT", "SHORT"):
                 continue
-            # RSI en zona de oportunidad (30-65)
             rsi = r.get("rsi", 50)
             if not (30 <= rsi <= 65):
                 continue
-            # Debe tener setup de entrada definido
             inicio_r  = r.get("inicio", {}) or {}
             ganga_r   = r.get("ganga", {}) or {}
             es_ganga_r  = isinstance(ganga_r, dict) and ganga_r.get("es_ganga", False)
@@ -4502,7 +4213,6 @@ def actualizar_top_diario(scan_data: list) -> None:
     except Exception as e:
         print(f"[top_diario] ⚠️ Error al actualizar: {e}")
 
-
 def obtener_top_diario(n: int = 5) -> list:
     """Devuelve el Top N acumulado del día desde la DB."""
     hoy = _fecha_hoy_cdmx()
@@ -4522,7 +4232,6 @@ def obtener_top_diario(n: int = 5) -> list:
     except Exception as e:
         print(f"[top_diario] ⚠️ Error al obtener: {e}")
     return resultado
-
 
 def render_top_diario_banner(top: list) -> str:
     """Banner compacto del Top Diario para mostrar arriba del scanner."""
@@ -4555,10 +4264,7 @@ def render_top_diario_banner(top: list) -> str:
         f'</div>'
     )
 
-
-
 # ═══════════════════════════════════════════════════════════
-#   DIARIO DE TRADING
 # ═══════════════════════════════════════════════════════════
 
 def guardar_entrada_diario(ticker: str, tipo: str, precio_mxn: float, titulos: float,
@@ -4582,7 +4288,6 @@ def guardar_entrada_diario(ticker: str, tipo: str, precio_mxn: float, titulos: f
     except Exception as e:
         print(f"[diario] Error al guardar: {e}")
         return 0
-
 
 def cerrar_entrada_diario(diario_id: int, precio_cierre_mxn: float,
                            aprendizaje: str = "") -> bool:
@@ -4611,7 +4316,6 @@ def cerrar_entrada_diario(diario_id: int, precio_cierre_mxn: float,
         print(f"[diario] Error al cerrar: {e}")
         return False
 
-
 def get_diario(limite: int = 50) -> list:
     """Devuelve entradas del diario más recientes."""
     try:
@@ -4625,7 +4329,6 @@ def get_diario(limite: int = 50) -> list:
         return [dict(r) for r in rows]
     except Exception:
         return []
-
 
 def get_estadisticas_diario() -> dict:
     """Calcula estadísticas del diario para mostrar patrones."""
@@ -4650,7 +4353,6 @@ def get_estadisticas_diario() -> dict:
     avg_gan  = sum(r["pnl_mxn"] for r in ganadoras) / len(ganadoras) if ganadoras else 0
     avg_per  = sum(r["pnl_mxn"] for r in perdedoras) / len(perdedoras) if perdedoras else 0
 
-    # Análisis por score de entrada
     score_stats = {}
     for r in rows:
         s = r.get("score_entrada", 0)
@@ -4663,7 +4365,6 @@ def get_estadisticas_diario() -> dict:
         if r["resultado"] == "ganancia":
             score_stats[rango]["ganadoras"] += 1
 
-    # Análisis por tipo de setup
     setup_stats = {}
     for r in rows:
         s = r.get("setup_tipo", "—") or "—"
@@ -4681,9 +4382,7 @@ def get_estadisticas_diario() -> dict:
         "score_stats": score_stats, "setup_stats": setup_stats,
     }
 
-
 # ═══════════════════════════════════════════════════════════
-#   P&L HISTÓRICO Y RENDIMIENTO VS SPY
 # ═══════════════════════════════════════════════════════════
 
 def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None:
@@ -4695,7 +4394,6 @@ def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None
             "SELECT id, capital FROM pnl_historico WHERE fecha=?", (hoy,)
         ).fetchone()
 
-        # Primer registro histórico para P&L acumulado
         primer = con.execute(
             "SELECT capital FROM pnl_historico ORDER BY fecha ASC LIMIT 1"
         ).fetchone()
@@ -4713,7 +4411,6 @@ def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None
                 (hoy, capital_actual, round(pnl_dia, 2), round(pnl_acum, 2), spy_precio)
             )
         else:
-            # Actualizar si el capital cambió
             con.execute(
                 "UPDATE pnl_historico SET capital=?, pnl_dia_mxn=?, pnl_acum_pct=?, spy_precio=? WHERE fecha=?",
                 (capital_actual, round(pnl_dia, 2), round(pnl_acum, 2), spy_precio, hoy)
@@ -4722,7 +4419,6 @@ def registrar_snapshot_pnl(capital_actual: float, spy_precio: float = 0) -> None
         con.close()
     except Exception as e:
         print(f"[pnl] Error: {e}")
-
 
 def get_pnl_historico(dias: int = 90) -> list:
     """Devuelve el historial de P&L de los últimos N días."""
@@ -4737,7 +4433,6 @@ def get_pnl_historico(dias: int = 90) -> list:
     except Exception:
         return []
 
-
 def get_spy_precio_actual() -> float:
     """Obtiene precio actual de SPY para comparación."""
     try:
@@ -4747,7 +4442,6 @@ def get_spy_precio_actual() -> float:
     except Exception:
         pass
     return 0.0
-
 
 def calcular_rendimiento_vs_spy(pnl_hist: list, spy_actual: float) -> dict:
     """Compara rendimiento del portafolio vs SPY en el mismo periodo."""
@@ -4767,15 +4461,12 @@ def calcular_rendimiento_vs_spy(pnl_hist: list, spy_actual: float) -> dict:
         "ganando_al_mercado": alfa > 0,
     }
 
-
 # ═══════════════════════════════════════════════════════════
-#   VOLUMEN INUSUAL
 # ═══════════════════════════════════════════════════════════
 
 def es_volumen_inusual(vol_rel: float, umbral: float = 2.5) -> bool:
     """Volumen inusual: 2.5x o más del promedio de 20 días."""
     return vol_rel >= umbral
-
 
 def badge_volumen_inusual(vol_rel: float) -> str:
     """Badge visual para volumen inusual."""
@@ -4784,7 +4475,6 @@ def badge_volumen_inusual(vol_rel: float) -> str:
     elif vol_rel >= 2.5:
         return f'<span style="background:#fef3c7;color:#d97706;border:1px solid #fde68a;border-radius:6px;padding:1px 6px;font-size:9px;font-weight:700" title="Volumen {vol_rel:.1f}x — actividad inusual">⚡ {vol_rel:.1f}x VOL</span>'
     return ""
-
 
 def distancia_soporte_pct(precio_mxn: float, sr: dict) -> float:
     """Calcula distancia % al soporte más cercano por debajo del precio."""
@@ -4800,7 +4490,6 @@ def distancia_soporte_pct(precio_mxn: float, sr: dict) -> float:
     if not cercano:
         return 0.0
     return round((precio_mxn - cercano) / precio_mxn * 100, 1)
-
 
 def render_tab_diario(entradas: list, stats: dict) -> str:
     """Tab del diario de trading con análisis de patrones."""
@@ -4832,7 +4521,6 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
       </div>
     </div>'''
 
-        # Análisis por score
         if stats.get("score_stats"):
             score_rows = ""
             for rango, s in sorted(stats["score_stats"].items()):
@@ -4856,7 +4544,6 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
       </table>
     </div>'''
 
-        # Análisis por setup
         if stats.get("setup_stats"):
             setup_rows = ""
             for setup, s in sorted(stats["setup_stats"].items(), key=lambda x: -x[1]["total"]):
@@ -4926,7 +4613,6 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
   <div>{entradas_html}</div>
 </div>'''
 
-
 def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> str:
     """Tab de rendimiento acumulado vs SPY con opción de exportar."""
     if not pnl_hist:
@@ -4943,7 +4629,6 @@ def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> 
     pnl_acum = ultimo.get("pnl_acum_pct", 0)
     pnl_col  = "var(--green)" if pnl_acum >= 0 else "var(--red)"
 
-    # Alfa vs SPY
     alfa_html = ""
     if vs_spy:
         alfa_col = "var(--green)" if vs_spy["ganando_al_mercado"] else "var(--red)"
@@ -4964,7 +4649,6 @@ def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> 
       </div>
     </div>'''
 
-    # Tabla de historial
     hist_rows = ""
     for h in reversed(pnl_hist[-30:]):
         pnl_d_col = "var(--green)" if h.get("pnl_dia_mxn", 0) >= 0 else "var(--red)"
@@ -5005,7 +4689,6 @@ def render_tab_rendimiento(pnl_hist: list, vs_spy: dict, stats_diario: dict) -> 
   </div>
 </div>'''
 
-
 def get_watchlist() -> list:
     """Devuelve los tickers de la watchlist."""
     try:
@@ -5016,7 +4699,6 @@ def get_watchlist() -> list:
         return [dict(r) for r in rows]
     except Exception:
         return []
-
 
 def agregar_watchlist(ticker: str, notas: str = "", e1_manual: float = 0) -> bool:
     try:
@@ -5030,7 +4712,6 @@ def agregar_watchlist(ticker: str, notas: str = "", e1_manual: float = 0) -> boo
     except Exception:
         return False
 
-
 def quitar_watchlist(ticker: str) -> bool:
     try:
         con = sqlite3.connect(DB_FILE)
@@ -5039,7 +4720,6 @@ def quitar_watchlist(ticker: str) -> bool:
         return True
     except Exception:
         return False
-
 
 def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
     """
@@ -5056,7 +4736,6 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
           </div>
         </div>'''
 
-    # Índice de datos frescos por ticker
     datos_frescos = {}
     for r in (scan_data or []):
         t = r.get("nombre", "")
@@ -5179,7 +4858,6 @@ def render_tab_watchlist(scan_data: list, radar_data: list, tc: float) -> str:
   </div>
 </div>'''
 
-
 def render_tab_top_diario(top: list, tc: float) -> str:
     """Renderiza el tab completo de Top Diario Acumulado."""
     medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
@@ -5232,7 +4910,6 @@ def render_tab_top_diario(top: list, tc: float) -> str:
                ganga_d.get("objetivo_mxn") or
                r.get("obj_mxn") or
                r.get("objetivo_mxn") or 0)
-        # Si aún no hay sl/obj, calcular desde precio y rr
         if not sl and precio and rr >= 3:
             atr_est = precio * 0.03  # estimado 3% como ATR
             sl  = round(precio - atr_est, 2)
@@ -5356,7 +5033,6 @@ def render_tab_top_diario(top: list, tc: float) -> str:
   </div>
 </div>'''
 
-
 def calcular_top_semanal(scanner: list, n: int = 5) -> list:
     """Calcula el Top N del scanner usando Score + R:R + badge como fórmula."""
     candidatas = []
@@ -5375,8 +5051,6 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
         total = r.get("total_criterios", 11)
         if total > 0 and (score / total) < (5 / 11):
             continue
-        # Sistema — solo excluir EXIT y SHORT (deterioro técnico real del ticker)
-        # BLOQUEADO/LATERAL/RUPTURA son filtros macro conservadores — el trader decide
         estado = r.get("estado", "")
         if estado in ("EXIT", "SHORT"):
             continue
@@ -5400,7 +5074,6 @@ def calcular_top_semanal(scanner: list, n: int = 5) -> list:
 
     candidatas.sort(key=lambda x: x["_puntuacion"], reverse=True)
     return candidatas[:n]
-
 
 def render_top_semanal_banner(top: list) -> str:
     """Banner compacto del Top 5 para mostrar arriba del scanner."""
@@ -5431,7 +5104,6 @@ def render_top_semanal_banner(top: list) -> str:
         f'{"".join(items)}'
         f'</div>'
     )
-
 
 def render_tab_top_semanal(top: list, tc: float) -> str:
     """Renderiza el tab completo de Top Semanal."""
@@ -5467,7 +5139,6 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
         inicio  = r.get("inicio", {}) or {}
         ganga_d = r.get("ganga", {}) or {}
 
-        # Buscar stop y objetivo en múltiples fuentes
         stop = (r.get("stop_mxn") or
                 sizing.get("sl_mxn") or
                 inicio.get("sl_mxn") or
@@ -5477,13 +5148,11 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
                 inicio.get("objetivo_mxn") or
                 ganga_d.get("objetivo_mxn") or 0)
         ema200 = r.get("ema200_mxn", 0)
-        # Si aún $0, estimar desde precio y rr
         if not stop and precio and rr >= 3:
             atr_est = precio * 0.03
             stop = round(precio - atr_est, 2)
             obj  = round(precio + atr_est * rr, 2)
 
-        # Badge principal
         if es_ganga:
             badge_html = '<span style="background:#fef3c7;color:#d4a017;border:1px solid #fcd34d;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">🟡 Ganga +15%</span>'
             razon_txt  = "Precio castigado con soporte confirmado — zona ideal de acumulación"
@@ -5495,7 +5164,6 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
             badge_html = '<span style="background:var(--surface);color:var(--muted);border:1px solid var(--brd);border-radius:4px;padding:2px 8px;font-size:10px">Setup técnico sólido</span>'
             razon_txt  = "Score y R:R por encima del promedio del scanner"
 
-        # Color del puesto
         medal_colors = ["#ffd700", "#c0c0c0", "#cd7f32"] + ["var(--text)"] * 17
         mc = medal_colors[i] if i < len(medal_colors) else "var(--text)"
 
@@ -5636,14 +5304,12 @@ def render_tab_top_semanal(top: list, tc: float) -> str:
   </div>
 </div>'''
 
-
 def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 160) -> str:
     """
     Mini gráfico de velas japonesas con EMAs 9, 21, 50 para los últimos 60 días.
     Usa datos del cache — cero llamadas API.
     """
     try:
-        # Buscar en cache sin hacer llamada nueva
         vals = None
         for key in (_TD_CACHE or {}):
             if nombre.upper() in key.upper() and "1day" in key.lower():
@@ -5652,7 +5318,6 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
         if not vals or len(vals) < 10:
             return ""
 
-        # Últimas 60 velas
         data = vals[-60:]
         n    = len(data)
 
@@ -5661,13 +5326,11 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
         highs  = [float(x.get("high",  x["close"])) for x in data]
         lows   = [float(x.get("low",   x["close"])) for x in data]
 
-        # EMAs
         c_s  = pd.Series(closes)
         e9_s  = list(ema(c_s, 9))
         e21_s = list(ema(c_s, 21))
         e50_s = list(ema(c_s, 50))
 
-        # Rango de precios para escalar
         all_prices = highs + lows + [v for v in e9_s + e21_s + e50_s if v and v == v]
         p_min = min(all_prices) * 0.998
         p_max = max(all_prices) * 1.002
@@ -5683,7 +5346,6 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
         def py(i):
             return pad_l + (i / (n - 1)) * w if n > 1 else pad_l
 
-        # Velas
         candle_w = max(2, int(w / n * 0.7))
         velas_svg = ""
         for i, (o, c, hi, lo) in enumerate(zip(opens, closes, highs, lows)):
@@ -5695,12 +5357,9 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
             y_c   = px(min(o, c))
             body_h = max(1, y_lo - y_hi if c == o else abs(px(o) - px(c)))
 
-            # Mecha
             velas_svg += f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{color}" stroke-width="1" opacity="0.7"/>'
-            # Cuerpo
             velas_svg += f'<rect x="{x - candle_w/2:.1f}" y="{y_o:.1f}" width="{candle_w}" height="{max(1, abs(px(o)-px(c))):.1f}" fill="{color}" opacity="0.9"/>'
 
-        # EMAs como polylines
         def make_ema_line(ema_vals, color, dash=""):
             pts = " ".join(
                 f"{py(i):.1f},{px(v):.1f}"
@@ -5714,13 +5373,11 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
         ema21_line = make_ema_line(e21_s, "#f59e0b")       # naranja — EMA21
         ema50_line = make_ema_line(e50_s, "#a78bfa", "4,2") # morado punteado — EMA50
 
-        # Precio actual y línea horizontal
         precio_actual = closes[-1] * tc
         y_actual = px(closes[-1])
         precio_line = (f'<line x1="{pad_l}" y1="{y_actual:.1f}" x2="{pad_l+w}" y2="{y_actual:.1f}" '
                        f'stroke="#94a3b8" stroke-width="0.5" stroke-dasharray="3,3"/>')
 
-        # Leyenda
         leyenda = (f'<text x="{pad_l+2}" y="{height-6}" font-size="8" fill="#60a5fa">EMA9</text>'
                    f'<text x="{pad_l+30}" y="{height-6}" font-size="8" fill="#f59e0b">EMA21</text>'
                    f'<text x="{pad_l+58}" y="{height-6}" font-size="8" fill="#a78bfa">EMA50</text>'
@@ -5738,7 +5395,6 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
 
     except Exception as e:
         return f'<div style="font-size:10px;color:var(--muted)">Gráfico no disponible: {e}</div>'
-
 
 def render_scan_rows(scanner, tc):
     h=""
@@ -5768,11 +5424,9 @@ def render_scan_rows(scanner, tc):
         inicio_badge = badge_inicio_movimiento(r.get("inicio", {}))
         cap_badge    = badge_capitulacion(r.get("capitulacion", {}))
 
-        # Badge volumen inusual
         vol_rel_val  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0) or 0
         vol_badge    = badge_volumen_inusual(vol_rel_val)
 
-        # Distancia al soporte
         dist_sop = distancia_soporte_pct(r.get("precio_mxn", 0), r.get("sr", {}))
         dist_badge = ""
         if 0 < dist_sop <= 3:
@@ -5815,12 +5469,10 @@ def render_scan_rows(scanner, tc):
         if ema200_mxn and ema200_mxn > 0:
             e200_pct = (ema200_mxn - precio_ref) / precio_ref * 100
             if e200_pct >= 0:
-                # EMA200 arriba → resistencia
                 lines.append(f'<div><span style="color:#ff7875;font-size:9px;font-style:italic">R EMA200</span> '
                              f'<span style="color:#ff7875;font-family:var(--mono)">{fmt(ema200_mxn)}</span>'
                              f'<span style="color:var(--muted);font-size:9px"> (+{e200_pct:.1f}%)</span></div>')
             else:
-                # EMA200 abajo → soporte
                 lines.append(f'<div><span style="color:#73d13d;font-size:9px;font-style:italic">S EMA200</span> '
                              f'<span style="color:#73d13d;font-family:var(--mono)">{fmt(ema200_mxn)}</span>'
                              f'<span style="color:var(--muted);font-size:9px"> ({e200_pct:.1f}%)</span></div>')
@@ -5926,9 +5578,6 @@ def render_scan_rows(scanner, tc):
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
-
-
-
 def render_hist_rows(ops):
     if not ops:
         return '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:28px;font-size:12px">Sin operaciones aún</td></tr>'
@@ -5959,7 +5608,6 @@ def render_hist_rows(ops):
             f'<button class="btn-sm btn-del" onclick="{del_fn}">Borrar</button>'
             f'</td></tr>')
     return h
-
 
 def render_radar_rows(radar, tc):
     if not radar:
@@ -6098,9 +5746,6 @@ def render_radar_rows(radar, tc):
             f'<tr class="detail" id="{rid}"><td colspan="12" style="padding:0">{detail}</td></tr>')
     return h
 
-
-
-
 def resumen_hist(ops):
     if not ops:
         return {"inv":0,"vta":0,"pl":0,"n":0,"n_compras":0,"n_ventas":0,
@@ -6143,7 +5788,6 @@ def resumen_hist(ops):
             "por_ticker":dict(sorted(por_ticker.items(),key=lambda x:-abs(x[1]))),
             "por_mes":dict(sorted(por_mes.items()))}
 
-
 def render_por_ticker(por_ticker: dict) -> str:
     if not por_ticker: return '<p class="hint">Sin operaciones cerradas aún</p>'
     items = list(por_ticker.items())[:8]
@@ -6167,7 +5811,6 @@ def render_por_mes(por_mes: dict) -> str:
     return (f'<div style="padding:14px 18px;border-top:1px solid var(--brd)">'
             f'<div class="hint" style="margin-bottom:10px;text-transform:uppercase;font-size:10px;letter-spacing:.06em">P&L mensual realizado</div>'
             f'<div style="display:flex;gap:8px;flex-wrap:wrap">{items_html}</div></div>')
-
 
 # ── HTML PRINCIPAL ─────────────────────────────────────────
 
@@ -6245,7 +5888,6 @@ def render_que_hago_hoy(scan_data: list, port_data: list) -> str:
             '</div>'
         )
 
-    # Orden: VENDER primero, luego COMPRAR, luego VIGILAR
     orden = {"SALIR": 0, "TOMAR GANANCIAS": 1, "COMPRAR": 2, "VIGILAR": 3}
     filas.sort(key=lambda x: orden.get(x["accion"], 9))
 
@@ -6294,7 +5936,6 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
                  vix: float = 20.0, spy: dict | None = None, regimen: dict | None = None):
     if spy     is None: spy     = {"sobre_ema200": True}
     if regimen is None: regimen = regimen_mercado(vix, spy)
-    # Hora de México (UTC-6) — Render corre en UTC
     from datetime import timezone, timedelta
     tz_mx = timezone(timedelta(hours=-6))
     ts  = datetime.now(tz_mx).strftime("%d/%m/%Y %H:%M")
@@ -6306,7 +5947,6 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
     total_pl_pct= (total_pl/total_costo*100) if total_costo else 0
     n_alertas   = sum(len(p.get("alertas",[])) for p in port_data)
 
-    # Serializar portafolio a JSON para sync en browser
     port_json = json.dumps([{
         "ticker":        p["ticker"],
         "titulos":       p["titulos"],
@@ -7038,7 +6678,6 @@ td strong{{font-size:13px;font-weight:500}}
   </div>
   <p class="hint" style="margin-top:8px">💡 Potencial = distancia al objetivo dinámico (máx 20 velas). Solo fines educativos.</p>
 </div>
-
 
 <footer>Solo fines educativos · No es asesoría financiera · Usa siempre stop loss<br>
 TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.2</footer>
@@ -8837,7 +8476,6 @@ function buscarRadar(){{
   if(el) el.textContent='Mostrando '+count+' acciones';
 }}
 
-
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load',()=>{{
   cargarTickersPersonalizados();
@@ -9087,7 +8725,6 @@ function restaurarTickerScanner(ticker) {{
   .catch(() => cargarTickersPersonalizados());
 }}
 
-
 function actualizarDashboard() {{
   const btn = document.getElementById('btn_update');
   if (btn) {{ btn.disabled = true; btn.textContent = '↺ Actualizando...'; }}
@@ -9112,7 +8749,6 @@ function actualizarDashboard() {{
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
 </script></body></html>"""
-
 
 # ── IMPORTAR OPS ──────────────────────────────────────────
 def importar_ops_json(path: str, tc: float):
@@ -9149,9 +8785,7 @@ def cargar_config() -> dict:
         with open(_CONFIG_FILE) as f: return {**defaults,**json.load(f)}
     except Exception: return defaults
 
-
 # ═══════════════════════════════════════════════════════════
-#   CONSTRUCCIÓN DEL DASHBOARD (reutilizable)
 # ═══════════════════════════════════════════════════════════
 def construir_dashboard() -> str:
     """Genera dashboard.html con datos frescos. Devuelve HTML como string."""
@@ -9182,7 +8816,6 @@ def construir_dashboard() -> str:
             print(f"  finbit_tickers.json error: {e}")
 
     if API_KEY not in ("TU_KEY_AQUI", ""):
-        # Obtener macro PRIMERO (se reutiliza en todo el análisis)
         print("[MACRO] Obteniendo VIX y SPY...")
         vix = get_vix()
         spy = get_spy_macro()
@@ -9216,13 +8849,8 @@ def construir_dashboard() -> str:
     print(f"  Dashboard listo — {len(port_data)} pos · {len(scan_data)} scan · {len(radar_data)} radar · TC={tc:.4f} · VIX={vix:.1f}")
     return html
 
-
 # ═══════════════════════════════════════════════════════════
 #   SERVIDOR FLASK  — arquitectura non-blocking
-#   El dashboard se construye en un hilo separado.
-#   Mientras no está listo, / devuelve una pantalla de
-#   loading elegante que hace polling cada 3 s a /status.
-#   Nunca se bloquea el worker de Flask/Gunicorn.
 # ═══════════════════════════════════════════════════════════
 app = Flask(__name__)
 _dash_html: str = ""
@@ -9237,7 +8865,6 @@ db_restore_from_github()
 init_db()
 init_score_history()
 threading.Thread(target=_loop_backup_github, daemon=True).start()
-
 
 # ── Pantalla de loading profesional ──────────────────────
 _LOADING_HTML = """<!DOCTYPE html>
@@ -9365,16 +8992,13 @@ _LOADING_HTML = """<!DOCTYPE html>
 </script>
 </body></html>"""
 
-# Estado del build en progreso (para reportar al /status)
 _build_stage: str = ""
 _build_elapsed: float = 0.0
-
 
 def _get_html() -> str:
     """Retorna el dashboard si ya está listo, o "" si todavía está construyéndose."""
     global _dash_html
     return _dash_html
-
 
 # ── Página principal — NUNCA bloquea ─────────────────────
 @app.route("/")
@@ -9382,9 +9006,7 @@ def index():
     html = _get_html()
     if html:
         return Response(html, mimetype="text/html")
-    # Dashboard aún no listo → devolver loading screen instantáneamente
     return Response(_LOADING_HTML, mimetype="text/html")
-
 
 # ── Status endpoint (polling desde la loading screen) ────
 @app.route("/status")
@@ -9412,7 +9034,6 @@ def status():
         "elapsed":  elapsed,
         "error":    _build_error if _build_stage == "error" else "",
     })
-
 
 # ── Función de build con reporte de etapas ───────────────
 _BUILD_TIMEOUT = 480   # segundos — 8 min, suficiente para scanner + radar completos
@@ -9480,7 +9101,6 @@ def _construir_con_etapas():
                     scan_data = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                                vix=vix, spy=spy)
                     print(f"[build] Scanner: {len(scan_data)} tickers procesados")
-                    # Guardar para alertas Telegram
                     global _scan_resultados
                     _scan_resultados = scan_data or []
                 except Exception as e:
@@ -9494,7 +9114,6 @@ def _construir_con_etapas():
 
             if not _timeout_exceeded():
                 try:
-                    # Portafolio DESPUÉS del scanner — reutiliza el caché ya lleno
                     port_data = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
                 except Exception as e:
                     print(f"[build] Portafolio error (continuando): {e}")
@@ -9533,7 +9152,6 @@ def _construir_con_etapas():
                             riesgo_pct, rr_min, vix=vix, spy=spy, regimen=regimen)
         _build_stage = "html_ok"
 
-        # Escribir al disco también (por si se reinicia)
         try:
             with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                 f.write(html)
@@ -9553,7 +9171,6 @@ def _construir_con_etapas():
         import traceback; traceback.print_exc()
 
         # ── Si el build falla (sin créditos API, timeout, etc.)
-        #    servir el dashboard anterior en lugar de pantalla de error
         if not _dash_html and os.path.exists(OUTPUT_FILE):
             try:
                 with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
@@ -9565,7 +9182,6 @@ def _construir_con_etapas():
                     print(f"[build] ⚠️  Build falló — sirviendo dashboard anterior desde disco")
             except Exception:
                 pass
-        # Intentar servir un dashboard mínimo con lo que tengamos
         try:
             tc_fallback = 17.5
             ops = get_operaciones()
@@ -9587,9 +9203,6 @@ def _construir_con_etapas():
     finally:
         _refresh_in_progress = False
 
-
-# Build automático desactivado — solo se construye cuando el usuario presiona ↺ Actualizar
-# Esto evita consumir créditos de API en cada deploy o reinicio del servidor
 print("[server] ⏸️  Build automático desactivado — presiona ↺ Actualizar para cargar datos")
 
 # ── Actualizar dashboard (botón en el HTML) ───────────────
@@ -9599,12 +9212,10 @@ def refresh():
     global _dash_html, _refresh_in_progress
     if _refresh_in_progress:
         return jsonify({"status": "busy", "msg": "Ya hay una actualización en curso"}), 202
-    # Invalidar cache para que / muestre loading screen mientras reconstruye
     with _dash_lock:
         _dash_html = ""
     threading.Thread(target=_construir_con_etapas, daemon=True).start()
     return jsonify({"status": "ok", "msg": "Actualización iniciada"})
-
 
 # ── Timeframe (selector en el HTML — guardado en config) ──
 @app.route("/set_tf/<tf>")
@@ -9621,7 +9232,6 @@ def set_tf(tf: str):
         print(f"[server] set_tf error: {e}")
     return jsonify({"status": "ok", "tf": tf_code})
 
-
 # ── API: tickers del scanner ──────────────────────────────
 @app.route("/api/tickers")
 def api_tickers():
@@ -9629,7 +9239,6 @@ def api_tickers():
         activos = get_all_scanner_tickers()
         defaults_activos = [t for t in activos if t in SCANNER_TICKERS]
         custom_activos   = [t for t in activos if t not in SCANNER_TICKERS]
-        # Hardcoded que el usuario eliminó (en DB con activo=0)
         con = sqlite3.connect(DB_FILE)
         con.row_factory = sqlite3.Row
         try:
@@ -9647,7 +9256,6 @@ def api_tickers():
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
-
 @app.route("/api/tickers/add", methods=["POST"])
 def api_tickers_add():
     try:
@@ -9657,20 +9265,15 @@ def api_tickers_add():
         origen   = data.get("origen", "USA")
         if not ticker:
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
-        # Validar formato
         import re as _re
         if not _re.match(r'^[A-Z0-9.]{1,15}$', ticker):
             return jsonify({"status": "error", "error": f"Ticker inválido: {ticker}"}), 400
         add_ticker_db(ticker, exchange, origen)
-        # Backup inmediato — evita perder el ticker si Render reinicia antes del backup horario
         threading.Thread(target=db_backup_to_github, daemon=True).start()
-        # NO invalidamos el cache aquí — el ticker aparecerá en la próxima actualización
-        # Invalidar el cache causaba que el dashboard quedara en blanco esperando rebuild
         return jsonify({"status": "ok", "ticker": ticker,
                         "msg": f"{ticker} guardado. Aparecerá en la próxima actualización (↺)."})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
-
 
 @app.route("/api/tickers/remove", methods=["POST"])
 def api_tickers_remove():
@@ -9682,12 +9285,10 @@ def api_tickers_remove():
             return jsonify({"status": "error", "error": "ticker vacío"}), 400
         remove_ticker_db(ticker)
         _dash_html = ""
-        # Backup inmediato — evita perder el cambio si Render reinicia
         threading.Thread(target=db_backup_to_github, daemon=True).start()
         return jsonify({"status": "ok", "ticker": ticker})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
-
 
 # ── API: operaciones ──────────────────────────────────────
 @app.route("/api/operaciones")
@@ -9696,7 +9297,6 @@ def api_operaciones():
         return jsonify(get_operaciones())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/api/operaciones/delete", methods=["POST"])
 def api_ops_delete():
@@ -9711,7 +9311,6 @@ def api_ops_delete():
         con.execute("DELETE FROM operaciones WHERE id=?", (int(oid),))
         con.commit()
         con.close()
-        # Reconstruir portafolio desde cero con las operaciones restantes
         ops = get_operaciones()
         con2 = sqlite3.connect(DB_FILE)
         con2.execute("DELETE FROM portafolio")
@@ -9735,7 +9334,6 @@ def api_ops_delete():
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
-
 @app.route("/api/operaciones/import", methods=["POST"])
 def api_ops_import():
     """
@@ -9749,7 +9347,6 @@ def api_ops_import():
         tc  = get_tipo_cambio(API_KEY)
         con = sqlite3.connect(DB_FILE)
 
-        # Limpiar y reimportar operaciones
         con.execute("DELETE FROM operaciones")
         con.execute("DELETE FROM portafolio")
         con.commit()
@@ -9767,7 +9364,6 @@ def api_ops_import():
                 )
                 op_id = cur.lastrowid
                 con.commit()
-                # Guardar en diario si tiene razón de entrada
                 razon = op.get("razon_entrada", "").strip()
                 if razon:
                     con.execute(
@@ -9781,7 +9377,6 @@ def api_ops_import():
                          razon, op.get("setup_tipo",""), op.get("rr_esperado", 0), op_id)
                     )
                     con.commit()
-                # Reconstruir portafolio op por op
                 upsert_portafolio_from_op({
                     "ticker":     op.get("ticker","").upper(),
                     "tipo":       op.get("tipo"),
@@ -9794,12 +9389,9 @@ def api_ops_import():
                 print(f"  [import] op skip: {e}")
 
         con.close()
-        # No invalidar _dash_html aquí — la sincronización es silenciosa
-        # Solo se refleja en el próximo ↺ Actualizar
         return jsonify({"status": "ok", "importadas": len(ops)})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
-
 
 # ── API: config ───────────────────────────────────────────
 @app.route("/api/config", methods=["POST"])
@@ -9814,12 +9406,10 @@ def api_config():
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
-
 # ── Health check (Render lo necesita) ────────────────────
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "version": "3.2"})
-
 
 # ── API Debug — diagnóstico rápido desde el browser ──────
 @app.route("/api/debug")
@@ -9832,10 +9422,8 @@ def api_debug():
         "twelvedata_k1": {"nota": "prueba desactivada — ahorra créditos"},
         "twelvedata_k2": {"nota": "prueba desactivada — ahorra créditos"},
     }
-    # No hacer llamadas de prueba a TwelveData — cada una consume créditos
 
     return jsonify(resultado)
-
 
 # ── API Test — prueba todos los tickers del scanner ──────
 @app.route("/api/test")
@@ -9865,10 +9453,7 @@ def api_test():
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
-
-
 # ═══════════════════════════════════════════════════════════
-#   API DIARIO Y RENDIMIENTO
 # ═══════════════════════════════════════════════════════════
 @app.route("/api/diario/cerrar", methods=["POST"])
 def api_diario_cerrar():
@@ -9890,7 +9475,6 @@ def api_exportar_scanner():
     """Exporta el último scanner como CSV descargable."""
     import io, csv
     global _dash_html
-    # Obtener datos del scanner desde la DB/cache
     try:
         tc  = get_tipo_cambio(API_KEY)
         cfg = cargar_config()
@@ -9952,7 +9536,6 @@ def api_exportar_excel():
     output = io.StringIO()
     writer = csv.writer(output)
 
-    # Hoja 1: P&L histórico
     writer.writerow(["=== RENDIMIENTO HISTÓRICO ==="])
     writer.writerow(["Fecha", "Capital MXN", "P&L día MXN", "P&L acum %", "SPY precio"])
     for h in get_pnl_historico(dias=365):
@@ -9977,9 +9560,7 @@ def api_exportar_excel():
         headers={"Content-Disposition": "attachment; filename=finbit_rendimiento.csv"}
     )
 
-
 # ═══════════════════════════════════════════════════════════
-#   API WATCHLIST
 # ═══════════════════════════════════════════════════════════
 @app.route("/api/watchlist/agregar", methods=["POST"])
 def api_wl_agregar():
@@ -10000,12 +9581,9 @@ def api_wl_quitar(ticker):
 def api_wl_lista():
     return jsonify(get_watchlist())
 
-
 # ═══════════════════════════════════════════════════════════
-#   MÓDULO SEMIS ETF — DETECTOR DE CAMBIO DE TENDENCIA
 # ═══════════════════════════════════════════════════════════
 
-# ETFs de semiconductores monitoreados
 SEMIS_ETFS = {
     "SMH":  ("SMH",  "NASDAQ"),   # Referencia del sector sin apalancamiento
     "SOXL": ("SOXL", "NYSE"),     # 3x alcista
@@ -10013,7 +9591,6 @@ SEMIS_ETFS = {
     "SOXX": ("SOXX", "NASDAQ"),   # Sin apalancamiento alternativo
 }
 
-# Empresas que MUEVEN el sector — en orden de impacto en SMH/SOXL
 SEMIS_EMPRESAS = {
     "NVDA": ("NVDA", "NASDAQ"),   # #1 — IA, GPUs, mueve todo el sector
     "AMD":  ("AMD",  "NASDAQ"),   # #2 — competidor NVDA, GPUs IA
@@ -10025,12 +9602,10 @@ SEMIS_EMPRESAS = {
     "INTC": ("INTC", "NASDAQ"),   # #8 — Intel, en declive pero aún mueve
 }
 
-# Contexto macro — QQQ confirma dirección del NASDAQ
 SEMIS_MACRO = {
     "QQQ":  ("QQQ",  "NASDAQ"),   # NASDAQ ETF — macro de tech
 }
 
-# Tu posición actual en SOXS
 SEMIS_POSICION_ACTUAL = {
     "ticker": "SOXS",
     "titulos": 18,
@@ -10038,7 +9613,6 @@ SEMIS_POSICION_ACTUAL = {
     "tipo": "BAJISTA",
     "notas": "Posición abierta — esperando corrección de semis"
 }
-
 
 def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
     """
@@ -10059,7 +9633,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
     v = pd.Series(vols)
     n = len(c)
 
-    # EMAs clave
     e9   = float(ema(c, 9).iloc[-1])
     e21  = float(ema(c, 21).iloc[-1])
     e50  = float(ema(c, 50).iloc[-1])
@@ -10071,14 +9644,11 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
     high_h   = highs[-1]
     low_h    = lows[-1]
 
-    # Volumen relativo
     vol_avg = float(v.rolling(20).mean().iloc[-1])
     vol_rel = float(v.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
 
-    # RSI
     rsi_v = float(rsi(c, 14).iloc[-1])
 
-    # MACD
     macd_line, signal_line, hist_v = macd(c)
     macd_val   = float(macd_line.iloc[-1])
     signal_val = float(signal_line.iloc[-1])
@@ -10103,11 +9673,9 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
     vela_fuerte = cuerpo >= cuerpos_avg * 1.5  # vela 1.5x más grande que el promedio
 
     # ════════════════════════════════════════════════════════════════
-    # DETECCIÓN BAJISTA (4 pasos para SOXS)
     # ════════════════════════════════════════════════════════════════
     pasos_bajista = []
 
-    # Paso 1: Pierde EMA9 diaria
     paso1_bajista = precio < e9 and precio_1 >= e9 * 0.995
     pasos_bajista.append({
         "num": 1, "ok": paso1_bajista,
@@ -10115,7 +9683,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Precio ${precio*tc:,.2f} {'< ✅' if paso1_bajista else '> ❌'} EMA9 ${e9*tc:,.2f}"
     })
 
-    # Paso 2: Vela roja fuerte
     paso2_bajista = vela_roja and vela_fuerte and vol_rel >= 1.3
     pasos_bajista.append({
         "num": 2, "ok": paso2_bajista,
@@ -10123,8 +9690,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Vela {'roja fuerte ✅' if paso2_bajista else 'no confirmada ❌'} · Volumen {vol_rel:.1f}x"
     })
 
-    # Paso 3: El rebote falla (precio intenta subir pero cierra bajo EMA9)
-    # Detectar: vela anterior fue verde pero hoy cierra rojo o plano bajo EMA9
     vela_anterior_verde = closes[-2] > opens[-2] if n > 1 else False
     paso3_bajista = vela_anterior_verde and precio < e9 and macd_val < signal_val
     pasos_bajista.append({
@@ -10133,7 +9698,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Rebote {'falló ✅' if paso3_bajista else 'pendiente ❌'} · MACD {'bajista' if macd_val < signal_val else 'alcista'}"
     })
 
-    # Paso 4: Rompe mínimos previos
     paso4_bajista = low_h < min_prev and vol_rel >= 1.2
     pasos_bajista.append({
         "num": 4, "ok": paso4_bajista,
@@ -10144,11 +9708,9 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
     pasos_bajista_ok = sum(1 for p in pasos_bajista if p["ok"])
 
     # ════════════════════════════════════════════════════════════════
-    # DETECCIÓN ALCISTA (4 pasos para SOXL)
     # ════════════════════════════════════════════════════════════════
     pasos_alcista = []
 
-    # Paso 1: Supera EMA9 diaria
     paso1_alcista = precio > e9 and precio_1 <= e9 * 1.005
     pasos_alcista.append({
         "num": 1, "ok": paso1_alcista,
@@ -10156,7 +9718,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Precio ${precio*tc:,.2f} {'> ✅' if paso1_alcista else '< ❌'} EMA9 ${e9*tc:,.2f}"
     })
 
-    # Paso 2: Vela verde fuerte con volumen
     paso2_alcista = vela_verde and vela_fuerte and vol_rel >= 1.3
     pasos_alcista.append({
         "num": 2, "ok": paso2_alcista,
@@ -10164,7 +9725,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Vela {'verde fuerte ✅' if paso2_alcista else 'no confirmada ❌'} · Volumen {vol_rel:.1f}x"
     })
 
-    # Paso 3: Pullback se sostiene (retrocede pero no pierde EMA9)
     vela_anterior_roja = closes[-2] < opens[-2] if n > 1 else False
     paso3_alcista = vela_anterior_roja and precio > e9 and macd_val > signal_val
     pasos_alcista.append({
@@ -10173,7 +9733,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "detalle": f"Pullback {'sostenido ✅' if paso3_alcista else 'pendiente ❌'} · MACD {'alcista' if macd_val > signal_val else 'bajista'}"
     })
 
-    # Paso 4: Rompe máximos previos
     paso4_alcista = high_h > max_prev and vol_rel >= 1.2
     pasos_alcista.append({
         "num": 4, "ok": paso4_alcista,
@@ -10205,7 +9764,6 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         senal_desc = f"⚪ Sin señal clara · {pasos_bajista_ok}/4 bajistas · {pasos_alcista_ok}/4 alcistas"
         senal_color = "var(--muted)"
 
-    # Tendencia general del sector (SMH como referencia)
     tendencia_sector = "alcista" if precio > e50 > e200 else "bajista" if precio < e50 else "lateral"
 
     return {
@@ -10236,14 +9794,12 @@ def analizar_semis_etf(symbol: str, exchange: str, tc: float) -> dict:
         "max_10_mxn": round(max_10 * tc, 2),
     }
 
-
 def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
     """
     Análisis técnico base para cualquier ticker del módulo semis.
     SOLO usa datos ya en cache — NUNCA hace llamadas API nuevas.
     Si el ticker no está en cache, devuelve valido=False.
     """
-    # Buscar en cache sin llamar a la API
     key_1d = f"{symbol}:1day"
     key_1d_ex = f"{symbol}:{exchange}:1day"
     
@@ -10253,7 +9809,6 @@ def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
             vals = _TD_CACHE[key]
             break
     
-    # También buscar por símbolo parcial en caso de variación de key
     if not vals:
         for k, v in _TD_CACHE.items():
             if symbol.upper() in k.upper() and "1day" in k.lower() and v:
@@ -10307,18 +9862,15 @@ def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
     vela_verde  = precio > open_h and es_vela_grande
     vela_fuerte = cuerpo >= cuerpos_avg * 1.5
 
-    # Tendencia
     sobre_e9   = precio > e9
     sobre_e50  = precio > e50
     sobre_e200 = precio > e200
     tendencia  = "alcista" if sobre_e50 and sobre_e200 else "bajista" if not sobre_e50 else "lateral"
 
-    # Momentum: MACD histograma acelerando o desacelerando
     momentum = "acelerando_alcista" if hist_val > 0 and hist_val > hist_prev else \
                "acelerando_bajista" if hist_val < 0 and hist_val < hist_prev else \
                "desacelerando"
 
-    # Cambio % del día
     cambio_dia_pct = (precio - precio_1) / precio_1 * 100 if precio_1 else 0
 
     return {
@@ -10341,7 +9893,6 @@ def _analizar_base_semis(symbol: str, exchange: str, tc: float) -> dict:
         "min_10_mxn": round(min_10*tc,2), "max_10_mxn": round(max_10*tc,2),
         "closes": closes[-20:],   # últimas 20 para mini-gráfico
     }
-
 
 def _detectar_4_pasos(base: dict, tc: float) -> dict:
     """Detecta los 4 pasos bajistas y alcistas + Estado Actual de la tendencia."""
@@ -10371,7 +9922,6 @@ def _detectar_4_pasos(base: dict, tc: float) -> dict:
     vela_anterior_roja  = closes[-2] < base["open_h"] if len(closes) > 1 else False
 
     # ── ESTADO ACTUAL (modo confirmación) ────────────────────
-    # Evalúa la condición ACTUAL del ETF sin requerir que sea un giro de HOY
     alcista_fuerte   = (precio > e9 > e21 and macd_val > signal_val and
                         hist_val > 0 and rsi_v > 55 and cambio > 2.0)
     alcista_activo   = (precio > e9 and macd_val > signal_val and rsi_v > 45)
@@ -10443,7 +9993,6 @@ def _detectar_4_pasos(base: dict, tc: float) -> dict:
     pb_ok = sum(1 for p in pasos_bajista if p["ok"])
     pa_ok = sum(1 for p in pasos_alcista if p["ok"])
 
-    # Señal de entrada (los 4 pasos completos)
     if pb_ok == 4:
         senal="BAJISTA_FULL"; senal_desc="🔴 SEÑAL DE ENTRADA — 4/4 pasos bajistas · Entra a SOXS"; senal_color="#ef4444"
     elif pb_ok == 3:
@@ -10467,13 +10016,10 @@ def _detectar_4_pasos(base: dict, tc: float) -> dict:
         "estado_color": estado_color, "estado_accion": estado_accion,
     }
 
-
 def _calcular_decay_estimado(dias: int, tipo: str = "3x") -> float:
     """Estima el decay acumulado de un ETF apalancado 3x en N días."""
-    # Decay diario promedio histórico de ETFs 3x: ~0.1% diario en mercado lateral
     decay_diario = 0.001
     return round((1 - (1 - decay_diario) ** dias) * 100, 2)
-
 
 def analizar_todos_semis(tc: float) -> dict:
     """
@@ -10485,7 +10031,6 @@ def analizar_todos_semis(tc: float) -> dict:
     empresas  = {}
     macro     = {}
 
-    # ETFs principales
     for nombre, (symbol, exchange) in SEMIS_ETFS.items():
         try:
             base = _analizar_base_semis(symbol, exchange, tc)
@@ -10498,7 +10043,6 @@ def analizar_todos_semis(tc: float) -> dict:
             print(f"[semis] ETF {nombre}: {e}")
             etfs[nombre] = {"valido": False, "nombre": nombre}
 
-    # Empresas que mueven el sector
     for nombre, (symbol, exchange) in SEMIS_EMPRESAS.items():
         try:
             base = _analizar_base_semis(symbol, exchange, tc)
@@ -10510,7 +10054,6 @@ def analizar_todos_semis(tc: float) -> dict:
             print(f"[semis] Empresa {nombre}: {e}")
             empresas[nombre] = {"valido": False, "nombre": nombre}
 
-    # Macro: QQQ
     for nombre, (symbol, exchange) in SEMIS_MACRO.items():
         try:
             base = _analizar_base_semis(symbol, exchange, tc)
@@ -10577,7 +10120,6 @@ def analizar_todos_semis(tc: float) -> dict:
         "impacto_hoy": impacto_hoy,
     }
 
-
 def render_tab_semis(semis_data: dict, tc: float) -> str:
     """Tab completo de Semis ETF."""
     etfs     = semis_data.get("etfs", {})
@@ -10588,7 +10130,6 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
     divergencia_desc = semis_data.get("divergencia_desc", "")
     impacto_hoy = semis_data.get("impacto_hoy", [])
 
-    # Guardar señales en historial
     for nombre, r in etfs.items():
         if r.get("valido") and r.get("senal", "NEUTRAL") != "NEUTRAL":
             guardar_senal_semis(nombre, r["senal"], r["precio_mxn"],
@@ -10672,14 +10213,11 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
     soxs_r = etfs.get("SOXS", {})
     soxl_r = etfs.get("SOXL", {})
 
-    # Evaluar condiciones para entrar a SOXS
     smh_bajista  = smh_r.get("estado","") in ("TENDENCIA_BAJISTA","TENDENCIA_FUERTE_BAJISTA")
     soxl_bajista = soxl_r.get("estado","") in ("TENDENCIA_BAJISTA","TENDENCIA_FUERTE_BAJISTA")
     pasos_soxs   = soxs_r.get("pasos_bajista_ok", 0) if soxs_r.get("valido") else 0
-    # SOXS sube cuando semis bajan — sus pasos alcistas son la señal
     pasos_soxs_entrada = soxs_r.get("pasos_alcista_ok", 0) if soxs_r.get("valido") else 0
 
-    # Determinar nivel de alerta
     if smh_bajista and soxl_bajista and pasos_soxs_entrada >= 4:
         alerta_nivel  = "ENTRAR"
         alerta_bg     = "linear-gradient(135deg,#1a0a0a,#450a0a)"
@@ -10746,7 +10284,6 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
         estado_color  = r.get("estado_color", "var(--muted)")
         estado_accion = r.get("estado_accion", "")
 
-        # Borde de la card según Estado Actual (no solo señal de cambio)
         borde_col = estado_color if r.get("estado","") != "LATERAL" else senal_col
 
         pasos_b = "".join(
@@ -10947,7 +10484,6 @@ def render_tab_semis(semis_data: dict, tc: float) -> str:
   {notas_html}
 </div>'''
 
-
 # ═══════════════════════════════════════════════════════════
 #   MAIN
 # ═══════════════════════════════════════════════════════════
@@ -10974,7 +10510,6 @@ if __name__ == "__main__":
         except Exception as _e:
             print(f"[server] No se pudo cargar dashboard anterior: {_e}")
 
-    # Solo lanzar backup — el build se activa manualmente con ↺ Actualizar
     threading.Thread(target=_loop_backup_github, daemon=True).start()
     threading.Thread(target=_loop_alertas_telegram, daemon=True).start()
     print("[alertas] 🔔 Monitoreo Telegram activo — Ganga y Pre-breakout 4/5 en horario de mercado")
