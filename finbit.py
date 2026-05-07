@@ -7992,7 +7992,7 @@ function showTab(name,btn){{
   const tab=document.getElementById('tab-'+name);
   if(tab){{
     tab.classList.add('active');
-    tab.style.removeProperty('display');
+    tab.style.setProperty('display','block','important');
   }}
   if(btn)btn.classList.add('active');
 }}
