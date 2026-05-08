@@ -4889,8 +4889,7 @@ def render_scan_rows(scanner, tc):
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
             f'{etapa_badge}'
-            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}'
-            f'<br><button onclick="event.stopPropagation();abrirIA(\'{_n}\')" style="margin-top:3px;font-size:9px;padding:2px 7px;border-radius:4px;border:1px solid #7c3aed;background:transparent;color:#7c3aed;cursor:pointer">🧠 IA</button></td>'
+            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
