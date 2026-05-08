@@ -4857,21 +4857,13 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                + ('<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'
+                + ('<div style="margin-top:10px">'  
                    '<button onclick="event.stopPropagation();wlToggle(this,\''+_n+'\')"'
                    ' id="wl-btn-'+_n+'"'
                    ' style="font-size:11px;padding:6px 14px;border-radius:8px;'
                    'border:1px solid #3b82f6;background:var(--surface2);'
                    'color:#3b82f6;cursor:pointer;font-weight:600">'
-                   '👁 Agregar a Watchlist</button>'
-                   '<button onclick="event.stopPropagation();analizarConIA(this,\''+_n+'\')"'
-                   ' id="ia-btn-'+_n+'"'
-                   ' style="font-size:11px;padding:6px 14px;border-radius:8px;'
-                   'border:1px solid #7c3aed;background:var(--surface2);'
-                   'color:#7c3aed;cursor:pointer;font-weight:600">'
-                   '🧠 Analizar con IA</button>'
-                   '</div>'
-                   '<div id="ia-result-'+_n+'" style="margin-top:10px;display:none"></div>')
+                   '👁 Agregar a Watchlist</button></div>')
                 + '</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
@@ -5554,34 +5546,6 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "setup":         r.get("setup",{}),
         "ganga":         r.get("ganga",{}),
         "sector":        r.get("sector",{}),
-    } for r in scan_data], ensure_ascii=False)
-    # JSON extendido para análisis IA — incluye OBV, capitulación, inicio, ADX
-    scan_data_json_ia = json.dumps([{
-        "nombre":        r.get("nombre",""),
-        "estado":        r.get("estado",""),
-        "precio_mxn":    r.get("precio_mxn",0),
-        "entrada_mxn":   r.get("entrada_mxn",0),
-        "stop_mxn":      r.get("stop_mxn",0),
-        "obj_mxn":       r.get("obj_mxn",0),
-        "rr":            r.get("rr",0),
-        "rsi":           r.get("rsi",0),
-        "macd_ok":       r.get("macd_ok",False),
-        "ema200_ok":     r.get("ema200_ok",False),
-        "score":         r.get("score",0),
-        "score_ajustado":r.get("score_ajustado",0),
-        "total_criterios":r.get("total_criterios",13),
-        "adx":           r.get("adx",0),
-        "setup":         r.get("setup",{}),
-        "ganga":         r.get("ganga",{}),
-        "sector":        r.get("sector",{}),
-        "obv":           r.get("obv",{}),
-        "inicio":        r.get("inicio",{}),
-        "capitulacion":  r.get("capitulacion",{}),
-        "sr":            {"contexto": r.get("sr",{}).get("contexto",""),
-                          "soportes": [{"precio_mxn": round(z.get("precio",0)*tc,2), "fuerza": z.get("fuerza",0)}
-                                        for z in r.get("sr",{}).get("soportes",[])[:3]],
-                          "resistencias": [{"precio_mxn": round(z.get("precio",0)*tc,2), "fuerza": z.get("fuerza",0)}
-                                            for z in r.get("sr",{}).get("resistencias",[])[:3]]},
     } for r in scan_data], ensure_ascii=False)
 
     port_rows       = render_port_rows(port_data, tc)
@@ -7584,7 +7548,6 @@ setTimeout(calcRiesgo, 100);
 </script>
 </div>
 
-<script id="_scan_ia_data" type="application/json">{scan_data_json_ia}</script>
 <script>
 const TC = {tc:.4f};
 const PORT_BASE = {port_json};
@@ -7640,13 +7603,12 @@ function recalcPortafolio(ops){{
         map[t].costoTotal+=op.titulos*op.precio_mxn;
         map[t].titulos+=op.titulos;
       }} else if(op.tipo==='VENTA'){{
-        if(!map[t]){{
-          // Venta sin compra en localStorage — buscar en PORT_BASE
+        if(!map[t] || (map[t].titulos<=0 && map[t].costoTotal<=0)){{
           const base=PORT_BASE.find(p=>p.ticker===t);
           if(base) map[t]={{titulos:base.titulos,costoTotal:base.cto_prom_mxn*base.titulos,origen:base.origen||'USA',mercado:base.mercado||'SIC',precio_actual_mxn:base.precio_actual_mxn,pl_mxn:0,pl_pct:0}};
-          else map[t]={{titulos:0,costoTotal:0,origen:'USA',mercado:'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
+          else if(!map[t]) map[t]={{titulos:0,costoTotal:0,origen:'USA',mercado:'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
         }}
-        if(map[t].titulos>0){{
+        if(map[t] && map[t].titulos>0){{
           const cto=map[t].costoTotal/map[t].titulos;
           map[t].costoTotal-=op.titulos*cto;
           map[t].titulos-=op.titulos;
@@ -8359,95 +8321,6 @@ function restaurarTickerScanner(ticker) {{
   }})
   .then(() => cargarTickersPersonalizados())
   .catch(() => cargarTickersPersonalizados());
-}}
-
-// ── Analizar con IA — resumen narrativo por ticker ──────────
-const SCAN_DATA_JSON = (function(){{
-  try {{
-    const raw = document.getElementById('_scan_ia_data');
-    return raw ? JSON.parse(raw.textContent) : [];
-  }} catch(e) {{ return []; }}
-}})();
-
-function analizarConIA(btn, ticker) {{
-  const resultDiv = document.getElementById('ia-result-' + ticker);
-  if (!resultDiv) return;
-
-  // Si ya tiene resultado, toggle
-  if (resultDiv.style.display !== 'none' && resultDiv.innerHTML) {{
-    resultDiv.style.display = 'none';
-    btn.textContent = '🧠 Analizar con IA';
-    return;
-  }}
-
-  btn.disabled = true;
-  btn.textContent = '🧠 Analizando...';
-  resultDiv.style.display = 'block';
-  resultDiv.innerHTML = '<div style="padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--muted)">⏳ Generando análisis con IA...</div>';
-
-  // Buscar datos del ticker en SCAN_DATA_JSON
-  const datos = SCAN_DATA_JSON.find(r => r.nombre === ticker) || {{}};
-
-  // Construir contexto para Claude
-  const contexto = `Eres un analista de swing trading experto. Analiza este ticker y da una recomendación clara y directa en español.
-
-TICKER: ${{ticker}}
-Precio actual: $${{datos.precio_mxn || 0}} MXN
-Estado Finbit: ${{datos.estado || 'N/A'}}
-Score técnico: ${{datos.score_ajustado || datos.score || 0}}/${{datos.total_criterios || 13}}
-RSI: ${{datos.rsi || 0}}
-R:R: ${{datos.rr || 0}}x
-MACD alcista: ${{datos.macd_ok ? 'Sí' : 'No'}}
-EMA200: ${{datos.ema200_ok ? 'Precio sobre EMA200' : 'Precio BAJO EMA200'}}
-OBV: ${{datos.obv?.tendencia || 'sin datos'}}
-ADX: ${{datos.adx || 0}}
-Entrada EMA9: $${{datos.entrada_mxn || 0}} MXN
-Stop dinámico: $${{datos.stop_mxn || 0}} MXN
-Objetivo: $${{datos.obj_mxn || 0}} MXN
-Setup: ${{datos.setup?.tipo_setup || 'N/A'}}
-Bloqueadores: ${{(datos.setup?.bloqueadores || []).join(', ') || 'ninguno'}}
-Sector: ${{datos.sector?.desc || 'sin datos'}}
-Ganga: ${{datos.ganga?.es_ganga ? 'Sí, ' + datos.ganga.margen_pct + '% bajo objetivo' : 'No'}}
-Acumulación: ${{datos.inicio?.es_inicio ? datos.inicio.nivel + ' (' + datos.inicio.n_cumplidas + '/5)' : 'No'}}
-Capitulación: ${{datos.capitulacion?.es_capitulacion ? 'Sí - nivel ' + datos.capitulacion.nivel : 'No'}}
-
-Da un análisis en 4-5 oraciones máximo. Estructura:
-1. Situación actual del precio vs indicadores clave
-2. Lo más importante del S/R (si tienes datos)
-3. Lo que favorece y lo que va en contra
-4. Veredicto claro: COMPRAR / NO ENTRAR / VIGILAR / SALIR con precio específico de acción
-
-Sé directo, sin rodeos, como un trader experimentado hablando con otro trader.`;
-
-  fetch('https://api.anthropic.com/v1/messages', {{
-    method: 'POST',
-    headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{{ role: 'user', content: contexto }}]
-    }})
-  }})
-  .then(r => r.json())
-  .then(d => {{
-    const texto = d.content?.[0]?.text || 'Sin respuesta de la IA';
-    resultDiv.innerHTML = `
-      <div style="background:linear-gradient(135deg,#1e1b4b,#2d1b69);border:1px solid #7c3aed;
-        border-radius:10px;padding:14px 16px;font-size:12px;line-height:1.7;color:#e9d5ff">
-        <div style="font-size:10px;font-weight:700;color:#a78bfa;margin-bottom:8px;
-          text-transform:uppercase;letter-spacing:.08em">🧠 Análisis IA — ${{ticker}}</div>
-        <div style="color:#f3f0ff">${{texto.replace(/\n/g,'<br>')}}</div>
-        <div style="margin-top:10px;font-size:9px;color:#6d28d9;border-top:1px solid #4c1d95;padding-top:6px">
-          ⚠️ Solo fines educativos — no es asesoría financiera</div>
-      </div>`;
-    btn.disabled = false;
-    btn.textContent = '🧠 Ocultar análisis';
-  }})
-  .catch(e => {{
-    resultDiv.innerHTML = '<div style="padding:10px;background:#fef2f2;border-radius:8px;font-size:11px;color:#dc2626">Error al conectar con IA. Intenta de nuevo.</div>';
-    btn.disabled = false;
-    btn.textContent = '🧠 Analizar con IA';
-  }});
 }}
 
 function actualizarDashboard() {{
@@ -9289,7 +9162,7 @@ def api_exportar_excel():
 # ═══════════════════════════════════════════════════════════
 @app.route("/api/watchlist/agregar", methods=["POST"])
 def api_wl_agregar():
-    data   = request.get_json(silent=True) or {}
+    data   = flask_req.get_json(silent=True) or {}
     ticker = data.get("ticker", "").upper().strip()
     notas  = data.get("notas", "")
     if not ticker:
