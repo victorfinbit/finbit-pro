@@ -3886,7 +3886,7 @@ def render_port_rows(posiciones, tc):
             f'<td>{sr_inline_port}</td>'
             f'<td>{gbm_cell(pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">' + detail + '</td></tr>')
     return h
 
 def calcular_etapa(r: dict) -> tuple[str, str, str]:
@@ -4899,7 +4899,7 @@ def render_scan_rows(scanner, tc):
             f'{etapa_badge}'
             f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">' + detail + '</td></tr>')
     return h
 
 def render_hist_rows(ops):
