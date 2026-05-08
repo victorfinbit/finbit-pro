@@ -8195,17 +8195,12 @@ function wlToggle(btn, ticker) {{
   .then(d => {{
     const b = btn || document.getElementById('wl-btn-' + ticker);
     if (b) {{
-      b.textContent = '✅ En Watchlist';
+      b.textContent = '✅ Agregado';
       b.style.background = '#dcfce7';
       b.style.color = '#15803d';
       b.style.borderColor = '#15803d';
-      setTimeout(() => {{
-        b.textContent = '👁 Agregar a Watchlist';
-        b.style.background = 'var(--surface2)';
-        b.style.color = '#3b82f6';
-        b.style.borderColor = '#3b82f6';
-      }}, 2000);
     }}
+    setTimeout(() => {{ showTab('wl', document.querySelector('.nb[onclick*=wl]')); }}, 800);
   }})
   .catch(e => console.log('WL error:', e));
 }}
