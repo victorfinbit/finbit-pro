@@ -3886,7 +3886,7 @@ def render_port_rows(posiciones, tc):
             f'<td>{sr_inline_port}</td>'
             f'<td>{gbm_cell(pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">' + detail + '</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
 def calcular_etapa(r: dict) -> tuple[str, str, str]:
@@ -4857,21 +4857,13 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                + ('<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'
+                + ('<div style="margin-top:10px">'
                    '<button onclick="event.stopPropagation();wlToggle(this,\''+_n+'\')"'
                    ' id="wl-btn-'+_n+'"'
                    ' style="font-size:11px;padding:6px 14px;border-radius:8px;'
                    'border:1px solid #3b82f6;background:var(--surface2);'
                    'color:#3b82f6;cursor:pointer;font-weight:600">'
-                   '👁 Agregar a Watchlist</button>'
-                   '<button id="ia-btn-'+_n+'"'
-                   ' onclick="event.stopPropagation();analizarConIA(this)"'
-                   ' style="font-size:11px;padding:6px 14px;border-radius:8px;'
-                   'border:1px solid #7c3aed;background:var(--surface2);'
-                   'color:#7c3aed;cursor:pointer;font-weight:600">'
-                   '🧠 Análisis IA</button>'
-                   '</div>'
-                   '<div id="ia-res-'+_n+'" style="margin-top:8px;display:none"></div>')
+                   '👁 Agregar a Watchlist</button></div>')
                 + '</div>')
 
         score_color = "var(--green)" if score_aj>=7 else "var(--yellow)" if score_aj>=5 else "var(--red)"
@@ -4899,7 +4891,7 @@ def render_scan_rows(scanner, tc):
             f'{etapa_badge}'
             f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">' + detail + '</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
 
 def render_hist_rows(ops):
@@ -8324,86 +8316,6 @@ function restaurarTickerScanner(ticker) {{
   }})
   .then(() => cargarTickersPersonalizados())
   .catch(() => cargarTickersPersonalizados());
-}}
-
-// ── Análisis IA por ticker ────────────────────────────────
-function analizarConIA(btn) {{
-  const ticker = btn.id.replace('ia-btn-', '');
-  const resDiv = document.getElementById('ia-res-' + ticker);
-  if (!resDiv) return;
-
-  if (resDiv.style.display !== 'none' && resDiv.innerHTML.trim()) {{
-    resDiv.style.display = 'none';
-    btn.textContent = '🧠 Análisis IA';
-    return;
-  }}
-
-  btn.disabled = true;
-  btn.textContent = '⏳ Analizando...';
-  resDiv.style.display = 'block';
-  resDiv.innerHTML = '<div style="padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;color:var(--muted)">Generando análisis...</div>';
-
-  // Leer datos del DOM — filas de la tabla del scanner
-  const row = btn.closest('tr');
-  const prevRow = row ? row.previousElementSibling : null;
-  let precio = '', rsi = '', rr = '', estado = '', score = '', entrada = '', stop = '', obj = '';
-  if (prevRow) {{
-    const cells = prevRow.querySelectorAll('td');
-    if (cells[2]) precio = cells[2].textContent.trim().split('\n')[0];
-    if (cells[3]) entrada = cells[3].textContent.trim();
-    if (cells[4]) rr = cells[4].textContent.trim();
-    if (cells[5]) rsi = cells[5].textContent.trim();
-    if (cells[1]) estado = cells[1].textContent.trim();
-    if (cells[10]) score = cells[10].textContent.trim();
-  }}
-
-  const prompt = `Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera con GBM/SIC.
-
-TICKER: ${{ticker}}
-Precio actual: ${{precio}}
-Entrada EMA9: ${{entrada}}
-R:R: ${{rr}}
-RSI: ${{rsi}}
-Score Finbit: ${{score}}
-Estado: ${{estado}}
-
-Responde en exactamente 4 oraciones directas:
-1. Situación técnica actual
-2. Lo que favorece una entrada
-3. Lo que va en contra o riesgos
-4. Veredicto final: COMPRAR / VIGILAR / NO ENTRAR / SALIR con precio concreto de acción
-
-Sin rodeos. Sin intro. Directo al análisis.`;
-
-  fetch('https://api.anthropic.com/v1/messages', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages: [{{role: 'user', content: prompt}}]
-    }})
-  }})
-  .then(r => r.json())
-  .then(data => {{
-    const texto = (data.content && data.content[0] && data.content[0].text) || 'Sin respuesta';
-    resDiv.innerHTML =
-      '<div style="background:linear-gradient(135deg,#1e1b4b,#2d1b69);border:1px solid #7c3aed;' +
-      'border-radius:10px;padding:14px 16px;font-size:12px;line-height:1.8;color:#e9d5ff;margin-top:4px">' +
-      '<div style="font-size:10px;font-weight:700;color:#a78bfa;margin-bottom:8px;' +
-      'text-transform:uppercase;letter-spacing:.08em">🧠 Análisis IA — ' + ticker + '</div>' +
-      '<div style="color:#f3f0ff">' + texto.replace(/\n/g, '<br>') + '</div>' +
-      '<div style="margin-top:10px;font-size:9px;color:#6d28d9;border-top:1px solid #4c1d95;padding-top:6px">' +
-      '⚠️ Solo fines educativos — no es asesoría financiera</div>' +
-      '</div>';
-    btn.disabled = false;
-    btn.textContent = '🧠 Ocultar';
-  }})
-  .catch(() => {{
-    resDiv.innerHTML = '<div style="padding:10px;background:#fef2f2;border-radius:8px;font-size:11px;color:#dc2626">Error al conectar. Intenta de nuevo.</div>';
-    btn.disabled = false;
-    btn.textContent = '🧠 Análisis IA';
-  }});
 }}
 
 function actualizarDashboard() {{
