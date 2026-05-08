@@ -4889,8 +4889,7 @@ def render_scan_rows(scanner, tc):
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
             f'{etapa_badge}'
-            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}'
-            f'<br><button onclick="event.stopPropagation();abrirIA(&apos;{_n}&apos;)" style="font-size:9px;padding:2px 6px;margin-top:3px;border-radius:4px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer">🧠 IA</button></td>'
+            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
@@ -5060,7 +5059,7 @@ def render_radar_rows(radar, tc):
             f'<td>{sr_cell_r}</td>'
             f'<td>{gbm_cell(r["entrada_mxn"],r["stop_mxn"],r["obj_mxn"])}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="12" style="padding:0">{detail}</td></tr>')
     return h
 
 def resumen_hist(ops):
@@ -5824,16 +5823,6 @@ td strong{{font-size:13px;font-weight:500}}
   <span style="margin-left:auto;font-size:11px;opacity:.6">SPY {'✅ sobre' if spy.get('sobre_ema200') else '❌ bajo'} EMA200 · Score mín entrada: {'7/9 acciones · 8/9 ETFs 3x' if vix<20 else '8/9 acciones · 9/9 ETFs 3x'}</span>
 </div>
 
-<div id="ia-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;align-items:center;justify-content:center">
-  <div style="background:#1e1b4b;border:2px solid #7c3aed;border-radius:14px;padding:22px 24px;width:520px;max-width:94vw;max-height:82vh;overflow-y:auto;position:relative">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <span style="font-size:12px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.08em">🧠 Análisis IA</span>
-      <button onclick="cerrarIA()" style="background:none;border:none;color:#a78bfa;font-size:20px;cursor:pointer;line-height:1">✕</button>
-    </div>
-    <div id="ia-contenido" style="font-size:13px;line-height:1.9;color:#e9d5ff"></div>
-    <div style="margin-top:12px;font-size:10px;color:#6d28d9;border-top:1px solid #4c1d95;padding-top:8px">⚠️ Solo fines educativos · No es asesoría financiera</div>
-  </div>
-</div>
 <div class="modal-bg" id="editModal">
   <div class="modal">
     <h3>Editar operación</h3>
@@ -8327,70 +8316,6 @@ function restaurarTickerScanner(ticker) {{
   }})
   .then(() => cargarTickersPersonalizados())
   .catch(() => cargarTickersPersonalizados());
-}}
-
-function abrirIA(ticker) {{
-  const modal = document.getElementById('ia-modal');
-  const contenido = document.getElementById('ia-contenido');
-  if (!modal || !contenido) return;
-  modal.style.display = 'flex';
-  contenido.innerHTML = '<div style="text-align:center;padding:20px;color:#7c3aed">⏳ Analizando ' + ticker + '...</div>';
-
-  // Leer datos de la fila del scanner
-  let precio='', rsi='', rr='', estado='', score='', entrada='', stop='', obj='';
-  const rows = document.querySelectorAll('#scan_tbody tr.datarow');
-  for (const row of rows) {{
-    const strong = row.querySelector('td strong');
-    if (strong && strong.textContent.trim() === ticker) {{
-      const cells = row.querySelectorAll('td');
-      if (cells[2]) precio = cells[2].textContent.trim().split('\n')[0].trim();
-      if (cells[3]) entrada = cells[3].textContent.trim();
-      if (cells[4]) rr = cells[4].textContent.trim();
-      if (cells[5]) rsi = cells[5].textContent.trim();
-      if (cells[1]) estado = cells[1].textContent.trim();
-      if (cells[10]) score = cells[10].textContent.trim().split('\n')[0].trim();
-      break;
-    }}
-  }}
-
-  const prompt = 'Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera en GBM/SIC.\n\n'
-    + 'TICKER: ' + ticker + '\n'
-    + 'Precio actual: ' + precio + '\n'
-    + 'Entrada EMA9: ' + entrada + '\n'
-    + 'R:R: ' + rr + '\n'
-    + 'RSI: ' + rsi + '\n'
-    + 'Score Finbit: ' + score + '\n'
-    + 'Estado Finbit: ' + estado + '\n\n'
-    + 'Responde en exactamente 4 oraciones directas:\n'
-    + '1. Situación técnica actual (precio vs EMAs, RSI, MACD)\n'
-    + '2. Lo que favorece una entrada\n'
-    + '3. Lo que va en contra o riesgos\n'
-    + '4. Veredicto: COMPRAR / VIGILAR / NO ENTRAR / SALIR con precio concreto\n\n'
-    + 'Sin intro. Directo al análisis. Como trader hablando con trader.';
-
-  fetch('https://api.anthropic.com/v1/messages', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages: [{{role: 'user', content: prompt}}]
-    }})
-  }})
-  .then(r => r.json())
-  .then(data => {{
-    const texto = (data.content && data.content[0] && data.content[0].text) || 'Sin respuesta';
-    contenido.innerHTML = '<div style="font-weight:700;color:#a78bfa;margin-bottom:10px">' + ticker + '</div>'
-      + texto.split('\n').map(function(l) {{ return l ? '<p style="margin:0 0 10px">' + l + '</p>' : ''; }}).join('');
-  }})
-  .catch(function() {{
-    contenido.innerHTML = '<div style="color:#f87171">Error al conectar. Intenta de nuevo.</div>';
-  }});
-}}
-
-function cerrarIA() {{
-  const modal = document.getElementById('ia-modal');
-  if (modal) modal.style.display = 'none';
 }}
 
 function actualizarDashboard() {{
