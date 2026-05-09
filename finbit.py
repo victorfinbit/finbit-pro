@@ -5528,12 +5528,12 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "pl_pct":        p.get("pl_pct",0),
         "activo":        p.get("activo",1),
         "sr": (p.get("analisis") or {}).get("sr", {}),
-    } for p in port_data], ensure_ascii=False).replace("</", "<\\/")
+    } for p in port_data], ensure_ascii=False)
 
     scan_nombres_json = json.dumps([{
         "nombre": r.get("nombre",""),
         "estado": r.get("estado",""),
-    } for r in scan_data], ensure_ascii=False).replace("</", "<\\/")
+    } for r in scan_data], ensure_ascii=False)
     scan_data_json = json.dumps([{
         "nombre":        r.get("nombre",""),
         "estado":        r.get("estado",""),
@@ -8010,9 +8010,8 @@ def api_ia_analisis(ticker):
     bloq = "; ".join((r.get("setup") or {}).get("bloqueadores", [])[:2])
     sr = (r.get("sr") or {})
     sr_ctx = sr.get("contexto", "")
-    tc_actual = _MACRO_CACHE.get("tc", 17.2) or 17.2
-    soportes = [{"precio": round(z.get("precio",0)*tc_actual,2), "fuerza": z.get("fuerza",0)} for z in sr.get("soportes",[])[:3]]
-    resists = [{"precio": round(z.get("precio",0)*tc_actual,2), "fuerza": z.get("fuerza",0)} for z in sr.get("resistencias",[])[:3]]
+    soportes = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)} for z in sr.get("soportes",[])[:3]]
+    resists = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)} for z in sr.get("resistencias",[])[:3]]
     prompt = (f"Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera en GBM/SIC.\n\n"
               f"TICKER: {ticker}\n"
               f"Precio: ${precio:,.2f} MXN | Entrada EMA9: ${entrada:,.2f} | Stop: ${stop:,.2f} | Objetivo: ${obj:,.2f}\n"
@@ -8031,17 +8030,12 @@ def api_ia_analisis(ticker):
               f"3. Lo que va en contra o riesgos\n"
               f"4. Veredicto: COMPRAR en $X / VIGILAR / NO ENTRAR / SALIR\n\n"
               f"Sin intro. Sin rodeos. Como trader hablando con trader.")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY no configurada en Render. Ve a Environment → Add variable."}), 500
     try:
         import requests as _req
         resp = _req.post("https://api.anthropic.com/v1/messages",
             json={{"model": "claude-sonnet-4-20250514", "max_tokens": 500,
                   "messages": [{{"role": "user", "content": prompt}}]}},
-            headers={{"Content-Type": "application/json",
-                      "x-api-key": anthropic_key,
-                      "anthropic-version": "2023-06-01"}}, timeout=30)
+            headers={{"Content-Type": "application/json"}}, timeout=30)
         data = resp.json()
         texto = data.get("content", [{{}}])[0].get("text", "Sin respuesta")
         return jsonify({{"ok": True, "analisis": texto, "ticker": ticker}})
