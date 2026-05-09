@@ -4857,7 +4857,7 @@ def render_scan_rows(scanner, tc):
                 f'<div style="margin-top:10px">'
                 f'<div class="dp-sec"><div class="dp-sec-t">📥 Plan de acumulación DCA — si quieres entrar escalonado</div>'
                 f'{dca_html}</div></div>'
-                + ('<div style="margin-top:10px">'
+                + ('<div style="margin-top:10px">'  
                    '<button onclick="event.stopPropagation();wlToggle(this,\''+_n+'\')"'
                    ' id="wl-btn-'+_n+'"'
                    ' style="font-size:11px;padding:6px 14px;border-radius:8px;'
@@ -4889,8 +4889,7 @@ def render_scan_rows(scanner, tc):
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
             f'{etapa_badge}'
-            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}'
-            f'</td>'
+            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
             f'</tr>'
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
@@ -5530,10 +5529,6 @@ def generar_html(port_data, scan_data, radar_data, ops, tc, capital, riesgo_pct,
         "sr": (p.get("analisis") or {}).get("sr", {}),
     } for p in port_data], ensure_ascii=False)
 
-    scan_nombres_json = json.dumps([{
-        "nombre": r.get("nombre",""),
-        "estado": r.get("estado",""),
-    } for r in scan_data], ensure_ascii=False)
     scan_data_json = json.dumps([{
         "nombre":        r.get("nombre",""),
         "estado":        r.get("estado",""),
@@ -5819,7 +5814,7 @@ td strong{{font-size:13px;font-weight:500}}
   <button class="nb" onclick="showTab('rendimiento',this)">📊 Rendimiento</button>
   <button class="nb" onclick="showTab('semis',this)">📡 Semis ETF</button>
   <button class="nb" onclick="showTab('radar',this)">🔭 Radar automático</button>
-  <button class="nb" onclick="showTab('ia',this)">🧠 IA</button>
+  <button class="nb" onclick="showTab('curso',this)">🎓 Curso</button>
 </div></div>
 
 <div class="regimen-bar regimen-{regimen["color"]}">
@@ -6258,23 +6253,1299 @@ td strong{{font-size:13px;font-weight:500}}
 TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v3.3-tabs</footer>
 </div>
 
-<!-- TAB IA -->
-<div id="tab-ia" class="tab">
-<div style="padding:20px 20px 48px;max-width:1360px;margin:0 auto">
-  <div style="padding:20px 0 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-    <div>
-      <h2 style="font-size:20px;font-weight:600;letter-spacing:-.4px">🧠 Análisis IA</h2>
-      <p style="font-size:11px;color:var(--muted)">Análisis narrativo de cada acción del scanner generado por Claude · Haz clic en Analizar para obtener el resumen</p>
-    </div>
-    <button onclick="analizarTodos()" id="btn-analizar-todos"
-      style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-family:var(--sans);cursor:pointer;font-weight:500">
-      🧠 Analizar todos
-    </button>
+<!-- ═══════════════════════════════════════════════════════
+     TAB CURSO — completamente autocontenido, no toca el sistema
+     ═══════════════════════════════════════════════════════ -->
+<div id="tab-curso" class="tab">
+<style>
+.curso-wrap {{
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px 60px;
+  font-family: 'Georgia', serif;
+}}
+.curso-hero {{
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 60%, #0f172a 100%);
+  border-radius: 16px;
+  padding: 40px 32px;
+  margin-bottom: 32px;
+  text-align: center;
+  border: 1px solid #334155;
+  position: relative;
+  overflow: hidden;
+}}
+.curso-hero::before {{
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 60%);
+  pointer-events: none;
+}}
+.curso-hero h1 {{
+  font-size: 28px;
+  font-weight: 800;
+  color: #f8fafc;
+  margin: 0 0 8px;
+  letter-spacing: -0.5px;
+}}
+.curso-hero p {{
+  color: #94a3b8;
+  font-size: 14px;
+  margin: 0;
+  font-family: var(--sans);
+}}
+.curso-hero .badge-hero {{
+  display: inline-block;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 16px;
+  font-family: var(--sans);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}}
+.dias-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 8px;
+  margin-bottom: 32px;
+}}
+.dia-btn {{
+  background: var(--surface);
+  border: 2px solid var(--brd);
+  border-radius: 10px;
+  padding: 10px 6px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  font-family: var(--sans);
+}}
+.dia-btn:hover {{ border-color: #3b82f6; background: #1e3a5f22; }}
+.dia-btn.activo {{ border-color: #3b82f6; background: linear-gradient(135deg,#1e3a5f,#0f172a); color: #60a5fa; }}
+.dia-btn .dia-num {{ font-size: 20px; font-weight: 800; color: #3b82f6; display: block; }}
+.dia-btn .dia-nom {{ font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-top: 2px; }}
+.dia-btn.activo .dia-nom {{ color: #93c5fd; }}
+.contenido-dia {{ display: none; }}
+.contenido-dia.activo {{ display: block; }}
+.leccion {{
+  background: var(--surface);
+  border: 1px solid var(--brd);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}}
+.leccion-header {{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--brd);
+}}
+.leccion-icon {{ font-size: 28px; }}
+.leccion-titulo {{ font-size: 18px; font-weight: 700; color: var(--text); margin: 0; }}
+.leccion-sub {{ font-size: 12px; color: var(--muted); font-family: var(--sans); }}
+.leccion p {{
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  margin: 0 0 12px;
+  font-family: var(--sans);
+}}
+.leccion p:last-child {{ margin-bottom: 0; }}
+.tip-box {{
+  background: #1e3a5f33;
+  border-left: 4px solid #3b82f6;
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 14px 0;
+  font-size: 13px;
+  color: #93c5fd;
+  font-family: var(--sans);
+  line-height: 1.6;
+}}
+.warning-box {{
+  background: #7f1d1d22;
+  border-left: 4px solid var(--red);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 14px 0;
+  font-size: 13px;
+  color: #fca5a5;
+  font-family: var(--sans);
+  line-height: 1.6;
+}}
+.success-box {{
+  background: #14532d22;
+  border-left: 4px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 14px 0;
+  font-size: 13px;
+  color: #86efac;
+  font-family: var(--sans);
+  line-height: 1.6;
+}}
+.ejemplo-card {{
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 14px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}}
+.ejemplo-card .ej-titulo {{
+  font-family: var(--sans);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #64748b;
+  margin-bottom: 10px;
+  font-weight: 600;
+}}
+.ejemplo-card .ej-linea {{
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #1e293b;
+  color: #94a3b8;
+}}
+.ejemplo-card .ej-linea:last-child {{ border-bottom: none; }}
+.ejemplo-card .ej-linea .ej-val {{ color: #f8fafc; font-weight: 600; }}
+.ejemplo-card .ej-linea .ej-val.verde {{ color: var(--green); }}
+.ejemplo-card .ej-linea .ej-val.rojo {{ color: var(--red); }}
+.ejercicio {{
+  background: linear-gradient(135deg, #1e3a5f22, #0f172a);
+  border: 2px dashed #3b82f6;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+}}
+.ejercicio .ej-header {{
+  font-size: 13px;
+  font-weight: 700;
+  color: #60a5fa;
+  font-family: var(--sans);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-bottom: 10px;
+}}
+.ejercicio ol, .ejercicio ul {{
+  margin: 0;
+  padding-left: 20px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text);
+  line-height: 2;
+}}
+.quiz-section {{
+  background: var(--surface2, #1e293b);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 20px;
+}}
+.quiz-section h3 {{
+  font-size: 14px;
+  font-weight: 700;
+  font-family: var(--sans);
+  color: var(--text);
+  margin: 0 0 16px;
+}}
+.quiz-preg {{
+  margin-bottom: 20px;
+  font-family: var(--sans);
+}}
+.quiz-preg p {{ font-size: 13px; color: var(--text); margin: 0 0 10px; font-weight: 600; }}
+.quiz-op {{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}}
+.quiz-op label {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--brd);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  transition: all .15s;
+}}
+.quiz-op label:hover {{ border-color: #3b82f6; color: var(--text); }}
+.quiz-op input[type=radio] {{ accent-color: #3b82f6; }}
+.quiz-btn {{
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-family: var(--sans);
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 12px;
+  transition: background .15s;
+}}
+.quiz-btn:hover {{ background: #2563eb; }}
+.quiz-resultado {{
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--sans);
+  display: none;
+}}
+.quiz-resultado.bien {{ background: #14532d33; color: #86efac; border: 1px solid #166534; }}
+.quiz-resultado.mal  {{ background: #7f1d1d33; color: #fca5a5; border: 1px solid #991b1b; }}
+.glosario-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}}
+.glosario-item {{
+  background: var(--surface);
+  border: 1px solid var(--brd);
+  border-radius: 10px;
+  padding: 14px;
+}}
+.glosario-item .g-term {{
+  font-size: 13px;
+  font-weight: 700;
+  color: #60a5fa;
+  font-family: var(--sans);
+  margin-bottom: 4px;
+}}
+.glosario-item .g-def {{
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--sans);
+  line-height: 1.6;
+}}
+.calc-riesgo {{
+  background: var(--surface);
+  border: 1px solid var(--brd);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+}}
+.calc-riesgo h4 {{
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--sans);
+  margin: 0 0 16px;
+}}
+.calc-row {{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}}
+.calc-field label {{
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--sans);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}}
+.calc-field input {{
+  width: 100%;
+  background: var(--surface2, #1e293b);
+  border: 1px solid var(--brd);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  box-sizing: border-box;
+}}
+.calc-resultado {{
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 14px;
+  margin-top: 12px;
+  font-family: var(--sans);
+  font-size: 13px;
+}}
+.calc-resultado .cr-linea {{
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #1e293b;
+  color: var(--muted);
+}}
+.calc-resultado .cr-linea:last-child {{ border-bottom: none; }}
+.calc-resultado .cr-linea span:last-child {{
+  color: var(--text);
+  font-weight: 700;
+  font-family: var(--mono);
+}}
+.semaforo-demo {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}}
+.sem-card {{
+  border-radius: 10px;
+  padding: 14px;
+  text-align: center;
+  font-family: var(--sans);
+}}
+.sem-card .sem-icon {{ font-size: 24px; margin-bottom: 6px; }}
+.sem-card .sem-titulo {{ font-size: 12px; font-weight: 700; margin-bottom: 4px; }}
+.sem-card .sem-desc {{ font-size: 10px; opacity: .8; line-height: 1.5; }}
+.progreso-bar {{
+  background: var(--surface);
+  border: 1px solid var(--brd);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 24px;
+}}
+.progreso-bar h4 {{
+  font-size: 12px;
+  font-family: var(--sans);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin: 0 0 10px;
+}}
+.prog-dias {{
+  display: flex;
+  gap: 6px;
+}}
+.prog-dia {{
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--brd);
+  transition: background .3s;
+}}
+.prog-dia.completado {{ background: #3b82f6; }}
+.prog-dia.actual {{ background: #60a5fa; }}
+</style>
+
+<div class="curso-wrap">
+
+  <!-- Hero -->
+  <div class="curso-hero">
+    <span class="badge-hero">🎓 Curso oficial Finbit Pro</span>
+    <h1>De cero a operar con confianza</h1>
+    <p>8 días · Teoría + Ejemplos reales + Ejercicios · Usando Finbit, TradingView y GBM</p>
   </div>
-  <div id="ia-lista" style="display:flex;flex-direction:column;gap:12px">
-    <div style="padding:30px;text-align:center;color:var(--muted)">Haz clic en "Analizar todos" o en el botón de cada acción para generar el análisis.</div>
+
+  <!-- Progreso -->
+  <div class="progreso-bar">
+    <h4>Tu progreso</h4>
+    <div class="prog-dias" id="prog-dias"></div>
   </div>
+
+  <!-- Selector de días -->
+  <div class="dias-grid" id="dias-grid"></div>
+
+  <!-- Contenidos por día -->
+  <div id="contenidos-curso"></div>
+
 </div>
+
+<script>
+(function() {{
+
+const DIAS = [
+  {{ num:"0", nom:"Mentalidad", icon:"🧠" }},
+  {{ num:"1", nom:"El Mercado", icon:"📈" }},
+  {{ num:"2", nom:"Indicadores", icon:"🔬" }},
+  {{ num:"3", nom:"Scanner/Radar", icon:"🔭" }},
+  {{ num:"4", nom:"TradingView", icon:"🖥️" }},
+  {{ num:"5", nom:"Riesgo", icon:"🛡️" }},
+  {{ num:"6", nom:"Primera Op.", icon:"🚀" }},
+  {{ num:"7", nom:"Simulacro", icon:"🏆" }},
+];
+
+const CONTENIDOS = [
+
+// DÍA 0
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🧠</span>
+    <div><p class="leccion-titulo">Día 0 — Mentalidad del Trader</p><p class="leccion-sub">Por qué el 90% pierde dinero antes de ver un indicador</p></div>
+  </div>
+  <p>Antes de hablar de acciones, EMAs o RSI, hay algo más importante que aprender: <strong>cómo piensa un trader exitoso</strong>. La mayoría de personas que pierden dinero en la bolsa no lo pierden por no saber técnica — lo pierden por sus emociones.</p>
+  <p>Imagina esto: compras una acción a $1,000. Al día siguiente cae a $920. ¿Qué sientes? Miedo. ¿Qué hace la mayoría? Vende para "no perder más". ¿Qué pasa después? La acción sube a $1,200. Eso es exactamente el error número uno del novato.</p>
+  <div class="warning-box">⚠️ <strong>El enemigo número uno no es el mercado — eres tú mismo.</strong> El miedo te hace salir tarde. La codicia te hace entrar tarde. El FOMO (miedo a perderte el movimiento) te hace comprar en el peor momento.</div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📜</span>
+    <div><p class="leccion-titulo">Las 5 Reglas de Oro</p><p class="leccion-sub">Memorízalas. Son irrompibles.</p></div>
+  </div>
+  <p><strong>Regla 1: Nunca arriesges más del 1% de tu capital en una sola operación.</strong><br>Si tienes $15,000, lo máximo que puedes perder en una operación es $150. Así, aunque falles 10 veces seguidas, sigues vivo en el mercado.</p>
+  <p><strong>Regla 2: Siempre usa stop loss.</strong><br>El stop loss es tu red de seguridad. Es la orden que dice "si el precio cae hasta aquí, salgo automáticamente". No es opcional. Es obligatorio.</p>
+  <p><strong>Regla 3: R:R mínimo de 3:1.</strong><br>Por cada $1 que arriesgas, debes tener potencial de ganar $3. Si el stop está $50 abajo, el objetivo debe estar mínimo $150 arriba. Si no cumple esta regla, no entras.</p>
+  <p><strong>Regla 4: El mercado siempre tiene la razón.</strong><br>No importa cuánto "creas" en una acción. Si el precio baja y toca tu stop, sales. Sin excusas. Sin "esperar que se recupere".</p>
+  <p><strong>Regla 5: Un día malo no arruina un mes. Un mes malo no arruina un año.</strong><br>El trading es un juego de probabilidades a largo plazo. Vas a perder operaciones. Lo importante es que las ganancias sean mayores que las pérdidas en el tiempo.</p>
+
+  <div class="tip-box">💡 <strong>Dato real:</strong> Con un R:R de 3:1, puedes ganar dinero aunque pierdas el 60% de tus operaciones. Si ganas 4 de 10 trades con R:R 3:1, aún terminas en positivo.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 0</div>
+    <p style="font-size:13px;color:var(--muted);font-family:var(--sans);margin:0 0 10px">Antes de continuar, responde estas preguntas honestamente en un papel:</p>
+    <ol>
+      <li>¿Cuánto dinero tienes disponible para invertir que NO necesitas en los próximos 12 meses?</li>
+      <li>Si perdieras el 10% de ese dinero mañana, ¿podrías dormir bien?</li>
+      <li>¿Cuál es el 1% de tu capital? (Ese es tu riesgo máximo por operación)</li>
+      <li>Escribe las 5 Reglas de Oro de memoria sin verlas</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);font-family:var(--sans);margin:10px 0 0">Si no puedes responder honestamente la pregunta 2, reduce tu capital hasta que sí puedas.</p>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 0</h3>
+    <div class="quiz-preg" id="q0_1">
+      <p>1. ¿Cuánto es el máximo que debes arriesgar por operación con un capital de $20,000?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q0_1" value="a"> $2,000 (10%)</label>
+        <label><input type="radio" name="q0_1" value="b"> $200 (1%)</label>
+        <label><input type="radio" name="q0_1" value="c"> $1,000 (5%)</label>
+      </div>
+    </div>
+    <div class="quiz-preg" id="q0_2">
+      <p>2. Tienes una operación que podría perder $100. ¿Cuánto debe ser el potencial mínimo de ganancia para entrar?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q0_2" value="a"> $100 (empatar)</label>
+        <label><input type="radio" name="q0_2" value="b"> $150 (1.5x)</label>
+        <label><input type="radio" name="q0_2" value="c"> $300 (3x)</label>
+      </div>
+    </div>
+    <div class="quiz-preg" id="q0_3">
+      <p>3. El precio baja y toca tu stop loss. ¿Qué haces?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q0_3" value="a"> Espero que se recupere</label>
+        <label><input type="radio" name="q0_3" value="b"> Salgo inmediatamente sin dudar</label>
+        <label><input type="radio" name="q0_3" value="c"> Compro más para bajar mi costo promedio</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('0')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-0"></div>
+  </div>
+</div>`,
+
+// DÍA 1
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">📈</span>
+    <div><p class="leccion-titulo">Día 1 — El Mercado desde Cero</p><p class="leccion-sub">Velas japonesas, tendencias y por qué suben y bajan las acciones</p></div>
+  </div>
+  <p>Una <strong>acción</strong> es una pequeña parte de una empresa. Cuando compras una acción de Apple, eres dueño de una pequeñísima parte de Apple. Si Apple vale más, tu acción vale más. Si vale menos, tu acción vale menos. Así de simple.</p>
+  <p>El precio de una acción sube cuando hay más personas queriendo comprarla que venderla. Baja cuando hay más vendedores que compradores. Nada más. Todo lo demás (noticias, resultados, aranceles) solo afecta porque cambia cuánta gente quiere comprar o vender.</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">🕯️</span>
+    <div><p class="leccion-titulo">Las Velas Japonesas</p><p class="leccion-sub">El idioma visual del mercado</p></div>
+  </div>
+  <p>Cada "vela" en un gráfico representa un período de tiempo (1 día, 1 semana, etc.) y te muestra 4 datos: el precio al que <strong>abrió</strong>, el precio más <strong>alto</strong> que llegó, el más <strong>bajo</strong>, y donde <strong>cerró</strong>.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">🕯️ Cómo leer una vela</div>
+    <div class="ej-linea"><span>Vela VERDE (alcista)</span><span class="ej-val verde">Cerró MÁS ALTO que abrió — ganaron los compradores</span></div>
+    <div class="ej-linea"><span>Vela ROJA (bajista)</span><span class="ej-val rojo">Cerró MÁS BAJO que abrió — ganaron los vendedores</span></div>
+    <div class="ej-linea"><span>Cuerpo grande</span><span class="ej-val">Movimiento fuerte con convicción</span></div>
+    <div class="ej-linea"><span>Mecha larga arriba</span><span class="ej-val">Intentaron subir pero los vendedores los rechazaron</span></div>
+    <div class="ej-linea"><span>Mecha larga abajo</span><span class="ej-val">Intentaron bajar pero los compradores los rechazaron</span></div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📊</span>
+    <div><p class="leccion-titulo">Tendencias: el concepto más importante</p><p class="leccion-sub">La tendencia es tu amiga — nunca pelee contra ella</p></div>
+  </div>
+  <p>Una <strong>tendencia alcista</strong> es cuando el precio forma máximos cada vez más altos y mínimos cada vez más altos. Como subir una escalera. Una <strong>tendencia bajista</strong> es lo contrario — mínimos cada vez más bajos.</p>
+  <p>En Finbit solo operamos <strong>a favor de la tendencia alcista</strong>. Nunca compramos acciones que están cayendo esperando que "reboten". Eso es atrapar cuchillos.</p>
+  <div class="success-box">✅ <strong>Regla visual simple:</strong> Si el precio está haciendo escalones hacia arriba → tendencia alcista → podemos buscar entradas. Si está haciendo escalones hacia abajo → no tocamos.</div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">⏰</span>
+    <div><p class="leccion-titulo">¿Qué es el Swing Trading?</p><p class="leccion-sub">Tu estilo de operación con Finbit</p></div>
+  </div>
+  <p>El <strong>swing trading</strong> es mantener una posición de 3 días a 6 semanas, capturando un "swing" o movimiento del precio. No es trading de día (demasiado estrés) ni inversión a largo plazo (demasiado tiempo). Es el punto medio perfecto para alguien con trabajo y vida normal.</p>
+  <p>Con Finbit revisas el mercado <strong>dos veces al día</strong>: pre-apertura (8-9 AM) y al cierre (2:30-3 PM horario de México. No necesitas estar pegado a la pantalla.</p>
+  <div class="tip-box">💡 <strong>Ejemplo real de swing:</strong> Compras SOXL a $960 MXN. Lo mantienes 2 semanas mientras sube siguiendo la tendencia. Lo vendes a $1,100 MXN. Ganancia: $140 MXN por acción sin hacer nada en el medio excepto vigilar tu stop.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 1</div>
+    <ol>
+      <li>Abre TradingView y busca el ticker <strong>AAPL</strong> (Apple) en gráfico de 1 día</li>
+      <li>Identifica los últimos 3 meses: ¿está en tendencia alcista o bajista?</li>
+      <li>Encuentra y señala visualmente: una vela verde grande, una vela roja grande, y una mecha larga</li>
+      <li>Busca un punto donde el precio formó un "escalón" (mínimo más alto que el anterior)</li>
+    </ol>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 1</h3>
+    <div class="quiz-preg">
+      <p>1. Una vela roja significa:</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q1_1" value="a"> El precio subió ese día</label>
+        <label><input type="radio" name="q1_1" value="b"> El precio cerró más bajo que donde abrió</label>
+        <label><input type="radio" name="q1_1" value="c"> El volumen fue muy alto</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. ¿Cuántas veces al día revisas el mercado con la estrategia Finbit?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q1_2" value="a"> Todo el día pegado a la pantalla</label>
+        <label><input type="radio" name="q1_2" value="b"> Una vez por semana</label>
+        <label><input type="radio" name="q1_2" value="c"> Dos veces: pre-apertura y cierre</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. ¿Qué es una tendencia alcista?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q1_3" value="a"> Precio subiendo en escalones (máximos y mínimos cada vez más altos)</label>
+        <label><input type="radio" name="q1_3" value="b"> Precio que sube un día y baja otro</label>
+        <label><input type="radio" name="q1_3" value="c"> Precio que lleva meses cayendo</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('1')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-1"></div>
+  </div>
+</div>`,
+
+// DÍA 2
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🔬</span>
+    <div><p class="leccion-titulo">Día 2 — Los Indicadores de Finbit</p><p class="leccion-sub">Qué mide cada uno y por qué importa</p></div>
+  </div>
+  <p>Finbit usa <strong>11 indicadores técnicos</strong> para evaluar cada acción. No tienes que calcularlos — Finbit lo hace solo. Pero sí necesitas entender qué te están diciendo para tomar buenas decisiones.</p>
+
+  <div class="leccion-header" style="margin-top:16px">
+    <span class="leccion-icon">📏</span>
+    <div><p class="leccion-titulo">EMAs — Medias Móviles Exponenciales</p><p class="leccion-sub">La brújula de la tendencia</p></div>
+  </div>
+  <p>Una EMA es el <strong>precio promedio de los últimos N días</strong>, pero dando más peso a los días recientes. Finbit usa tres: EMA9, EMA50 y EMA200.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">📏 Qué significa cada EMA</div>
+    <div class="ej-linea"><span>EMA9 (verde)</span><span class="ej-val verde">Tendencia de los últimos 9 días — muy sensible</span></div>
+    <div class="ej-linea"><span>EMA50 (naranja)</span><span class="ej-val">Tendencia de los últimos 50 días — swing trading</span></div>
+    <div class="ej-linea"><span>EMA200 (roja)</span><span class="ej-val rojo">Tendencia de los últimos 200 días — largo plazo</span></div>
+    <div class="ej-linea"><span>EMA9 > EMA50 > EMA200</span><span class="ej-val verde">✅ Todo alineado = tendencia fuerte alcista</span></div>
+  </div>
+  <p>La <strong>entrada ideal en Finbit</strong> es cuando el precio está cerca de la EMA9 — ni muy arriba (comprarías caro) ni muy abajo (no hay confirmación). Finbit te muestra ese precio exacto en la columna "Entrada EMA9".</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">💪</span>
+    <div><p class="leccion-titulo">RSI — Índice de Fuerza Relativa</p><p class="leccion-sub">¿Está la acción agotada o tiene energía para subir?</p></div>
+  </div>
+  <p>El RSI mide si una acción está <strong>sobrecomprada</strong> (subió demasiado rápido, puede corregir) o <strong>sobrevendida</strong> (bajó demasiado, puede rebotar). Va de 0 a 100.</p>
+  <div class="semaforo-demo">
+    <div class="sem-card" style="background:#14532d33;border:1px solid #166534">
+      <div class="sem-icon">🟢</div>
+      <div class="sem-titulo" style="color:#86efac">RSI 40-55</div>
+      <div class="sem-desc" style="color:#86efac">Zona ideal de entrada. Tiene energía para subir.</div>
+    </div>
+    <div class="sem-card" style="background:#78350f33;border:1px solid #92400e">
+      <div class="sem-icon">🟡</div>
+      <div class="sem-titulo" style="color:#fcd34d">RSI 55-70</div>
+      <div class="sem-desc" style="color:#fcd34d">Aceptable. Cuidado, se acerca a sobrecompra.</div>
+    </div>
+    <div class="sem-card" style="background:#7f1d1d33;border:1px solid #991b1b">
+      <div class="sem-icon">🔴</div>
+      <div class="sem-titulo" style="color:#fca5a5">RSI >72</div>
+      <div class="sem-desc" style="color:#fca5a5">Sobrecomprado. No entres, puede corregir.</div>
+    </div>
+    <div class="sem-card" style="background:#1e3a5f33;border:1px solid #1e40af">
+      <div class="sem-icon">🔵</div>
+      <div class="sem-titulo" style="color:#93c5fd">RSI <30</div>
+      <div class="sem-desc" style="color:#93c5fd">Sobrevendido. Posible rebote, pero confirma tendencia.</div>
+    </div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">⚡</span>
+    <div><p class="leccion-titulo">MACD — Convergencia/Divergencia</p><p class="leccion-sub">¿El momentum está cambiando?</p></div>
+  </div>
+  <p>El MACD te dice si el <strong>impulso del precio está acelerando o frenando</strong>. En Finbit ves dos triángulos: uno apuntando arriba (alcista) o abajo (bajista). Lo importante es que el MACD esté alcista para entrar.</p>
+  <div class="tip-box">💡 <strong>Fácil de recordar:</strong> MACD arriba ▲ = compradores acelerando. MACD abajo ▼ = vendedores ganando. Siempre quieres el ▲ al entrar.</div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📊</span>
+    <div><p class="leccion-titulo">ADX — Fuerza de la Tendencia</p><p class="leccion-sub">¿Hay tendencia real o es solo ruido?</p></div>
+  </div>
+  <p>El ADX mide qué tan <strong>fuerte es la tendencia</strong>, sin importar si es alcista o bajista. Un ADX bajo significa que la acción está lateral (yendo a ningún lado). Un ADX alto significa tendencia real.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">📊 Escala ADX</div>
+    <div class="ej-linea"><span>ADX menor a 20</span><span class="ej-val rojo">❌ Mercado lateral — Finbit bloquea la entrada</span></div>
+    <div class="ej-linea"><span>ADX 20 a 40</span><span class="ej-val verde">✅ Tendencia confirmada — podemos operar</span></div>
+    <div class="ej-linea"><span>ADX mayor a 40</span><span class="ej-val verde">✅✅ Tendencia muy fuerte — alta convicción</span></div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">🏦</span>
+    <div><p class="leccion-titulo">OBV — On Balance Volume</p><p class="leccion-sub">¿Están comprando los grandes o los pequeños?</p></div>
+  </div>
+  <p>El OBV rastrea si el <strong>dinero institucional</strong> (fondos, bancos, grandes inversores) está comprando o vendiendo. Si el precio sube pero el OBV no acompaña, la subida no tiene soporte real. Si el OBV sube aunque el precio esté quieto, hay acumulación silenciosa — señal muy positiva.</p>
+  <div class="success-box">✅ <strong>La señal más poderosa:</strong> Precio quieto + OBV subiendo = institucionales acumulando en silencio antes de mover el precio hacia arriba.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 2</div>
+    <ol>
+      <li>Abre Finbit y ve al Scanner</li>
+      <li>Haz clic en cualquier ticker para ver su detalle</li>
+      <li>Localiza el semáforo de indicadores y encuentra el RSI, MACD y ADX</li>
+      <li>Escribe para ese ticker: ¿el RSI es bueno para entrar? ¿el MACD es alcista? ¿el ADX indica tendencia?</li>
+      <li>Basado en eso, ¿entrarías o no? ¿por qué?</li>
+    </ol>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 2</h3>
+    <div class="quiz-preg">
+      <p>1. ¿Qué RSI es ideal para entrar en una operación con Finbit?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q2_1" value="a"> RSI 80 — está subiendo fuerte</label>
+        <label><input type="radio" name="q2_1" value="b"> RSI 47 — zona neutral con energía</label>
+        <label><input type="radio" name="q2_1" value="c"> RSI 20 — está muy barato</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. El ADX de una acción es 12. ¿Qué hace Finbit?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q2_2" value="a"> Recomienda comprar inmediatamente</label>
+        <label><input type="radio" name="q2_2" value="b"> Bloquea la entrada — mercado sin tendencia</label>
+        <label><input type="radio" name="q2_2" value="c"> No importa el ADX para la decisión</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. El precio de una acción lleva 2 semanas quieto pero el OBV está subiendo. ¿Qué significa?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q2_3" value="a"> La acción no tiene interés — ignorar</label>
+        <label><input type="radio" name="q2_3" value="b"> Posible acumulación institucional silenciosa antes de moverse</label>
+        <label><input type="radio" name="q2_3" value="c"> El volumen no tiene relación con el precio</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('2')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-2"></div>
+  </div>
+</div>`,
+
+// DÍA 3
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🔭</span>
+    <div><p class="leccion-titulo">Día 3 — El Scanner y el Radar</p><p class="leccion-sub">Cómo interpretar cada estado y qué hacer con él</p></div>
+  </div>
+  <p>El <strong>Scanner</strong> analiza tus tickers favoritos y les asigna un estado. El <strong>Radar automático</strong> monitorea un universo más amplio de acciones buscando oportunidades. Juntos son tu centro de comando de trading.</p>
+
+  <div class="leccion-header" style="margin-top:16px">
+    <span class="leccion-icon">🚦</span>
+    <div><p class="leccion-titulo">Los 6 Estados del Scanner</p><p class="leccion-sub">Qué hacer exactamente con cada uno</p></div>
+  </div>
+  <div class="semaforo-demo">
+    <div class="sem-card" style="background:#14532d33;border:2px solid #16a34a">
+      <div class="sem-icon">✅</div>
+      <div class="sem-titulo" style="color:#4ade80">BUY</div>
+      <div class="sem-desc" style="color:#86efac">Señal de compra. Entra cerca de la EMA9 con stop dinámico.</div>
+    </div>
+    <div class="sem-card" style="background:#1e3a5f33;border:2px solid #2563eb">
+      <div class="sem-icon">👀</div>
+      <div class="sem-titulo" style="color:#60a5fa">WATCH</div>
+      <div class="sem-desc" style="color:#93c5fd">Señales positivas pero faltan confirmaciones. Vigila, no entres aún.</div>
+    </div>
+    <div class="sem-card" style="background:#4c1d9533;border:2px solid #7c3aed">
+      <div class="sem-icon">🚀</div>
+      <div class="sem-titulo" style="color:#a78bfa">ROCKET</div>
+      <div class="sem-desc" style="color:#c4b5fd">Alta convicción. Todos los filtros alineados. Entra con tamaño completo.</div>
+    </div>
+    <div class="sem-card" style="background:#7f1d1d33;border:2px solid #dc2626">
+      <div class="sem-icon">🚨</div>
+      <div class="sem-titulo" style="color:#f87171">EXIT</div>
+      <div class="sem-desc" style="color:#fca5a5">Sistema detectó deterioro. Si tienes posición, sal ahora.</div>
+    </div>
+    <div class="sem-card" style="background:#78350f33;border:2px solid #d97706">
+      <div class="sem-icon">🔒</div>
+      <div class="sem-titulo" style="color:#fbbf24">BLOQUEADO</div>
+      <div class="sem-desc" style="color:#fcd34d">Señal técnica buena pero bloqueada (VIX alto, ADX bajo, volumen insuficiente). No entres.</div>
+    </div>
+    <div class="sem-card" style="background:#1e293b;border:2px solid #475569">
+      <div class="sem-icon">📉</div>
+      <div class="sem-titulo" style="color:#94a3b8">BAJISTA</div>
+      <div class="sem-desc" style="color:#64748b">Indicadores deteriorados. Evitar. Si tienes posición, evalúa cerrar.</div>
+    </div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📋</span>
+    <div><p class="leccion-titulo">La Columna Orden GBM</p><p class="leccion-sub">Los tres precios más importantes</p></div>
+  </div>
+  <p>Cada ticker en el scanner muestra tres precios clave en la columna "Orden GBM":</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">📋 Ejemplo real: SOXL</div>
+    <div class="ej-linea"><span>🎯 Entrada EMA9</span><span class="ej-val verde">$961.83 MXN — precio ideal para comprar</span></div>
+    <div class="ej-linea"><span>🛑 Stop dinámico</span><span class="ej-val rojo">$898.72 MXN — si baja aquí, salir inmediatamente</span></div>
+    <div class="ej-linea"><span>✅ Objetivo</span><span class="ej-val verde">$1,158.26 MXN — precio meta para tomar ganancias</span></div>
+  </div>
+  <p>El R:R se calcula solo: (Objetivo - Entrada) / (Entrada - Stop). En este ejemplo: ($1,158 - $961) / ($961 - $898) = $197 / $63 = <strong>3.1x</strong>. Cumple el mínimo de 3x.</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">🔭</span>
+    <div><p class="leccion-titulo">El Radar Automático</p><p class="leccion-sub">Tu cazador de oportunidades 24/7</p></div>
+  </div>
+  <p>El Radar monitorea un universo de acciones más amplio que tu scanner personal. Cuando encuentra una acción con señal fuerte que no tienes en tu lista, la muestra aquí. Es ideal para descubrir nuevas oportunidades.</p>
+  <div class="tip-box">💡 <strong>Flujo recomendado:</strong> Revisa el Radar primero para ver oportunidades nuevas → si algo llama tu atención → agrégalo al Scanner para seguimiento → verifica en TradingView → entra si todo está alineado.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 3</div>
+    <ol>
+      <li>Abre el Scanner de Finbit</li>
+      <li>Encuentra un ticker en estado BUY o WATCH</li>
+      <li>Anota: precio de entrada, stop y objetivo</li>
+      <li>Calcula el R:R manualmente: (Objetivo-Entrada) ÷ (Entrada-Stop)</li>
+      <li>¿Cumple el mínimo de 3x? ¿Entrarías?</li>
+      <li>Abre el Radar Automático y anota qué acciones están en ROCKET hoy</li>
+    </ol>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 3</h3>
+    <div class="quiz-preg">
+      <p>1. El scanner muestra BLOQUEADO en una acción. ¿Qué haces?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q3_1" value="a"> Entro de todas formas porque la señal técnica es buena</label>
+        <label><input type="radio" name="q3_1" value="b"> No entro — el sistema detectó que las condiciones no son óptimas</label>
+        <label><input type="radio" name="q3_1" value="c"> Vendo mi posición existente</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. Una acción tiene: Entrada $500, Stop $470, Objetivo $590. ¿Cuál es el R:R?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q3_2" value="a"> R:R 1x — no cumple el mínimo</label>
+        <label><input type="radio" name="q3_2" value="b"> R:R 3x — justo en el mínimo</label>
+        <label><input type="radio" name="q3_2" value="c"> R:R 5x — excelente</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. ¿Cuál es la diferencia principal entre el Scanner y el Radar?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q3_3" value="a"> El Scanner analiza tus tickers favoritos; el Radar busca en un universo más amplio</label>
+        <label><input type="radio" name="q3_3" value="b"> Son exactamente lo mismo</label>
+        <label><input type="radio" name="q3_3" value="c"> El Radar es más antiguo que el Scanner</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('3')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-3"></div>
+  </div>
+</div>`,
+
+// DÍA 4
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🖥️</span>
+    <div><p class="leccion-titulo">Día 4 — TradingView como Aliado</p><p class="leccion-sub">Confirmación visual antes de ejecutar cualquier operación</p></div>
+  </div>
+  <p>Finbit te dice <strong>qué</strong> operar. TradingView te confirma <strong>cuándo exactamente</strong> entrar. Siempre usa ambas herramientas juntas — nunca entres solo con la señal de Finbit sin ver el gráfico.</p>
+
+  <div class="leccion-header" style="margin-top:16px">
+    <span class="leccion-icon">🔍</span>
+    <div><p class="leccion-titulo">El Screener "Por Explotar"</p><p class="leccion-sub">Cómo encontrar acciones antes de que se muevan</p></div>
+  </div>
+  <p>En TradingView tienes configurado un screener llamado "Por explotar" con estos filtros:</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">🔍 Filtros del Screener "Por Explotar"</div>
+    <div class="ej-linea"><span>Price below EMA(50) by 0-3%</span><span class="ej-val">Precio pegado a la EMA50 desde abajo — zona de rebote</span></div>
+    <div class="ej-linea"><span>EMA(50) &gt; 200</span><span class="ej-val verde">Tendencia alcista de fondo confirmada</span></div>
+    <div class="ej-linea"><span>RSI(14) 35-55</span><span class="ej-val verde">Zona neutral — espacio para subir</span></div>
+    <div class="ej-linea"><span>Market Cap 1B-50B USD</span><span class="ej-val">Empresas medianas con mayor potencial de movimiento</span></div>
+  </div>
+  <p>Las acciones que aparecen en ese screener son candidatas. El siguiente paso es <strong>verificar cada una en el gráfico</strong> antes de meterla a Finbit para análisis completo.</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">✅</span>
+    <div><p class="leccion-titulo">Lista de Verificación Visual</p><p class="leccion-sub">Lo que debes ver en el gráfico antes de entrar</p></div>
+  </div>
+  <p>Cuando abres una acción en TradingView, verifica estos 5 puntos:</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">✅ Checklist visual TradingView</div>
+    <div class="ej-linea"><span>1. EMA9 &gt; EMA50 &gt; EMA200</span><span class="ej-val verde">Las tres líneas deben estar alineadas (verde arriba)</span></div>
+    <div class="ej-linea"><span>2. Precio apoyado en EMA9 o EMA50</span><span class="ej-val verde">El precio toca la media y rebota, no la perfora</span></div>
+    <div class="ej-linea"><span>3. Velas de consolidación</span><span class="ej-val">Velas pequeñas los últimos 3-5 días — el precio "respira"</span></div>
+    <div class="ej-linea"><span>4. MACD con histograma subiendo</span><span class="ej-val verde">Las barras del histograma deben estar creciendo</span></div>
+    <div class="ej-linea"><span>5. Sin resistencia importante arriba</span><span class="ej-val">El camino al objetivo debe estar "limpio"</span></div>
+  </div>
+  <div class="warning-box">⚠️ <strong>Señales de alerta en el gráfico:</strong> Vela roja grande rompiendo la EMA9, precio en caída libre, MACD divergiendo negativamente, volumen cayendo mientras el precio sube (trampa alcista).</div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">⏰</span>
+    <div><p class="leccion-titulo">El Mejor Momento para Entrar</p><p class="leccion-sub">Timing dentro del día</p></div>
+  </div>
+  <p>Con Finbit operas en <strong>timeframe diario</strong> — las señales se basan en el cierre del día. Por eso los mejores momentos para revisar y ejecutar son:</p>
+  <div class="semaforo-demo">
+    <div class="sem-card" style="background:#14532d33;border:1px solid #166534">
+      <div class="sem-icon">🌅</div>
+      <div class="sem-titulo" style="color:#4ade80">8-9 AM</div>
+      <div class="sem-desc" style="color:#86efac">Pre-apertura. Actualiza Finbit. Planea entradas del día.</div>
+    </div>
+    <div class="sem-card" style="background:#7f1d1d33;border:1px solid #991b1b">
+      <div class="sem-icon">🚫</div>
+      <div class="sem-titulo" style="color:#f87171">10 AM - 1 PM</div>
+      <div class="sem-desc" style="color:#fca5a5">No actualices. Movimiento intradia genera falsas señales.</div>
+    </div>
+    <div class="sem-card" style="background:#14532d33;border:1px solid #166534">
+      <div class="sem-icon">🌆</div>
+      <div class="sem-titulo" style="color:#4ade80">2:30-3 PM</div>
+      <div class="sem-desc" style="color:#86efac">Cierre del mercado. Segunda revisión. Actualiza Finbit.</div>
+    </div>
+    <div class="sem-card" style="background:#1e3a5f33;border:1px solid #1e40af">
+      <div class="sem-icon">🌙</div>
+      <div class="sem-titulo" style="color:#60a5fa">Domingo noche</div>
+      <div class="sem-desc" style="color:#93c5fd">Vista semanal. Prepara la semana completa.</div>
+    </div>
+  </div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 4</div>
+    <ol>
+      <li>Abre tu screener "Por explotar" en TradingView</li>
+      <li>Elige las 3 acciones más interesantes de los resultados</li>
+      <li>Para cada una, aplica la checklist de 5 puntos y escribe SÍ o NO en cada punto</li>
+      <li>La que tenga más puntos en SÍ, agrégala a tu Scanner en Finbit</li>
+      <li>Espera la señal de Finbit antes de ejecutar cualquier orden</li>
+    </ol>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 4</h3>
+    <div class="quiz-preg">
+      <p>1. Una acción aparece en tu Screener "Por explotar". ¿Qué haces primero?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q4_1" value="a"> Compro inmediatamente antes de que suba</label>
+        <label><input type="radio" name="q4_1" value="b"> Verifico en el gráfico de TradingView y luego en Finbit</label>
+        <label><input type="radio" name="q4_1" value="c"> La ignoro porque el Screener no es confiable</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. Son las 11 AM y el Scanner de Finbit muestra una señal BUY nueva. ¿Qué haces?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q4_2" value="a"> Entro inmediatamente para no perder la oportunidad</label>
+        <label><input type="radio" name="q4_2" value="b"> Espero al cierre (2:30-3 PM) para confirmar con datos reales del día</label>
+        <label><input type="radio" name="q4_2" value="c"> Actualizo Finbit cada hora hasta que confirme</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. En el gráfico ves que la EMA9 está POR DEBAJO de la EMA50. ¿Esto es buena señal?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q4_3" value="a"> Sí, significa que hay espacio para subir</label>
+        <label><input type="radio" name="q4_3" value="b"> No, las EMAs deben estar alineadas EMA9 &gt; EMA50 &gt; EMA200</label>
+        <label><input type="radio" name="q4_3" value="c"> No importa la posición de las EMAs</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('4')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-4"></div>
+  </div>
+</div>`,
+
+// DÍA 5
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🛡️</span>
+    <div><p class="leccion-titulo">Día 5 — Gestión de Riesgo</p><p class="leccion-sub">La habilidad que separa a los que sobreviven de los que no</p></div>
+  </div>
+  <p>Puedes ser terrible eligiendo acciones y aún ganar dinero si tienes buena gestión de riesgo. Puedes ser brillante eligiendo acciones y arruinarte si no gestionas el riesgo. <strong>El riesgo primero, siempre.</strong></p>
+
+  <div class="leccion-header" style="margin-top:16px">
+    <span class="leccion-icon">🧮</span>
+    <div><p class="leccion-titulo">Calculadora de Riesgo en Vivo</p><p class="leccion-sub">Calcula tu tamaño de posición antes de cada operación</p></div>
+  </div>
+  <div class="calc-riesgo">
+    <h4>🧮 Calculadora de posición</h4>
+    <div class="calc-row">
+      <div class="calc-field"><label>Capital total (MXN)</label><input type="number" id="cc_capital" value="15000" oninput="calcRiesgo()"></div>
+      <div class="calc-field"><label>Riesgo por operación (%)</label><input type="number" id="cc_riesgo" value="1" step="0.1" oninput="calcRiesgo()"></div>
+    </div>
+    <div class="calc-row">
+      <div class="calc-field"><label>Precio de entrada (MXN)</label><input type="number" id="cc_entrada" value="960" oninput="calcRiesgo()"></div>
+      <div class="calc-field"><label>Precio de stop loss (MXN)</label><input type="number" id="cc_stop" value="898" oninput="calcRiesgo()"></div>
+    </div>
+    <div class="calc-field" style="margin-bottom:12px"><label>Precio objetivo (MXN)</label><input type="number" id="cc_objetivo" value="1158" oninput="calcRiesgo()"></div>
+    <div class="calc-resultado" id="calc-resultado">
+      <div class="cr-linea"><span>Riesgo máximo en $</span><span id="cr_riesgo_mxn">—</span></div>
+      <div class="cr-linea"><span>Riesgo por título</span><span id="cr_riesgo_titulo">—</span></div>
+      <div class="cr-linea"><span>Títulos a comprar</span><span id="cr_titulos">—</span></div>
+      <div class="cr-linea"><span>Capital a comprometer</span><span id="cr_capital_total">—</span></div>
+      <div class="cr-linea"><span>R:R de la operación</span><span id="cr_rr">—</span></div>
+      <div class="cr-linea"><span>Ganancia potencial</span><span id="cr_ganancia">—</span></div>
+    </div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">🛑</span>
+    <div><p class="leccion-titulo">El Stop Loss — Tu mejor amigo</p><p class="leccion-sub">No es una opción. Es obligatorio.</p></div>
+  </div>
+  <p>El stop loss es una orden que <strong>vende automáticamente</strong> tu posición si el precio cae a cierto nivel. Finbit te calcula el stop dinámico basado en la EMA9 — si el precio cierra dos días seguidos bajo la EMA9, es señal de salida.</p>
+  <div class="warning-box">⚠️ <strong>Error fatal del novato:</strong> "No pongo stop porque no quiero perder." Resultado: una pérdida del 3% se convierte en 30% porque "esperé que se recuperara". El stop no es para perder menos — es para que una mala operación no destruya tu cuenta.</div>
+  <div class="tip-box">💡 <strong>El stop en GBM:</strong> Cuando compras, inmediatamente coloca una orden de venta tipo "Stop Limit" al precio de stop que muestra Finbit. Así funciona automático aunque no estés viendo la pantalla.</div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📐</span>
+    <div><p class="leccion-titulo">El VIX — El termómetro del miedo</p><p class="leccion-sub">Cuando el mercado tiene fiebre, te quedas en casa</p></div>
+  </div>
+  <p>El VIX mide el <strong>nivel de miedo en el mercado</strong>. Un VIX alto significa que los inversores están asustados y el mercado es impredecible. Finbit lo muestra en la barra superior.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">📊 Escala VIX y qué hacer</div>
+    <div class="ej-linea"><span>VIX menor a 20</span><span class="ej-val verde">✅ Mercado tranquilo — condiciones favorables</span></div>
+    <div class="ej-linea"><span>VIX 20-25</span><span class="ej-val">⚠️ Precaución — reduce tamaño de posición</span></div>
+    <div class="ej-linea"><span>VIX mayor a 25</span><span class="ej-val rojo">🔴 Mercado en pánico — no abras nuevas posiciones</span></div>
+  </div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 5</div>
+    <ol>
+      <li>Usa la calculadora de arriba con tu capital real</li>
+      <li>Pon el precio de entrada y stop de una acción que tienes en el scanner</li>
+      <li>¿Cuántos títulos puedes comprar respetando el 1% de riesgo?</li>
+      <li>Revisa el VIX actual en Finbit (barra superior). ¿Es buen momento para abrir posiciones?</li>
+      <li>Practica colocar una orden Stop Limit en la plataforma de GBM en modo simulación</li>
+    </ol>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 5</h3>
+    <div class="quiz-preg">
+      <p>1. Tu capital es $20,000 MXN. ¿Cuánto es lo máximo que puedes perder en una operación?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q5_1" value="a"> $2,000 (10%)</label>
+        <label><input type="radio" name="q5_1" value="b"> $200 (1%)</label>
+        <label><input type="radio" name="q5_1" value="c"> $500 (2.5%)</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. El VIX está en 28. Finbit muestra una señal BUY en TSLA. ¿Qué haces?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q5_2" value="a"> Compro — la señal técnica es buena</label>
+        <label><input type="radio" name="q5_2" value="b"> No abro nuevas posiciones — VIX mayor a 25 indica mercado en pánico</label>
+        <label><input type="radio" name="q5_2" value="c"> Compro pero con stop más amplio</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. ¿Por qué el stop loss es obligatorio?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q5_3" value="a"> Para no perder dinero nunca</label>
+        <label><input type="radio" name="q5_3" value="b"> Para limitar pérdidas a un nivel predefinido y proteger el capital total</label>
+        <label><input type="radio" name="q5_3" value="c"> Porque la ley lo requiere</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('5')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-5"></div>
+  </div>
+</div>`,
+
+// DÍA 6
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🚀</span>
+    <div><p class="leccion-titulo">Día 6 — Tu Primera Operación Real</p><p class="leccion-sub">El flujo completo de principio a fin</p></div>
+  </div>
+  <p>Hoy vas a ver el proceso completo de una operación real, paso a paso, usando todas las herramientas que aprendiste. Este es el flujo que repetirás cada vez que identifiques una oportunidad.</p>
+
+  <div class="leccion-header" style="margin-top:16px">
+    <span class="leccion-icon">1️⃣</span>
+    <div><p class="leccion-titulo">Paso 1 — Identificar la oportunidad</p></div>
+  </div>
+  <p>Cada día a las 8-9 AM y 2:30-3 PM abres Finbit y TradingView.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">🔍 Dónde buscar oportunidades</div>
+    <div class="ej-linea"><span>Screener TradingView "Por explotar"</span><span class="ej-val">Acciones en consolidación pre-movimiento</span></div>
+    <div class="ej-linea"><span>Scanner Finbit — estado BUY o ROCKET</span><span class="ej-val">Tus tickers favoritos con señal activa</span></div>
+    <div class="ej-linea"><span>Radar Automático Finbit</span><span class="ej-val">Oportunidades fuera de tu lista habitual</span></div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">2️⃣</span>
+    <div><p class="leccion-titulo">Paso 2 — Verificar en TradingView</p></div>
+  </div>
+  <p>Abres el gráfico y aplicas la checklist de 5 puntos del Día 4. Si pasan 4 de 5, continúas.</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">3️⃣</span>
+    <div><p class="leccion-titulo">Paso 3 — Calcular el tamaño de posición</p></div>
+  </div>
+  <p>Usas la calculadora del Día 5 con los precios que muestra Finbit (entrada, stop, objetivo). Determinas cuántos títulos comprar respetando el 1% de riesgo.</p>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">🧮 Ejemplo real con SOXL</div>
+    <div class="ej-linea"><span>Capital</span><span class="ej-val">$15,000 MXN</span></div>
+    <div class="ej-linea"><span>Riesgo máximo (1%)</span><span class="ej-val rojo">$150 MXN</span></div>
+    <div class="ej-linea"><span>Entrada</span><span class="ej-val">$960 MXN</span></div>
+    <div class="ej-linea"><span>Stop</span><span class="ej-val rojo">$898 MXN (-$62 por título)</span></div>
+    <div class="ej-linea"><span>Títulos a comprar</span><span class="ej-val verde">$150 ÷ $62 = 2 títulos</span></div>
+    <div class="ej-linea"><span>Capital comprometido</span><span class="ej-val">2 × $960 = $1,920 MXN</span></div>
+    <div class="ej-linea"><span>Objetivo</span><span class="ej-val verde">$1,158 MXN (+$396 potencial)</span></div>
+    <div class="ej-linea"><span>R:R</span><span class="ej-val verde">$396 ÷ $124 = 3.2x ✅</span></div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">4️⃣</span>
+    <div><p class="leccion-titulo">Paso 4 — Ejecutar en GBM</p></div>
+  </div>
+  <p>Abres GBM, buscas el ticker (en GBM los tickers SIC se buscan igual: SOXL, TSLA, etc.) y colocas dos órdenes:</p>
+  <div class="semaforo-demo">
+    <div class="sem-card" style="background:#14532d33;border:1px solid #166534">
+      <div class="sem-icon">✅</div>
+      <div class="sem-titulo" style="color:#4ade80">Orden de COMPRA</div>
+      <div class="sem-desc" style="color:#86efac">Tipo: Mercado o Límite<br>Precio: entrada EMA9<br>Títulos: los calculados</div>
+    </div>
+    <div class="sem-card" style="background:#7f1d1d33;border:1px solid #991b1b">
+      <div class="sem-icon">🛑</div>
+      <div class="sem-titulo" style="color:#f87171">Orden STOP LIMIT</div>
+      <div class="sem-desc" style="color:#fca5a5">Inmediatamente después<br>Precio: stop de Finbit<br>Protección automática</div>
+    </div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">5️⃣</span>
+    <div><p class="leccion-titulo">Paso 5 — Registrar en Finbit</p></div>
+  </div>
+  <p>Ve a "Registrar operación" en Finbit y anota todos los datos: fecha, ticker, tipo COMPRA, títulos, precio MXN. Esto activa el seguimiento automático del portafolio y las recomendaciones de gestión.</p>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">6️⃣</span>
+    <div><p class="leccion-titulo">Paso 6 — Gestionar la posición</p></div>
+  </div>
+  <p>Una vez dentro, revisas dos veces al día. Finbit te dirá en el portafolio si debes MANTENER, AGREGAR, VIGILAR o SALIR. Respetas la decisión sin importar tus emociones.</p>
+  <div class="success-box">✅ <strong>Cuándo salir:</strong> (1) Toca tu stop loss → sal inmediatamente. (2) Llega al objetivo → toma ganancias parciales. (3) Finbit muestra EXIT → sal sin dudar. (4) Dos cierres bajo EMA9 → sal aunque no toque el stop.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">📝 Ejercicio del Día 6 — Operación simulada completa</div>
+    <ol>
+      <li>Abre el screener "Por explotar" y elige una acción candidata</li>
+      <li>Verifica en TradingView con la checklist de 5 puntos</li>
+      <li>Usa la calculadora de riesgo con esa acción y tu capital real</li>
+      <li>Anota en papel exactamente qué ordernarías en GBM (sin ejecutar todavía)</li>
+      <li>Regístrala como operación en Finbit usando el modo de práctica</li>
+      <li>Monítoreala durante 3 días anotando el movimiento diario</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);font-family:var(--sans);margin:10px 0 0">Haz esto con dinero en papel primero. Cuando te sientas cómodo con el proceso, entonces usa capital real.</p>
+  </div>
+
+  <div class="quiz-section">
+    <h3>✅ Quiz del Día 6</h3>
+    <div class="quiz-preg">
+      <p>1. ¿Cuándo colocas la orden Stop Limit en GBM?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q6_1" value="a"> Cuando el precio ya bajó mucho</label>
+        <label><input type="radio" name="q6_1" value="b"> Inmediatamente después de que se confirma mi compra</label>
+        <label><input type="radio" name="q6_1" value="c"> Solo si creo que puede bajar</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>2. Finbit muestra EXIT en una acción que llevas 2 semanas en posición y estás ganando. ¿Qué haces?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q6_2" value="a"> Me quedo — estoy ganando y puede seguir subiendo</label>
+        <label><input type="radio" name="q6_2" value="b"> Salgo — el sistema detectó deterioro y la señal manda</label>
+        <label><input type="radio" name="q6_2" value="c"> Compro más mientras bajo el costo promedio</label>
+      </div>
+    </div>
+    <div class="quiz-preg">
+      <p>3. ¿Para qué sirve registrar la operación en Finbit?</p>
+      <div class="quiz-op">
+        <label><input type="radio" name="q6_3" value="a"> Solo para llevar estadísticas de cuánto gané</label>
+        <label><input type="radio" name="q6_3" value="b"> Para activar el seguimiento automático y recibir recomendaciones de gestión en el portafolio</label>
+        <label><input type="radio" name="q6_3" value="c"> Es obligatorio por ley registrar operaciones</label>
+      </div>
+    </div>
+    <button class="quiz-btn" onclick="verificarQuiz('6')">Verificar respuestas</button>
+    <div class="quiz-resultado" id="res-quiz-6"></div>
+  </div>
+</div>`,
+
+// DÍA 7
+`<div class="leccion">
+  <div class="leccion-header">
+    <span class="leccion-icon">🏆</span>
+    <div><p class="leccion-titulo">Día 7 — Simulacro Final</p><p class="leccion-sub">Demuestra que puedes hacerlo solo</p></div>
+  </div>
+  <p>Este es tu examen final. Sin guía, sin ayuda. Vas a ejecutar el proceso completo desde cero como lo harías en un día real de trading. Si puedes hacer esto con confianza, estás listo para operar con capital real.</p>
+  <div class="tip-box">💡 <strong>Antes de empezar:</strong> Asegúrate de tener abierto Finbit, TradingView y tu calculadora. Tarda el tiempo que necesites — la calidad del proceso es más importante que la velocidad.</div>
+
+  <div class="ejercicio">
+    <div class="ej-header">🏆 Simulacro Completo — Sigue exactamente estos pasos</div>
+    <ol>
+      <li><strong>Revisar condiciones del mercado:</strong> Abre Finbit. ¿Cuál es el VIX? ¿Está el SPY sobre EMA200? ¿Es momento de operar o no?</li>
+      <li><strong>Buscar oportunidades:</strong> Revisa el Radar Automático de Finbit y el Screener de TradingView. Anota todas las acciones que llamen tu atención (mínimo 3).</li>
+      <li><strong>Filtrar candidatas:</strong> Para cada acción de tu lista, aplica la checklist de TradingView. Elimina las que no pasen 4 de 5 puntos.</li>
+      <li><strong>Seleccionar la mejor:</strong> De las que quedan, elige la que tenga mejor R:R y señal más clara en Finbit (BUY o ROCKET preferiblemente).</li>
+      <li><strong>Calcular la posición:</strong> Usa la calculadora de riesgo. Determina exactamente cuántos títulos comprar con tu capital real respetando el 1%.</li>
+      <li><strong>Documentar la orden:</strong> Escribe en papel exactamente qué ordenarías en GBM: ticker, tipo, cantidad, precio de entrada y precio de stop.</li>
+      <li><strong>Registrar en Finbit:</strong> Ve a "Registrar operación" y registra la operación como si fuera real.</li>
+      <li><strong>Plan de salida:</strong> Escribe las 3 condiciones bajo las cuales saldrías de esta posición.</li>
+    </ol>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">📋</span>
+    <div><p class="leccion-titulo">Evaluación del Simulacro</p><p class="leccion-sub">Califícate honestamente</p></div>
+  </div>
+  <div class="ejemplo-card">
+    <div class="ej-titulo">✅ Criterios de evaluación</div>
+    <div class="ej-linea"><span>Revisaste VIX antes de buscar oportunidades</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Usaste tanto Finbit como TradingView</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Aplicaste la checklist de 5 puntos</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Calculaste el tamaño de posición correctamente</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>El R:R de tu operación es ≥ 3x</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Tienes definido el precio de stop loss</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Registraste la operación en Finbit</span><span class="ej-val verde">+1 punto</span></div>
+    <div class="ej-linea"><span>Tienes 3 condiciones claras de salida</span><span class="ej-val verde">+1 punto</span></div>
+  </div>
+  <div class="semaforo-demo">
+    <div class="sem-card" style="background:#14532d33;border:2px solid #16a34a">
+      <div class="sem-icon">🏆</div>
+      <div class="sem-titulo" style="color:#4ade80">7-8 puntos</div>
+      <div class="sem-desc" style="color:#86efac">Listo para operar con capital real. ¡Excelente!</div>
+    </div>
+    <div class="sem-card" style="background:#78350f33;border:2px solid #d97706">
+      <div class="sem-icon">📚</div>
+      <div class="sem-titulo" style="color:#fbbf24">5-6 puntos</div>
+      <div class="sem-desc" style="color:#fcd34d">Casi listo. Repasa los días donde fallaste y repite el simulacro.</div>
+    </div>
+    <div class="sem-card" style="background:#7f1d1d33;border:2px solid #dc2626">
+      <div class="sem-icon">🔄</div>
+      <div class="sem-titulo" style="color:#f87171">Menos de 5</div>
+      <div class="sem-desc" style="color:#fca5a5">Regresa al Día 0 y vuelve a recorrer el curso. No hay prisa.</div>
+    </div>
+  </div>
+
+  <div class="leccion-header" style="margin-top:20px">
+    <span class="leccion-icon">🎯</span>
+    <div><p class="leccion-titulo">Glosario de Finbit — Términos clave</p><p class="leccion-sub">Tu referencia rápida permanente</p></div>
+  </div>
+  <div class="glosario-grid">
+    <div class="glosario-item"><div class="g-term">EMA (Media Móvil Exponencial)</div><div class="g-def">Precio promedio de los últimos N días, dando más peso a los días recientes. Muestra la tendencia.</div></div>
+    <div class="glosario-item"><div class="g-term">RSI (Índice de Fuerza Relativa)</div><div class="g-def">Mide si una acción está sobrecomprada (+72) o sobrevendida (-30). Ideal: 40-60 para entrar.</div></div>
+    <div class="glosario-item"><div class="g-term">MACD</div><div class="g-def">Mide el momentum (aceleración del precio). Alcista ▲ = compradores acelerando. Bajista ▼ = vendedores ganando.</div></div>
+    <div class="glosario-item"><div class="g-term">ADX</div><div class="g-def">Mide la fuerza de la tendencia (sin importar dirección). Menos de 20 = sin tendencia. Más de 20 = tendencia confirmada.</div></div>
+    <div class="glosario-item"><div class="g-term">OBV (On Balance Volume)</div><div class="g-def">Rastrea si el dinero institucional está entrando o saliendo. OBV subiendo con precio quieto = acumulación.</div></div>
+    <div class="glosario-item"><div class="g-term">Stop Loss</div><div class="g-def">Orden automática de venta si el precio baja a cierto nivel. Limita la pérdida máxima por operación.</div></div>
+    <div class="glosario-item"><div class="g-term">R:R (Riesgo:Recompensa)</div><div class="g-def">Relación entre lo que puedes perder y lo que puedes ganar. Finbit requiere mínimo 3:1.</div></div>
+    <div class="glosario-item"><div class="g-term">VIX</div><div class="g-def">Índice del miedo del mercado. Menos de 20 = calma. Más de 25 = pánico, no abrir nuevas posiciones.</div></div>
+    <div class="glosario-item"><div class="g-term">Swing Trading</div><div class="g-def">Mantener posiciones de 3 días a 6 semanas capturando un movimiento del precio. El estilo de Finbit.</div></div>
+    <div class="glosario-item"><div class="g-term">Soporte / Resistencia</div><div class="g-def">Niveles de precio donde históricamente el precio rebota (soporte abajo) o se detiene (resistencia arriba).</div></div>
+    <div class="glosario-item"><div class="g-term">FOMO</div><div class="g-def">Fear Of Missing Out — miedo a perderte el movimiento. Te hace comprar tarde y caro. Uno de los errores más costosos.</div></div>
+    <div class="glosario-item"><div class="g-term">DCA (Dollar Cost Averaging)</div><div class="g-def">Comprar en escalones a diferentes precios para bajar el costo promedio de entrada. Finbit lo calcula automático.</div></div>
+  </div>
+
+  <div class="success-box" style="margin-top:24px">🎓 <strong>¡Felicidades por completar el curso!</strong> Recuerda: el trading es un maratón, no un sprint. Empieza con capital pequeño, aplica las reglas siempre, y mejora gradualmente. Finbit está aquí para guiarte en cada decisión.</div>
+</div>`
+];
+
+const RESPUESTAS = {{
+  '0': ['b','c','b'],
+  '1': ['b','c','a'],
+  '2': ['b','b','b'],
+  '3': ['b','b','a'],
+  '4': ['b','b','b'],
+  '5': ['b','b','b'],
+  '6': ['b','b','b'],
+}};
+
+// Renderizar botones de días
+const grid = document.getElementById('dias-grid');
+const progDias = document.getElementById('prog-dias');
+const contenidos = document.getElementById('contenidos-curso');
+
+DIAS.forEach((d, i) => {{
+  // Botón día
+  const btn = document.createElement('div');
+  btn.className = 'dia-btn' + (i === 0 ? ' activo' : '');
+  btn.innerHTML = `<span class="dia-num">${{d.icon}}</span><span class="dia-nom">Día ${{d.num}}</span><span class="dia-nom" style="font-size:8px;margin-top:2px">${{d.nom}}</span>`;
+  btn.onclick = () => selDia(i);
+  grid.appendChild(btn);
+
+  // Barra de progreso
+  const p = document.createElement('div');
+  p.className = 'prog-dia' + (i === 0 ? ' actual' : '');
+  p.id = 'prog-' + i;
+  progDias.appendChild(p);
+
+  // Contenido
+  const c = document.createElement('div');
+  c.className = 'contenido-dia' + (i === 0 ? ' activo' : '');
+  c.id = 'dia-' + i;
+  c.innerHTML = CONTENIDOS[i] || '';
+  contenidos.appendChild(c);
+}});
+
+function selDia(idx) {{
+  document.querySelectorAll('.dia-btn').forEach((b,i) => b.className = 'dia-btn' + (i===idx?' activo':''));
+  document.querySelectorAll('.contenido-dia').forEach((c,i) => c.className = 'contenido-dia' + (i===idx?' activo':''));
+  document.querySelectorAll('.prog-dia').forEach((p,i) => {{
+    p.className = 'prog-dia' + (i<idx?' completado':(i===idx?' actual':''));
+  }});
+  localStorage.setItem('finbit_curso_dia', idx);
+  calcRiesgo();
+}}
+
+// Restaurar día guardado al cargar
+const diaGuardado = parseInt(localStorage.getItem('finbit_curso_dia') || '0');
+if (diaGuardado > 0) selDia(diaGuardado);
+
+window.verificarQuiz = function(dia) {{
+  const resp = RESPUESTAS[dia];
+  if (!resp) return;
+  let correctas = 0;
+  resp.forEach((r, i) => {{
+    const sel = document.querySelector(`input[name="q${{dia}}_${{i+1}}"]:checked`);
+    if (sel && sel.value === r) correctas++;
+  }});
+  const el = document.getElementById('res-quiz-' + dia);
+  el.style.display = 'block';
+  if (correctas === 3) {{
+    el.className = 'quiz-resultado bien';
+    el.textContent = '🎉 ¡Perfecto! 3/3 correctas. Puedes avanzar al siguiente día.';
+  }} else if (correctas === 2) {{
+    el.className = 'quiz-resultado bien';
+    el.textContent = `✅ ${{correctas}}/3 correctas. Casi perfecto — repasa lo que fallaste y continúa.`;
+  }} else {{
+    el.className = 'quiz-resultado mal';
+    el.textContent = `❌ ${{correctas}}/3 correctas. Te recomiendo releer el contenido de este día antes de continuar.`;
+  }}
+}};
+
+window.calcRiesgo = function() {{
+  const cap    = parseFloat(document.getElementById('cc_capital')?.value) || 0;
+  const riesgo = parseFloat(document.getElementById('cc_riesgo')?.value) / 100 || 0.01;
+  const entrada= parseFloat(document.getElementById('cc_entrada')?.value) || 0;
+  const stop   = parseFloat(document.getElementById('cc_stop')?.value) || 0;
+  const obj    = parseFloat(document.getElementById('cc_objetivo')?.value) || 0;
+  if (!cap || !entrada || !stop || entrada <= stop) return;
+  const riesgoMXN = cap * riesgo;
+  const riesgoPorTitulo = entrada - stop;
+  const titulos = Math.floor(riesgoMXN / riesgoPorTitulo);
+  const capitalTotal = titulos * entrada;
+  const rr = obj > entrada ? ((obj - entrada) / (entrada - stop)).toFixed(1) : '—';
+  const ganancia = titulos * (obj - entrada);
+  const fmt = v => '$' + v.toLocaleString('es-MX', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+  document.getElementById('cr_riesgo_mxn').textContent = fmt(riesgoMXN);
+  document.getElementById('cr_riesgo_titulo').textContent = fmt(riesgoPorTitulo);
+  document.getElementById('cr_titulos').textContent = titulos + ' título(s)';
+  document.getElementById('cr_capital_total').textContent = fmt(capitalTotal);
+  document.getElementById('cr_rr').textContent = rr + 'x';
+  document.getElementById('cr_ganancia').textContent = ganancia > 0 ? fmt(ganancia) : '—';
+}};
+
+// Init calculadora
+setTimeout(calcRiesgo, 100);
+
+}})();
+</script>
 </div>
 
 <script>
@@ -6288,7 +7559,7 @@ const PORT_BASE = {port_json};
   const scanner = document.getElementById('tab-scanner');
   if(!scanner) return;
   const tabIds = ['tab-top','tab-topd','tab-wl','tab-diario','tab-rendimiento',
-                  'tab-semis','tab-radar','tab-ia','tab-portafolio',
+                  'tab-semis','tab-radar','tab-curso','tab-portafolio',
                   'tab-registrar','tab-historial'];
   tabIds.forEach(id=>{{
     const el = document.getElementById(id);
@@ -6311,7 +7582,6 @@ function showTab(name,btn){{
     tab.style.removeProperty('display');
   }}
   if(btn)btn.classList.add('active');
-  if(name==='ia') initIaTab();
 }}
 function toggle(id){{
   const el=document.getElementById(id); if(!el)return;
@@ -6333,12 +7603,13 @@ function recalcPortafolio(ops){{
         map[t].costoTotal+=op.titulos*op.precio_mxn;
         map[t].titulos+=op.titulos;
       }} else if(op.tipo==='VENTA'){{
-        if(!map[t] || (map[t].titulos<=0 && map[t].costoTotal<=0)){{
+        if(!map[t]){{
+          // Venta sin compra en localStorage — buscar en PORT_BASE
           const base=PORT_BASE.find(p=>p.ticker===t);
           if(base) map[t]={{titulos:base.titulos,costoTotal:base.cto_prom_mxn*base.titulos,origen:base.origen||'USA',mercado:base.mercado||'SIC',precio_actual_mxn:base.precio_actual_mxn,pl_mxn:0,pl_pct:0}};
-          else if(!map[t]) map[t]={{titulos:0,costoTotal:0,origen:'USA',mercado:'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
+          else map[t]={{titulos:0,costoTotal:0,origen:'USA',mercado:'SIC',precio_actual_mxn:null,pl_mxn:0,pl_pct:0}};
         }}
-        if(map[t] && map[t].titulos>0){{
+        if(map[t].titulos>0){{
           const cto=map[t].costoTotal/map[t].titulos;
           map[t].costoTotal-=op.titulos*cto;
           map[t].titulos-=op.titulos;
@@ -6925,12 +8196,17 @@ function wlToggle(btn, ticker) {{
   .then(d => {{
     const b = btn || document.getElementById('wl-btn-' + ticker);
     if (b) {{
-      b.textContent = '✅ Agregado';
+      b.textContent = '✅ En Watchlist';
       b.style.background = '#dcfce7';
       b.style.color = '#15803d';
       b.style.borderColor = '#15803d';
+      setTimeout(() => {{
+        b.textContent = '👁 Agregar a Watchlist';
+        b.style.background = 'var(--surface2)';
+        b.style.color = '#3b82f6';
+        b.style.borderColor = '#3b82f6';
+      }}, 2000);
     }}
-    setTimeout(() => {{ showTab('wl', document.querySelector('.nb[onclick*=wl]')); }}, 800);
   }})
   .catch(e => console.log('WL error:', e));
 }}
@@ -7046,84 +8322,6 @@ function restaurarTickerScanner(ticker) {{
   }})
   .then(() => cargarTickersPersonalizados())
   .catch(() => cargarTickersPersonalizados());
-}}
-
-// ── Tab IA — análisis narrativo ──────────────────────────
-const _IA_TICKERS = {scan_nombres_json};
-
-function _iaCardHTML(ticker, estado) {{
-  return '<div id="ia-card-'+ticker+'" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px 18px">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
-    + '<div><strong style="font-size:15px">'+ticker+'</strong>'
-    + '<span style="margin-left:10px;font-size:11px;color:var(--muted)">'+estado+'</span></div>'
-    + '<button onclick="analizarTicker(\''+ticker+'\')" id="ia-btn-'+ticker+'"'
-    + ' style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #7c3aed;'
-    + 'background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
-    + '</div>'
-    + '<div id="ia-txt-'+ticker+'" style="font-size:12px;line-height:1.8;color:var(--muted)">—</div>'
-    + '</div>';
-}}
-
-function initIaTab() {{
-  const lista = document.getElementById('ia-lista');
-  if (!lista) return;
-  const tickers = _IA_TICKERS;
-  if (!tickers || !tickers.length) {{
-    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos del scanner. Actualiza primero.</div>';
-    return;
-  }}
-  lista.innerHTML = tickers.map(function(t) {{ return _iaCardHTML(t.nombre, t.estado); }}).join('');
-}}
-
-function analizarTicker(ticker) {{
-  const btn = document.getElementById('ia-btn-'+ticker);
-  const txt = document.getElementById('ia-txt-'+ticker);
-  if (!btn || !txt) return;
-  btn.disabled = true;
-  btn.textContent = '⏳ Analizando...';
-  txt.style.color = 'var(--muted)';
-  txt.textContent = 'Generando análisis...';
-  fetch('/api/ia/'+ticker)
-    .then(function(r) {{ return r.json(); }})
-    .then(function(d) {{
-      btn.disabled = false;
-      btn.textContent = '✅ Listo';
-      btn.style.color = 'var(--green)';
-      btn.style.borderColor = 'var(--green)';
-      if (d.ok) {{
-        txt.style.color = 'var(--text)';
-        txt.innerHTML = d.analisis.split('\n').filter(function(l){{return l.trim();}})
-          .map(function(l){{return '<p style="margin:0 0 8px">'+l+'</p>';}}).join('');
-      }} else {{
-        txt.style.color = 'var(--red)';
-        txt.textContent = 'Error: '+(d.error||'Sin respuesta');
-      }}
-    }})
-    .catch(function() {{
-      btn.disabled = false;
-      btn.textContent = '🧠 Analizar';
-      txt.style.color = 'var(--red)';
-      txt.textContent = 'Error de conexión.';
-    }});
-}}
-
-function analizarTodos() {{
-  const btn = document.getElementById('btn-analizar-todos');
-  if (btn) {{ btn.disabled = true; btn.textContent = '⏳ Analizando...'; }}
-  initIaTab();
-  const tickers = _IA_TICKERS;
-  if (!tickers || !tickers.length) return;
-  let i = 0;
-  function siguiente() {{
-    if (i >= tickers.length) {{
-      if (btn) {{ btn.disabled = false; btn.textContent = '🧠 Analizar todos'; }}
-      return;
-    }}
-    analizarTicker(tickers[i].nombre);
-    i++;
-    setTimeout(siguiente, 3500);
-  }}
-  setTimeout(siguiente, 300);
 }}
 
 function actualizarDashboard() {{
@@ -7965,7 +9163,7 @@ def api_exportar_excel():
 # ═══════════════════════════════════════════════════════════
 @app.route("/api/watchlist/agregar", methods=["POST"])
 def api_wl_agregar():
-    data   = flask_req.get_json(silent=True) or {}
+    data   = request.get_json(silent=True) or {}
     ticker = data.get("ticker", "").upper().strip()
     notas  = data.get("notas", "")
     if not ticker:
@@ -7982,65 +9180,8 @@ def api_wl_quitar(ticker):
 def api_wl_lista():
     return jsonify(get_watchlist())
 
-@app.route("/api/ia/<ticker>")
-def api_ia_analisis(ticker):
-    ticker = ticker.upper().strip()
-    r = next((x for x in (_scan_resultados or []) if x.get("nombre","").upper() == ticker), {})
-    precio = r.get("precio_mxn", 0)
-    entrada = r.get("entrada_mxn", 0)
-    stop = r.get("stop_mxn", 0)
-    obj = r.get("obj_mxn", 0)
-    rr = r.get("rr", 0)
-    rsi_v = r.get("rsi", 0)
-    score = r.get("score_ajustado", r.get("score", 0))
-    total_c = r.get("total_criterios", 13)
-    estado = r.get("estado", "N/A")
-    macd_ok = r.get("macd_ok", False)
-    ema200_ok = r.get("ema200_ok", False)
-    obv = (r.get("obv") or {}).get("tendencia", "sin datos")
-    adx_v = r.get("adx", 0)
-    sector = (r.get("sector") or {})
-    ganga = (r.get("ganga") or {})
-    es_ganga = ganga.get("es_ganga", False)
-    ganga_pct = ganga.get("margen_pct", 0)
-    inicio = (r.get("inicio") or {})
-    nivel_ini = inicio.get("nivel", "") if inicio.get("es_inicio") else ""
-    cap = (r.get("capitulacion") or {})
-    es_cap = cap.get("es_capitulacion", False)
-    bloq = "; ".join((r.get("setup") or {}).get("bloqueadores", [])[:2])
-    sr = (r.get("sr") or {})
-    sr_ctx = sr.get("contexto", "")
-    soportes = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)} for z in sr.get("soportes",[])[:3]]
-    resists = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)} for z in sr.get("resistencias",[])[:3]]
-    prompt = (f"Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera en GBM/SIC.\n\n"
-              f"TICKER: {ticker}\n"
-              f"Precio: ${precio:,.2f} MXN | Entrada EMA9: ${entrada:,.2f} | Stop: ${stop:,.2f} | Objetivo: ${obj:,.2f}\n"
-              f"Score: {score}/{total_c} | Estado: {estado} | R:R: {rr:.1f}x\n"
-              f"RSI: {rsi_v:.0f} | MACD: {'alcista' if macd_ok else 'bajista'} | EMA200: {'encima' if ema200_ok else 'debajo'}\n"
-              f"OBV: {obv} | ADX: {adx_v:.0f}\n"
-              f"Sector: {sector.get('desc','')}\n"
-              f"Ganga: {'Si, '+str(ganga_pct)+'% bajo objetivo' if es_ganga else 'No'} | Acumulacion: {nivel_ini or 'No'} | Capitulacion: {'Si' if es_cap else 'No'}\n"
-              f"Bloqueadores: {bloq or 'ninguno'}\n"
-              f"S/R contexto: {sr_ctx}\n"
-              f"Soportes: {soportes}\n"
-              f"Resistencias: {resists}\n\n"
-              f"Responde en exactamente 4 oraciones directas:\n"
-              f"1. Situacion tecnica actual\n"
-              f"2. Lo que favorece una entrada\n"
-              f"3. Lo que va en contra o riesgos\n"
-              f"4. Veredicto: COMPRAR en $X / VIGILAR / NO ENTRAR / SALIR\n\n"
-              f"Sin intro. Sin rodeos. Como trader hablando con trader.")
-    try:
-        import requests as _req
-        resp = _req.post("https://api.anthropic.com/v1/messages",
-            json={{"model": "claude-sonnet-4-20250514", "max_tokens": 500,
-                  "messages": [{{"role": "user", "content": prompt}}]}},
-            headers={{"Content-Type": "application/json"}}, timeout=30)
-        data = resp.json()
-        texto = data.get("content", [{{}}])[0].get("text", "Sin respuesta")
-        return jsonify({{"ok": True, "analisis": texto, "ticker": ticker}})
-    except Exception as e:
-        return jsonify({{"ok": False, "error": str(e)}}), 500
+# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 SEMIS_ETFS = {
     "SMH":  ("SMH",  "NASDAQ"),   # Referencia del sector sin apalancamiento
