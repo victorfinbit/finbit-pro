@@ -4889,7 +4889,8 @@ def render_scan_rows(scanner, tc):
             f'<td><span style="font-family:var(--mono);font-size:12px;color:{score_color};font-weight:600">'
             f'{score_aj}/{total_c}</span>{conf_bar_mini}'
             f'{etapa_badge}'
-            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}</td>'
+            f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}'
+            f'</td>'
             f'</tr>'
             f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
     return h
@@ -5823,16 +5824,6 @@ td strong{{font-size:13px;font-weight:500}}
   <span style="margin-left:auto;font-size:11px;opacity:.6">SPY {'✅ sobre' if spy.get('sobre_ema200') else '❌ bajo'} EMA200 · Score mín entrada: {'7/9 acciones · 8/9 ETFs 3x' if vix<20 else '8/9 acciones · 9/9 ETFs 3x'}</span>
 </div>
 
-<div id="ia-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;align-items:center;justify-content:center" onclick="if(event.target===this)cerrarIA()">
-  <div style="background:#1e1b4b;border:2px solid #7c3aed;border-radius:14px;padding:22px 24px;width:540px;max-width:94vw;max-height:82vh;overflow-y:auto">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <span id="ia-titulo" style="font-size:12px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.08em">🧠 Análisis IA</span>
-      <button onclick="cerrarIA()" style="background:none;border:none;color:#a78bfa;font-size:20px;cursor:pointer;line-height:1">✕</button>
-    </div>
-    <div id="ia-contenido" style="font-size:13px;line-height:1.9;color:#e9d5ff;min-height:80px"></div>
-    <div style="margin-top:12px;font-size:10px;color:#6d28d9;border-top:1px solid #4c1d95;padding-top:8px">⚠️ Solo fines educativos · No es asesoría financiera</div>
-  </div>
-</div>
 <div class="modal-bg" id="editModal">
   <div class="modal">
     <h3>Editar operación</h3>
@@ -8328,37 +8319,6 @@ function restaurarTickerScanner(ticker) {{
   .catch(() => cargarTickersPersonalizados());
 }}
 
-function abrirIA(ticker) {{
-  const modal = document.getElementById('ia-modal');
-  const titulo = document.getElementById('ia-titulo');
-  const contenido = document.getElementById('ia-contenido');
-  if (!modal || !contenido) return;
-  modal.style.display = 'flex';
-  if (titulo) titulo.textContent = '🧠 Analizando ' + ticker + '...';
-  contenido.innerHTML = '<div style="text-align:center;padding:30px;color:#7c3aed">⏳ Generando análisis...</div>';
-  fetch('/api/ia/' + ticker)
-    .then(function(r) {{ return r.json(); }})
-    .then(function(d) {{
-      if (titulo) titulo.textContent = '🧠 Análisis IA — ' + ticker;
-      if (d.ok) {{
-        contenido.innerHTML = d.analisis.split('\n')
-          .filter(function(l) {{ return l.trim(); }})
-          .map(function(l) {{ return '<p style="margin:0 0 12px">' + l + '</p>'; }})
-          .join('');
-      }} else {{
-        contenido.innerHTML = '<div style="color:#f87171">Error: ' + (d.error || 'Sin respuesta') + '</div>';
-      }}
-    }})
-    .catch(function() {{
-      contenido.innerHTML = '<div style="color:#f87171">Error de conexión. Intenta de nuevo.</div>';
-    }});
-}}
-
-function cerrarIA() {{
-  const modal = document.getElementById('ia-modal');
-  if (modal) modal.style.display = 'none';
-}}
-
 function actualizarDashboard() {{
   const btn = document.getElementById('btn_update');
   if (btn) {{ btn.disabled = true; btn.textContent = '↺ Actualizando...'; }}
@@ -9214,83 +9174,6 @@ def api_wl_quitar(ticker):
 @app.route("/api/watchlist")
 def api_wl_lista():
     return jsonify(get_watchlist())
-
-@app.route("/api/ia/<ticker>")
-def api_ia_analisis(ticker):
-    """Endpoint que devuelve análisis IA de un ticker usando datos del último scan."""
-    ticker = ticker.upper().strip()
-    # Buscar datos del ticker en los últimos resultados del scanner
-    r = next((x for x in (_scan_resultados or []) if x.get("nombre","").upper() == ticker), {})
-    
-    precio    = r.get("precio_mxn", 0)
-    entrada   = r.get("entrada_mxn", 0)
-    stop      = r.get("stop_mxn", 0)
-    obj       = r.get("obj_mxn", 0)
-    rr        = r.get("rr", 0)
-    rsi_v     = r.get("rsi", 0)
-    score     = r.get("score_ajustado", r.get("score", 0))
-    total_c   = r.get("total_criterios", 13)
-    estado    = r.get("estado", "N/A")
-    macd_ok   = r.get("macd_ok", False)
-    ema200_ok = r.get("ema200_ok", False)
-    obv       = (r.get("obv") or {}).get("tendencia", "sin datos")
-    adx_v     = r.get("adx", 0)
-    sector    = (r.get("sector") or {})
-    sector_ok = sector.get("alcista", True)
-    sector_etf= sector.get("etf", "")
-    ganga     = (r.get("ganga") or {})
-    es_ganga  = ganga.get("es_ganga", False)
-    ganga_pct = ganga.get("margen_pct", 0)
-    inicio    = (r.get("inicio") or {})
-    nivel_ini = inicio.get("nivel", "") if inicio.get("es_inicio") else ""
-    cap       = (r.get("capitulacion") or {})
-    es_cap    = cap.get("es_capitulacion", False)
-    bloq      = "; ".join((r.get("setup") or {}).get("bloqueadores", [])[:2])
-    sr        = (r.get("sr") or {})
-    sr_ctx    = sr.get("contexto", "")
-    soportes  = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)}
-                 for z in sr.get("soportes",[])[:3]]
-    resists   = [{"precio": round(z.get("precio",0)*17.2,2), "fuerza": z.get("fuerza",0)}
-                 for z in sr.get("resistencias",[])[:3]]
-
-    prompt = f"""Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera en GBM/SIC.
-
-TICKER: {ticker}
-Precio: ${precio:,.2f} MXN | Entrada EMA9: ${entrada:,.2f} | Stop: ${stop:,.2f} | Objetivo: ${obj:,.2f}
-Score: {score}/{total_c} | Estado Finbit: {estado} | R:R: {rr:.1f}x
-RSI: {rsi_v:.0f} | MACD: {"alcista" if macd_ok else "bajista"} | EMA200: {"encima" if ema200_ok else "debajo"}
-OBV: {obv} | ADX: {adx_v:.0f} | Sector ({sector_etf}): {"alcista" if sector_ok else "bajista"}
-Ganga: {"Sí, " + str(ganga_pct) + "% bajo objetivo" if es_ganga else "No"} | Acumulación: {nivel_ini or "No"} | Capitulación: {"Sí" if es_cap else "No"}
-Bloqueadores: {bloq or "ninguno"}
-S/R: {sr_ctx}
-Soportes: {soportes}
-Resistencias: {resists}
-
-Responde en exactamente 4 oraciones directas:
-1. Situación técnica actual
-2. Lo que favorece una entrada  
-3. Lo que va en contra o riesgos
-4. Veredicto: COMPRAR en $X / VIGILAR / NO ENTRAR / SALIR — con precio concreto
-
-Sin intro. Sin rodeos. Como trader hablando con trader."""
-
-    try:
-        import requests as _req
-        resp = _req.post(
-            "https://api.anthropic.com/v1/messages",
-            json={{"model": "claude-sonnet-4-20250514", "max_tokens": 500,
-                  "messages": [{{"role": "user", "content": prompt}}]}},
-            headers={{"Content-Type": "application/json"}},
-            timeout=30
-        )
-        data = resp.json()
-        texto = data.get("content", [{{}}])[0].get("text", "Sin respuesta")
-        return jsonify({{"ok": True, "analisis": texto, "ticker": ticker}})
-    except Exception as e:
-        return jsonify({{"ok": False, "error": str(e)}}), 500
-
-# ═══════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════
 
 SEMIS_ETFS = {
     "SMH":  ("SMH",  "NASDAQ"),   # Referencia del sector sin apalancamiento
