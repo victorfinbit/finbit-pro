@@ -7927,17 +7927,80 @@ def api_port_json():
 
 
 _IA_JS = r'''
-// Tab IA — Finbit Pro
+// Tab IA — Finbit Pro v2
 (function() {
+
+  var ESTADO_BADGE = {
+    'RUPTURA':           { emoji: '🚀', color: '#16a34a', bg: '#f0fdf4', border: '#86efac' },
+    'PRE-BREAKOUT':      { emoji: '⚡', color: '#b45309', bg: '#fffbeb', border: '#fcd34d' },
+    'TENDENCIA_ALCISTA': { emoji: '📈', color: '#2563eb', bg: '#eff6ff', border: '#93c5fd' },
+    'ACUMULACION':       { emoji: '🟡', color: '#92400e', bg: '#fef3c7', border: '#fcd34d' },
+    'LISTO_ENTRAR':      { emoji: '✅', color: '#16a34a', bg: '#f0fdf4', border: '#86efac' },
+    'LATERAL':           { emoji: '↔️',  color: '#6b7280', bg: '#f9fafb', border: '#d1d5db' },
+    'BAJISTA':           { emoji: '📉', color: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
+    'BLOQUEADO':         { emoji: '🔒', color: '#9ca3af', bg: '#f3f4f6', border: '#e5e7eb' },
+  };
+
+  function getBadge(estado) {
+    var s = (estado || '').toUpperCase().replace(/ /g,'_').replace(/\//g,'_');
+    for (var k in ESTADO_BADGE) {
+      if (s.indexOf(k) !== -1) return ESTADO_BADGE[k];
+    }
+    return { emoji: '⬜', color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' };
+  }
+
+  function renderAnalisis(texto) {
+    var SECS = {
+      'SITUACION':        { icon: '📊', color: '#2563eb' },
+      'ENTRADA':          { icon: '🎯', color: '#16a34a' },
+      'STOP Y OBJETIVO':  { icon: '📏', color: '#b45309' },
+      'RIESGOS':          { icon: '⚠️',  color: '#dc2626' },
+      'VEREDICTO':        { icon: '🏁', color: '#7c3aed' },
+    };
+    var lines = texto.split('\n').filter(function(l){ return l.trim(); });
+    var html = '';
+    var currentColor = null;
+
+    lines.forEach(function(line) {
+      var matched = false;
+      var up = line.toUpperCase();
+      for (var sec in SECS) {
+        if (up.indexOf(sec + ':') === 0) {
+          var s = SECS[sec];
+          currentColor = s.color;
+          var rest = line.substring(line.indexOf(':') + 1).trim();
+          html += '<div style="margin-top:12px;padding:10px 14px;border-radius:8px;background:' + s.color + '15;border-left:3px solid ' + s.color + '">';
+          html += '<div style="font-size:10px;font-weight:700;color:' + s.color + ';text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">' + s.icon + ' ' + sec + '</div>';
+          if (rest) html += '<div style="font-size:13px;line-height:1.65;color:#1f2937">' + rest + '</div>';
+          html += '</div>';
+          matched = true;
+          break;
+        }
+      }
+      if (!matched && html) {
+        // Línea de continuación — agregarla dentro del último bloque
+        var lastClose = html.lastIndexOf('</div></div>');
+        if (lastClose !== -1) {
+          html = html.substring(0, lastClose) + '<br><span style="font-size:13px;line-height:1.65;color:#1f2937">' + line + '</span></div></div>';
+        } else {
+          html += '<p style="margin:4px 0 0;font-size:13px;line-height:1.65;color:#374151">' + line + '</p>';
+        }
+      }
+    });
+    return html || '<p style="color:#9ca3af;font-style:italic">Sin análisis recibido.</p>';
+  }
+
   function _iaCard(ticker, estado) {
-    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px 18px">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
-      + '<div><strong style="font-size:15px">' + ticker + '</strong>'
-      + '<span style="margin-left:10px;font-size:11px;color:var(--muted)">' + estado + '</span></div>'
-      + '<button onclick="window._ia_analizar(\'' + ticker + '\')" id="ia-btn-' + ticker + '"'
-      + ' style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
+    var b = getBadge(estado);
+    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid ' + b.border + ';border-radius:14px;padding:18px 20px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+      + '<div style="display:flex;align-items:center;gap:10px">'
+      + '<strong style="font-size:16px">' + ticker + '</strong>'
+      + '<span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:' + b.bg + ';color:' + b.color + ';border:1px solid ' + b.border + '">' + b.emoji + ' ' + estado + '</span>'
       + '</div>'
-      + '<div id="ia-txt-' + ticker + '" style="font-size:12px;line-height:1.8;color:var(--muted)">—</div>'
+      + '<button onclick="window._ia_analizar(\'' + ticker + '\')" id="ia-btn-' + ticker + '" style="font-size:12px;padding:6px 14px;border-radius:8px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
+      + '</div>'
+      + '<div id="ia-txt-' + ticker + '" style="margin-top:6px;color:var(--muted)">—</div>'
       + '</div>';
   }
 
@@ -7947,48 +8010,47 @@ _IA_JS = r'''
     if (!btn || !txt) return;
     btn.disabled = true;
     btn.textContent = '⏳ Analizando...';
-    txt.style.color = 'var(--muted)';
-    txt.textContent = 'Generando análisis...';
+    btn.style.opacity = '0.6';
+    txt.innerHTML = '<div style="padding:12px 0;color:var(--muted);font-size:13px">🧠 Generando análisis con IA...</div>';
     fetch('/api/ia/' + ticker)
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
+      .then(function(r){ return r.json(); })
+      .then(function(d){
         btn.disabled = false;
-        btn.textContent = d.ok ? '✅ Listo' : '❌ Error';
-        btn.style.color = d.ok ? 'var(--green)' : 'var(--red)';
+        btn.style.opacity = '1';
         if (d.ok) {
-          txt.style.color = 'var(--text)';
-          txt.innerHTML = d.analisis.split('\n')
-            .filter(function(l) { return l.trim(); })
-            .map(function(l) { return '<p style="margin:0 0 8px">' + l + '</p>'; })
-            .join('');
+          btn.textContent = '✅ Listo';
+          btn.style.color = '#16a34a';
+          btn.style.borderColor = '#16a34a';
+          txt.innerHTML = renderAnalisis(d.analisis);
         } else {
-          txt.style.color = 'var(--red)';
-          txt.textContent = 'Error: ' + (d.error || 'Sin respuesta');
+          btn.textContent = '❌ Error';
+          btn.style.color = '#dc2626';
+          txt.innerHTML = '<p style="color:#dc2626;font-size:13px">⚠ ' + (d.error||'Sin respuesta') + '</p>';
         }
       })
-      .catch(function() {
+      .catch(function(){
         btn.disabled = false;
+        btn.style.opacity = '1';
         btn.textContent = '🧠 Analizar';
-        txt.style.color = 'var(--red)';
-        txt.textContent = 'Error de conexion.';
+        txt.innerHTML = '<p style="color:#dc2626;font-size:13px">⚠ Error de conexión.</p>';
       });
   };
 
   function initIaTab() {
     var lista = document.getElementById('ia-lista');
     if (!lista) return;
-    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Cargando tickers...</div>';
+    lista.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)">🧠 Cargando tickers...</div>';
     fetch('/api/scan/nombres')
-      .then(function(r) { return r.json(); })
-      .then(function(tickers) {
+      .then(function(r){ return r.json(); })
+      .then(function(tickers){
         if (!tickers || !tickers.length) {
-          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos. Da clic en Actualizar primero. <button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;border:1px solid #ccc;background:#f5f5f3;cursor:pointer;font-size:12px">Reintentar</button></div>';
+          lista.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)"><div style="font-size:32px;margin-bottom:12px">📭</div><strong>Sin datos del scanner</strong><br><span style="font-size:13px">Da clic en <strong>Actualizar</strong> primero.</span><br><br><button onclick="initIaTab()" style="padding:8px 18px;border-radius:8px;border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:13px">↺ Reintentar</button></div>';
           return;
         }
-        lista.innerHTML = tickers.map(function(t) { return _iaCard(t.nombre, t.estado); }).join('');
+        lista.innerHTML = tickers.map(function(t){ return _iaCard(t.nombre, t.estado); }).join('');
       })
-      .catch(function() {
-        lista.innerHTML = '<div style="padding:30px;text-align:center;color:red">Error cargando tickers.</div>';
+      .catch(function(){
+        lista.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626">⚠ Error cargando tickers.</div>';
       });
   }
 
@@ -7998,8 +8060,8 @@ _IA_JS = r'''
     var btn = document.getElementById('btn-analizar-todos');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Analizando...'; }
     fetch('/api/scan/nombres')
-      .then(function(r) { return r.json(); })
-      .then(function(tickers) {
+      .then(function(r){ return r.json(); })
+      .then(function(tickers){
         if (!tickers || !tickers.length) { if (btn) btn.disabled = false; return; }
         initIaTab();
         var i = 0;
@@ -8010,14 +8072,13 @@ _IA_JS = r'''
           }
           window._ia_analizar(tickers[i].nombre);
           i++;
-          setTimeout(siguiente, 3500);
+          setTimeout(siguiente, 4500);
         }
         setTimeout(siguiente, 800);
       })
-      .catch(function() { if (btn) btn.disabled = false; });
+      .catch(function(){ if (btn) btn.disabled = false; });
   };
 
-  // Auto-init si la tab ya está activa
   var tab = document.getElementById('tab-ia');
   if (tab && tab.classList.contains('active')) { initIaTab(); }
 })();
