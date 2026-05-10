@@ -8180,34 +8180,26 @@ def api_ia_analisis(ticker):
     if es_cap:    specials.append("CAPITULACION detectada")
 
     prompt = (
-        f"Analiza {ticker} para swing trading en GBM/SIC. Capital $15,000 MXN, riesgo 1%=$150, R:R min 3x.\n"
-        f"Precio=${precio:,.0f} EMA9=${entrada:,.0f} EMA21=${ema21_mxn:,.0f} EMA50=${ema50_mxn:,.0f} EMA200=${ema200_mxn:,.0f}\n"
-        f"Stop=${stop:,.0f} Objetivo=${obj:,.0f} RR={rr:.1f}x\n"
-        f"RSI={rsi_v:.0f} MACD={'alcista' if macd_ok else 'bajista'} EMA200={'encima' if ema200_ok else 'debajo'} ADX={adx_v:.0f} OBV={obv}\n"
-        f"RSI_1W={rsi_1w:.0f} MACD_1W={'alcista' if macd_1w else 'bajista' if macd_1w is False else 'nd'}\n"
-        f"Estado={estado} Score={score}/{total_c} Confianza={confianza}% Confluencia={conf_score}/5\n"
-        f"Setup={tipo_setup} Decision={decision}\n"
-        f"Bloqueadores={'; '.join(bloq_lista) if bloq_lista else 'ninguno'}\n"
-        f"Criterios OK: {', '.join(criterios_ok[:8]) or 'ninguno'}\n"
-        f"Criterios FAIL: {', '.join(criterios_no[:8]) or 'ninguno'}\n"
-        f"Soportes={soportes} Resistencias={resists}\n"
-        f"Sizing: {titulos_sug:.1f} titulos costo=${costo_op:,.0f} riesgo=${riesgo_op:,.0f} ganancia=${ganancia_op:,.0f}\n"
-        f"Sector={sector.get('desc','N/A')}\n"
-        + (f"Especiales: {chr(39).join(specials)}\n" if specials else "")
-        + (f"Salida: {exit_senal} {exit_razon}\n" if exit_senal else "")
-        + "\nResponde en espanol, SIN markdown, SIN asteriscos, con EXACTAMENTE este formato:\n"
-        "SITUACION: (2-3 oraciones sobre precio, tendencia e indicadores con numeros MXN)\n"
-        "ENTRADA: (precio exacto de entrada MXN y condicion necesaria)\n"
-        "STOP Y OBJETIVO: (stop exacto MXN, objetivo exacto MXN, ganancia/perdida en pesos con sizing)\n"
-        "RIESGOS: (3 riesgos especificos de este ticker hoy)\n"
-        "VEREDICTO: (COMPRAR AHORA o ESPERAR CONFIRMACION o VIGILAR o NO ENTRAR o SALIR — razon en 1 oracion)"
+        f"Eres analista de swing trading. Analiza {ticker} (GBM/SIC, capital $15k MXN, riesgo 1%).\n"
+        f"Precio=${precio:,.0f} Stop=${stop:,.0f} Objetivo=${obj:,.0f} RR={rr:.1f}x\n"
+        f"RSI={rsi_v:.0f} MACD={'alc' if macd_ok else 'baj'} EMA200={'encima' if ema200_ok else 'debajo'} ADX={adx_v:.0f}\n"
+        f"Estado={estado} Score={score}/{total_c} Bloq={'; '.join(bloq_lista[:2]) if bloq_lista else 'no'}\n"
+        f"Sizing: {titulos_sug:.1f}tit riesgo=${riesgo_op:,.0f} ganancia=${ganancia_op:,.0f}\n"
+        f"Soporte principal=${soportes[0]['precio'] if soportes else 0:,.0f} Resistencia=${resists[0]['precio'] if resists else 0:,.0f}\n"
+        + (f"Especial: {' | '.join(specials)}\n" if specials else "")
+        + "\nEscribe el analisis completo en espanol, sin markdown:\n"
+        "SITUACION: ...\n"
+        "ENTRADA: ...\n"
+        "STOP Y OBJETIVO: ...\n"
+        "RIESGOS: ...\n"
+        "VEREDICTO: COMPRAR AHORA / ESPERAR CONFIRMACION / VIGILAR / NO ENTRAR / SALIR — ..."
     )
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if not gemini_key:
         return jsonify({"ok": False, "error": "GEMINI_API_KEY no configurada en Render"}), 500
     try:
         import requests as _req
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={gemini_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
                   "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.5}},
