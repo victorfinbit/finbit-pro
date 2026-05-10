@@ -7076,98 +7076,7 @@ function actualizarDashboard() {{
     .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
 }}
 </script>
-<script>
-// ── Tab IA — script aislado (no afecta toggle/showTab si falla) ──
-(function() {{
-  function _iaCard(ticker, estado) {{
-    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px 18px">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
-      + '<div><strong style="font-size:15px">' + ticker + '</strong>'
-      + '<span style="margin-left:10px;font-size:11px;color:var(--muted)">' + estado + '</span></div>'
-      + '<button onclick="window._ia_analizar(\'' + ticker + '\')" id="ia-btn-' + ticker + '"'
-      + ' style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #7c3aed;'
-      + 'background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
-      + '</div>'
-      + '<div id="ia-txt-' + ticker + '" style="font-size:12px;line-height:1.8;color:var(--muted)">—</div>'
-      + '</div>';
-  }}
-
-  window._ia_analizar = function(ticker) {{
-    var btn = document.getElementById('ia-btn-' + ticker);
-    var txt = document.getElementById('ia-txt-' + ticker);
-    if (!btn || !txt) return;
-    btn.disabled = true;
-    btn.textContent = '⏳ Analizando...';
-    txt.style.color = 'var(--muted)';
-    txt.textContent = 'Generando análisis...';
-    fetch('/api/ia/' + ticker)
-      .then(function(r) {{ return r.json(); }})
-      .then(function(d) {{
-        btn.disabled = false;
-        btn.textContent = d.ok ? '✅ Listo' : '❌ Error';
-        btn.style.color = d.ok ? 'var(--green)' : 'var(--red)';
-        if (d.ok) {{
-          txt.style.color = 'var(--text)';
-          txt.innerHTML = d.analisis.split('\\n')
-            .filter(function(l) {{ return l.trim(); }})
-            .map(function(l) {{ return '<p style="margin:0 0 8px">' + l + '</p>'; }})
-            .join('');
-        }} else {{
-          txt.style.color = 'var(--red)';
-          txt.textContent = 'Error: ' + (d.error || 'Sin respuesta');
-        }}
-      }})
-      .catch(function() {{
-        btn.disabled = false;
-        btn.textContent = '🧠 Analizar';
-        txt.style.color = 'var(--red)';
-        txt.textContent = 'Error de conexión.';
-      }});
-  }};
-
-  function initIaTab() {{
-    var lista = document.getElementById('ia-lista');
-    if (!lista) return;
-    fetch('/api/scan/nombres')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(tickers) {{
-        if (!tickers || !tickers.length) {{
-          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos del scanner. Actualiza primero.</div>';
-          return;
-        }}
-        lista.innerHTML = tickers.map(function(t) {{ return _iaCard(t.nombre, t.estado); }}).join('');
-      }})
-      .catch(function() {{
-        lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error cargando tickers.</div>';
-      }});
-  }}
-
-  window.initIaTab = initIaTab;
-
-  window.analizarTodos = function() {{
-    var btn = document.getElementById('btn-analizar-todos');
-    if (btn) {{ btn.disabled = true; btn.textContent = '⏳ Analizando...'; }}
-    fetch('/api/scan/nombres')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(tickers) {{
-        if (!tickers || !tickers.length) {{ if (btn) btn.disabled = false; return; }}
-        initIaTab();
-        var i = 0;
-        function siguiente() {{
-          if (i >= tickers.length) {{
-            if (btn) {{ btn.disabled = false; btn.textContent = '🧠 Analizar todos'; }}
-            return;
-          }}
-          window._ia_analizar(tickers[i].nombre);
-          i++;
-          setTimeout(siguiente, 3500);
-        }}
-        setTimeout(siguiente, 800);
-      }})
-      .catch(function() {{ if (btn) btn.disabled = false; }});
-  }};
-}})();
-</script></body></html>"""
+<script src="/static/ia.js"></script></body></html>"""
 
 # ── IMPORTAR OPS ──────────────────────────────────────────
 def importar_ops_json(path: str, tc: float):
@@ -8015,6 +7924,108 @@ def api_port_json():
         "activo":            p.get("activo", 1),
     } for p in posiciones]
     return jsonify(result)
+
+
+_IA_JS = r'''
+// Tab IA — Finbit Pro
+(function() {
+  function _iaCard(ticker, estado) {
+    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px 18px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+      + '<div><strong style="font-size:15px">' + ticker + '</strong>'
+      + '<span style="margin-left:10px;font-size:11px;color:var(--muted)">' + estado + '</span></div>'
+      + '<button onclick="window._ia_analizar(\'' + ticker + '\')" id="ia-btn-' + ticker + '"'
+      + ' style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
+      + '</div>'
+      + '<div id="ia-txt-' + ticker + '" style="font-size:12px;line-height:1.8;color:var(--muted)">—</div>'
+      + '</div>';
+  }
+
+  window._ia_analizar = function(ticker) {
+    var btn = document.getElementById('ia-btn-' + ticker);
+    var txt = document.getElementById('ia-txt-' + ticker);
+    if (!btn || !txt) return;
+    btn.disabled = true;
+    btn.textContent = '⏳ Analizando...';
+    txt.style.color = 'var(--muted)';
+    txt.textContent = 'Generando análisis...';
+    fetch('/api/ia/' + ticker)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        btn.disabled = false;
+        btn.textContent = d.ok ? '✅ Listo' : '❌ Error';
+        btn.style.color = d.ok ? 'var(--green)' : 'var(--red)';
+        if (d.ok) {
+          txt.style.color = 'var(--text)';
+          txt.innerHTML = d.analisis.split('\n')
+            .filter(function(l) { return l.trim(); })
+            .map(function(l) { return '<p style="margin:0 0 8px">' + l + '</p>'; })
+            .join('');
+        } else {
+          txt.style.color = 'var(--red)';
+          txt.textContent = 'Error: ' + (d.error || 'Sin respuesta');
+        }
+      })
+      .catch(function() {
+        btn.disabled = false;
+        btn.textContent = '🧠 Analizar';
+        txt.style.color = 'var(--red)';
+        txt.textContent = 'Error de conexion.';
+      });
+  };
+
+  function initIaTab() {
+    var lista = document.getElementById('ia-lista');
+    if (!lista) return;
+    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Cargando tickers...</div>';
+    fetch('/api/scan/nombres')
+      .then(function(r) { return r.json(); })
+      .then(function(tickers) {
+        if (!tickers || !tickers.length) {
+          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos. Da clic en Actualizar primero. <button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;border:1px solid #ccc;background:#f5f5f3;cursor:pointer;font-size:12px">Reintentar</button></div>';
+          return;
+        }
+        lista.innerHTML = tickers.map(function(t) { return _iaCard(t.nombre, t.estado); }).join('');
+      })
+      .catch(function() {
+        lista.innerHTML = '<div style="padding:30px;text-align:center;color:red">Error cargando tickers.</div>';
+      });
+  }
+
+  window.initIaTab = initIaTab;
+
+  window.analizarTodos = function() {
+    var btn = document.getElementById('btn-analizar-todos');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Analizando...'; }
+    fetch('/api/scan/nombres')
+      .then(function(r) { return r.json(); })
+      .then(function(tickers) {
+        if (!tickers || !tickers.length) { if (btn) btn.disabled = false; return; }
+        initIaTab();
+        var i = 0;
+        function siguiente() {
+          if (i >= tickers.length) {
+            if (btn) { btn.disabled = false; btn.textContent = '🧠 Analizar todos'; }
+            return;
+          }
+          window._ia_analizar(tickers[i].nombre);
+          i++;
+          setTimeout(siguiente, 3500);
+        }
+        setTimeout(siguiente, 800);
+      })
+      .catch(function() { if (btn) btn.disabled = false; });
+  };
+
+  // Auto-init si la tab ya está activa
+  var tab = document.getElementById('tab-ia');
+  if (tab && tab.classList.contains('active')) { initIaTab(); }
+})();
+'''
+
+@app.route("/static/ia.js")
+def static_ia_js():
+    return Response(_IA_JS, mimetype="application/javascript")
 
 @app.route("/api/scan/nombres")
 def api_scan_nombres():
