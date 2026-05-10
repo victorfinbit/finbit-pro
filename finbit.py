@@ -8221,7 +8221,7 @@ def api_ia_analisis(ticker):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
+                  "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.5}},
             headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
         # Extraer texto de la respuesta de Gemini
@@ -8236,6 +8236,10 @@ def api_ia_analisis(ticker):
         if not texto:
             print(f"[IA] Gemini texto vacío para {ticker}: {data}")
             return jsonify({"ok": False, "error": "Gemini no generó texto"}), 500
+        finish = candidates[0].get("finishReason", "?")
+        print(f"[IA] {ticker} finishReason={finish} tokens={len(texto.split())}")
+        if finish == "MAX_TOKENS":
+            print(f"[IA] TRUNCADO — necesita más tokens")
         return jsonify({"ok": True, "analisis": texto, "ticker": ticker})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
