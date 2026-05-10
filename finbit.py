@@ -8194,33 +8194,33 @@ def api_ia_analisis(ticker):
         "RIESGOS: ...\n"
         "VEREDICTO: COMPRAR AHORA / ESPERAR CONFIRMACION / VIGILAR / NO ENTRAR / SALIR — ..."
     )
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY no configurada en Render"}), 500
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return jsonify({"ok": False, "error": "GEMINI_API_KEY no configurada en Render"}), 500
     try:
         import requests as _req
-        resp = _req.post(
-            "https://api.anthropic.com/v1/messages",
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": anthropic_key,
-                "anthropic-version": "2023-06-01"
-            },
-            timeout=30
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+        resp = _req.post(url,
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.5}},
+            headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
-        if "error" in data:
-            print(f"[IA] Claude error para {ticker}: {data['error']}")
-            return jsonify({"ok": False, "error": data["error"].get("message", "Error de API")}), 500
-        texto = data.get("content", [{}])[0].get("text", "")
+        # Extraer texto de la respuesta de Gemini
+        candidates = data.get("candidates", [])
+        if not candidates:
+            error_msg = data.get("error", {}).get("message", "Sin candidatos en respuesta")
+            print(f"[IA] Gemini sin candidatos para {ticker}: {data}")
+            return jsonify({"ok": False, "error": error_msg}), 500
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        texto = parts[0].get("text", "") if parts else ""
         if not texto:
-            return jsonify({"ok": False, "error": "Sin respuesta de Claude"}), 500
-        print(f"[IA] {ticker} OK — {len(texto.split())} palabras")
+            print(f"[IA] Gemini texto vacío para {ticker}: {data}")
+            return jsonify({"ok": False, "error": "Gemini no generó texto"}), 500
+        finish = candidates[0].get("finishReason", "?")
+        print(f"[IA] {ticker} finishReason={finish} tokens={len(texto.split())}")
+        if finish == "MAX_TOKENS":
+            print(f"[IA] TRUNCADO — necesita más tokens")
         return jsonify({"ok": True, "analisis": texto, "ticker": ticker})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
