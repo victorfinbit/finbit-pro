@@ -6271,13 +6271,19 @@ TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v
       🧠 Analizar todos
     </button>
   </div>
-  <div id="ia-lista" style="display:flex;flex-direction:column;gap:12px"></div>
+  <div id="ia-lista" style="display:flex;flex-direction:column;gap:12px">
+    <div style="padding:30px;text-align:center;color:var(--muted)">Haz clic en "Analizar todos" o en el botón de cada acción para generar el análisis.</div>
+  </div>
 </div>
 </div>
 
 <script>
 const TC = {tc:.4f};
-const PORT_BASE = {port_json};
+let PORT_BASE = [];
+function _initPort() {{
+  actualizarTablaPortafolio();
+}}
+fetch('/api/port/json').then(r=>r.json()).then(d=>{{ PORT_BASE=d; _initPort(); }}).catch(()=>{{}});
 
 // ── Tabs ─────────────────────────────────────────────────
 // ── Fix: rescatar tabs atrapados dentro de otro tab ──────
@@ -6309,7 +6315,7 @@ function showTab(name,btn){{
     tab.style.removeProperty('display');
   }}
   if(btn)btn.classList.add('active');
-  if(name==='ia') {{ if(typeof initIaTab==='function') initIaTab(); else setTimeout(function(){{if(typeof initIaTab==='function') initIaTab();}},500); }}
+  if(name==='ia') initIaTab();
 }}
 function toggle(id){{
   const el=document.getElementById(id); if(!el)return;
@@ -7137,11 +7143,6 @@ function actualizarDashboard() {{
   }}
 
   window.initIaTab = initIaTab;
-  // Auto-iniciar si la tab IA ya está visible al cargar
-  (function tryInit() {{
-    var tab = document.getElementById('tab-ia');
-    if (tab && tab.classList.contains('active')) {{ initIaTab(); }}
-  }})();
 
   window.analizarTodos = function() {{
     var btn = document.getElementById('btn-analizar-todos');
@@ -7998,6 +7999,27 @@ def api_wl_quitar(ticker):
 @app.route("/api/watchlist")
 def api_wl_lista():
     return jsonify(get_watchlist())
+
+@app.route("/api/port/json")
+def api_port_json():
+    import json as _json
+    tc = _MACRO_CACHE.get("tc", 17.2) or 17.2
+    port_data = analizar_portafolio(tc,
+                    float(request.args.get("capital", 15000)),
+                    float(request.args.get("riesgo", 0.01)),
+                    float(request.args.get("rr", 3.0)))
+    result = [{
+        "ticker":            p["ticker"],
+        "titulos":           p["titulos"],
+        "cto_prom_mxn":      p["cto_prom_mxn"],
+        "origen":            p.get("origen", "USA"),
+        "mercado":           p.get("mercado", "SIC"),
+        "precio_actual_mxn": p.get("precio_actual_mxn"),
+        "pl_mxn":            p.get("pl_mxn", 0),
+        "pl_pct":            p.get("pl_pct", 0),
+        "activo":            p.get("activo", 1),
+    } for p in port_data]
+    return jsonify(result)
 
 @app.route("/api/scan/nombres")
 def api_scan_nombres():
