@@ -8087,7 +8087,7 @@ def api_ia_analisis(ticker):
         return jsonify({"ok": False, "error": "GEMINI_API_KEY no configurada en Render"}), 500
     try:
         import requests as _req
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
                   "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
