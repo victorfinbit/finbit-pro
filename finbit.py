@@ -8002,23 +8002,18 @@ def api_wl_lista():
 
 @app.route("/api/port/json")
 def api_port_json():
-    import json as _json
-    tc = _MACRO_CACHE.get("tc", 17.2) or 17.2
-    port_data = analizar_portafolio(tc,
-                    float(request.args.get("capital", 15000)),
-                    float(request.args.get("riesgo", 0.01)),
-                    float(request.args.get("rr", 3.0)))
+    posiciones = get_portafolio()
     result = [{
         "ticker":            p["ticker"],
         "titulos":           p["titulos"],
         "cto_prom_mxn":      p["cto_prom_mxn"],
         "origen":            p.get("origen", "USA"),
         "mercado":           p.get("mercado", "SIC"),
-        "precio_actual_mxn": p.get("precio_actual_mxn"),
-        "pl_mxn":            p.get("pl_mxn", 0),
-        "pl_pct":            p.get("pl_pct", 0),
+        "precio_actual_mxn": None,
+        "pl_mxn":            0,
+        "pl_pct":            0,
         "activo":            p.get("activo", 1),
-    } for p in port_data]
+    } for p in posiciones]
     return jsonify(result)
 
 @app.route("/api/scan/nombres")
