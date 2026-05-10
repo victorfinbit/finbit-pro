@@ -8089,14 +8089,14 @@ def api_ia_analisis(ticker):
         import requests as _req
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
-            json={{"contents": [{{"parts": [{{"text": prompt}}]}}],
-                  "generationConfig": {{"maxOutputTokens": 500, "temperature": 0.4}}}},
-            headers={{"Content-Type": "application/json"}}, timeout=30)
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
+            headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
-        texto = data.get("candidates", [{{}}])[0].get("content", {{}}).get("parts", [{{}}])[0].get("text", "Sin respuesta")
-        return jsonify({{"ok": True, "analisis": texto, "ticker": ticker}})
+        texto = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "Sin respuesta")
+        return jsonify({"ok": True, "analisis": texto, "ticker": ticker})
     except Exception as e:
-        return jsonify({{"ok": False, "error": str(e)}}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 SEMIS_ETFS = {
     "SMH":  ("SMH",  "NASDAQ"),   # Referencia del sector sin apalancamiento
