@@ -6271,9 +6271,7 @@ TC: Banxico/Frankfurter · Precios: API financiera · DB: SQLite · finbit pro v
       🧠 Analizar todos
     </button>
   </div>
-  <div id="ia-lista" style="display:flex;flex-direction:column;gap:12px">
-    <div style="padding:30px;text-align:center;color:var(--muted)">Haz clic en "Analizar todos" o en el botón de cada acción para generar el análisis.</div>
-  </div>
+  <div id="ia-lista" style="display:flex;flex-direction:column;gap:12px"></div>
 </div>
 </div>
 
@@ -6311,7 +6309,7 @@ function showTab(name,btn){{
     tab.style.removeProperty('display');
   }}
   if(btn)btn.classList.add('active');
-  if(name==='ia') initIaTab();
+  if(name==='ia') {{ if(typeof initIaTab==='function') initIaTab(); else setTimeout(function(){{if(typeof initIaTab==='function') initIaTab();}},500); }}
 }}
 function toggle(id){{
   const el=document.getElementById(id); if(!el)return;
@@ -7124,29 +7122,26 @@ function actualizarDashboard() {{
   function initIaTab() {{
     var lista = document.getElementById('ia-lista');
     if (!lista) return;
-    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Cargando tickers...</div>';
     fetch('/api/scan/nombres')
       .then(function(r) {{ return r.json(); }})
       .then(function(tickers) {{
         if (!tickers || !tickers.length) {{
-          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">'
-            + 'Sin datos del scanner. '
-            + '<button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;'
-            + 'border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:12px">'
-            + '↺ Reintentar</button></div>';
+          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos del scanner. Actualiza primero.</div>';
           return;
         }}
         lista.innerHTML = tickers.map(function(t) {{ return _iaCard(t.nombre, t.estado); }}).join('');
       }})
       .catch(function() {{
-        lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error cargando tickers. '
-          + '<button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;'
-          + 'border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:12px">'
-          + '↺ Reintentar</button></div>';
+        lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error cargando tickers.</div>';
       }});
   }}
 
   window.initIaTab = initIaTab;
+  // Auto-iniciar si la tab IA ya está visible al cargar
+  (function tryInit() {{
+    var tab = document.getElementById('tab-ia');
+    if (tab && tab.classList.contains('active')) {{ initIaTab(); }}
+  }})();
 
   window.analizarTodos = function() {{
     var btn = document.getElementById('btn-analizar-todos');
@@ -7247,8 +7242,6 @@ def construir_dashboard() -> str:
 
         scan_data  = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                      vix=vix, spy=spy)
-        global _scan_resultados
-        _scan_resultados = scan_data or []
         port_data  = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
         radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results=scan_data,
                                    vix=vix, spy=spy)
