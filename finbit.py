@@ -8112,7 +8112,7 @@ def api_ia_analisis(ticker):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
+                  "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.4}},
             headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
         # Extraer texto de la respuesta de Gemini
