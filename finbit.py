@@ -7124,17 +7124,25 @@ function actualizarDashboard() {{
   function initIaTab() {{
     var lista = document.getElementById('ia-lista');
     if (!lista) return;
+    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Cargando tickers...</div>';
     fetch('/api/scan/nombres')
       .then(function(r) {{ return r.json(); }})
       .then(function(tickers) {{
         if (!tickers || !tickers.length) {{
-          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos del scanner. Actualiza primero.</div>';
+          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">'
+            + 'Sin datos del scanner. '
+            + '<button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;'
+            + 'border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:12px">'
+            + '↺ Reintentar</button></div>';
           return;
         }}
         lista.innerHTML = tickers.map(function(t) {{ return _iaCard(t.nombre, t.estado); }}).join('');
       }})
       .catch(function() {{
-        lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error cargando tickers.</div>';
+        lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error cargando tickers. '
+          + '<button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;'
+          + 'border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:12px">'
+          + '↺ Reintentar</button></div>';
       }});
   }}
 
@@ -7239,6 +7247,8 @@ def construir_dashboard() -> str:
 
         scan_data  = correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra,
                                      vix=vix, spy=spy)
+        global _scan_resultados
+        _scan_resultados = scan_data or []
         port_data  = analizar_portafolio(tc, capital, riesgo_pct, rr_min)
         radar_data = radar_masivo(tc, capital, riesgo_pct, rr_min, scan_results=scan_data,
                                    vix=vix, spy=spy)
