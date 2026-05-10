@@ -8033,6 +8033,19 @@ def api_scan_nombres():
                for r in (_scan_resultados or [])]
     return jsonify(nombres)
 
+
+@app.route("/api/gemini-test")
+def api_ia_test():
+    import requests as _req
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return jsonify({"error": "Sin key"})
+    # Listar modelos disponibles
+    r = _req.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}", timeout=10)
+    data = r.json()
+    modelos = [m["name"] for m in data.get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
+    return jsonify({"modelos_disponibles": modelos, "total": len(modelos)})
+
 @app.route("/api/ia/<ticker>")
 def api_ia_analisis(ticker):
     ticker = ticker.upper().strip()
@@ -8087,7 +8100,7 @@ def api_ia_analisis(ticker):
         return jsonify({"ok": False, "error": "GEMINI_API_KEY no configurada en Render"}), 500
     try:
         import requests as _req
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={gemini_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
                   "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
