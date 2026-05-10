@@ -7927,144 +7927,68 @@ def api_port_json():
 
 
 _IA_JS = r'''
-// Tab IA — Finbit Pro v2
+// Tab IA — Finbit Pro
 (function() {
-
-  var ESTADO_BADGE = {
-    'RUPTURA':            { emoji: '🚀', color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0' },
-    'PRE-BREAKOUT':       { emoji: '⚡', color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
-    'TENDENCIA_ALCISTA':  { emoji: '📈', color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
-    'ACUMULACION':        { emoji: '🟡', color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
-    'LATERAL':            { emoji: '↔️', color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' },
-    'BAJISTA':            { emoji: '📉', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
-    'BLOQUEADO':          { emoji: '🔒', color: '#9ca3af', bg: '#f3f4f6', border: '#e5e7eb' },
-    'LISTO_ENTRAR':       { emoji: '✅', color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0' },
-  };
-
-  function getBadge(estado) {
-    var key = (estado || '').toUpperCase().replace(/ /g,'_').replace(/\//g,'_');
-    for (var k in ESTADO_BADGE) {
-      if (key.indexOf(k) !== -1) return ESTADO_BADGE[k];
-    }
-    return { emoji: '⬜', color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' };
-  }
-
-  function renderAnalisis(texto) {
-    // Mapear secciones a colores
-    var SECCIONES = {
-      'SITUACION':    { icon: '📊', color: '#2563eb' },
-      'ENTRADA':      { icon: '🎯', color: '#16a34a' },
-      'STOP Y OBJETIVO': { icon: '📏', color: '#b45309' },
-      'RIESGOS':      { icon: '⚠️',  color: '#dc2626' },
-      'VEREDICTO':    { icon: '🏁', color: '#7c3aed' },
-    };
-
-    var lines = texto.split('\n').filter(function(l) { return l.trim(); });
-    var html = '';
-    var inSection = false;
-
-    lines.forEach(function(line) {
-      var matched = false;
-      for (var sec in SECCIONES) {
-        if (line.toUpperCase().indexOf(sec + ':') === 0 || line.toUpperCase().indexOf('**' + sec) === 0) {
-          var s = SECCIONES[sec];
-          var content = line.replace(/^\*\*/,'').replace(/\*\*$/,'');
-          var colonIdx = content.indexOf(':');
-          var label = colonIdx > -1 ? content.substring(0, colonIdx) : content;
-          var rest  = colonIdx > -1 ? content.substring(colonIdx + 1).trim() : '';
-          html += '<div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:' + s.color + '18;border-left:3px solid ' + s.color + '">';
-          html += '<div style="font-weight:700;font-size:11px;color:' + s.color + ';text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">' + s.icon + ' ' + label + '</div>';
-          if (rest) html += '<div style="font-size:13px;line-height:1.6;color:#111">' + rest + '</div>';
-          html += '</div>';
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        // Línea de continuación — agregar al último div si existe, o como párrafo suelto
-        if (html.endsWith('</div>')) {
-          // Insertar antes del último </div>
-          html = html.slice(0, -6) + '<br><span style="font-size:13px;line-height:1.6">' + line + '</span></div>';
-        } else {
-          html += '<p style="margin:6px 0;font-size:13px;line-height:1.6;color:#374151">' + line + '</p>';
-        }
-      }
-    });
-    return html || '<p style="color:#9ca3af">Sin análisis</p>';
-  }
-
   function _iaCard(ticker, estado) {
-    var b = getBadge(estado);
-    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid ' + b.border + ';border-radius:14px;padding:18px 20px;transition:box-shadow .2s">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
-      + '<div style="display:flex;align-items:center;gap:10px">'
-      + '<strong style="font-size:16px;letter-spacing:.02em">' + ticker + '</strong>'
-      + '<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;background:' + b.bg + ';color:' + b.color + ';border:1px solid ' + b.border + '">'
-      + b.emoji + ' ' + estado + '</span></div>'
+    return '<div id="ia-card-' + ticker + '" style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px 18px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+      + '<div><strong style="font-size:15px">' + ticker + '</strong>'
+      + '<span style="margin-left:10px;font-size:11px;color:var(--muted)">' + estado + '</span></div>'
       + '<button onclick="window._ia_analizar(\'' + ticker + '\')" id="ia-btn-' + ticker + '"'
-      + ' style="font-size:11px;padding:6px 14px;border-radius:8px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600;transition:all .15s">🧠 Analizar</button>'
+      + ' style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #7c3aed;background:var(--surface2);color:#7c3aed;cursor:pointer;font-weight:600">🧠 Analizar</button>'
       + '</div>'
-      + '<div id="ia-txt-' + ticker + '" style="margin-top:8px;font-size:13px;line-height:1.7;color:var(--muted)">—</div>'
+      + '<div id="ia-txt-' + ticker + '" style="font-size:12px;line-height:1.8;color:var(--muted)">—</div>'
       + '</div>';
   }
 
   window._ia_analizar = function(ticker) {
     var btn = document.getElementById('ia-btn-' + ticker);
     var txt = document.getElementById('ia-txt-' + ticker);
-    var card = document.getElementById('ia-card-' + ticker);
     if (!btn || !txt) return;
     btn.disabled = true;
     btn.textContent = '⏳ Analizando...';
-    btn.style.opacity = '0.7';
     txt.style.color = 'var(--muted)';
-    txt.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:12px 0"><span style="font-size:20px">🧠</span><span>Generando análisis con IA...</span></div>';
+    txt.textContent = 'Generando análisis...';
     fetch('/api/ia/' + ticker)
       .then(function(r) { return r.json(); })
       .then(function(d) {
         btn.disabled = false;
-        btn.style.opacity = '1';
+        btn.textContent = d.ok ? '✅ Listo' : '❌ Error';
+        btn.style.color = d.ok ? 'var(--green)' : 'var(--red)';
         if (d.ok) {
-          btn.textContent = '✅ Listo';
-          btn.style.color = 'var(--green)';
-          btn.style.borderColor = 'var(--green)';
           txt.style.color = 'var(--text)';
-          txt.innerHTML = renderAnalisis(d.analisis);
+          txt.innerHTML = d.analisis.split('\n')
+            .filter(function(l) { return l.trim(); })
+            .map(function(l) { return '<p style="margin:0 0 8px">' + l + '</p>'; })
+            .join('');
         } else {
-          btn.textContent = '❌ Error';
-          btn.style.color = 'var(--red)';
           txt.style.color = 'var(--red)';
-          txt.innerHTML = '<p style="color:#dc2626">⚠ ' + (d.error || 'Sin respuesta') + '</p>';
+          txt.textContent = 'Error: ' + (d.error || 'Sin respuesta');
         }
       })
       .catch(function() {
         btn.disabled = false;
-        btn.style.opacity = '1';
         btn.textContent = '🧠 Analizar';
-        txt.innerHTML = '<p style="color:#dc2626">⚠ Error de conexión. Intenta de nuevo.</p>';
+        txt.style.color = 'var(--red)';
+        txt.textContent = 'Error de conexion.';
       });
   };
 
   function initIaTab() {
     var lista = document.getElementById('ia-lista');
     if (!lista) return;
-    lista.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)"><span style="font-size:24px">🧠</span><br><br>Cargando tickers del scanner...</div>';
+    lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Cargando tickers...</div>';
     fetch('/api/scan/nombres')
       .then(function(r) { return r.json(); })
       .then(function(tickers) {
         if (!tickers || !tickers.length) {
-          lista.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)">'
-            + '<span style="font-size:32px">📭</span><br><br>'
-            + '<strong>Sin datos del scanner</strong><br>'
-            + '<span style="font-size:13px">Da clic en <strong>Actualizar</strong> primero para cargar las acciones.</span><br><br>'
-            + '<button onclick="initIaTab()" style="padding:8px 18px;border-radius:8px;border:1px solid var(--brd2);background:var(--surface2);cursor:pointer;font-size:13px">↺ Reintentar</button>'
-            + '</div>';
+          lista.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)">Sin datos. Da clic en Actualizar primero. <button onclick="initIaTab()" style="margin-left:8px;padding:4px 12px;border-radius:6px;border:1px solid #ccc;background:#f5f5f3;cursor:pointer;font-size:12px">Reintentar</button></div>';
           return;
         }
-        lista.style.gap = '12px';
         lista.innerHTML = tickers.map(function(t) { return _iaCard(t.nombre, t.estado); }).join('');
       })
       .catch(function() {
-        lista.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626">⚠ Error cargando tickers.</div>';
+        lista.innerHTML = '<div style="padding:30px;text-align:center;color:red">Error cargando tickers.</div>';
       });
   }
 
@@ -8086,7 +8010,7 @@ _IA_JS = r'''
           }
           window._ia_analizar(tickers[i].nombre);
           i++;
-          setTimeout(siguiente, 4000);
+          setTimeout(siguiente, 3500);
         }
         setTimeout(siguiente, 800);
       })
@@ -8153,24 +8077,81 @@ def api_ia_analisis(ticker):
     tc_actual = _MACRO_CACHE.get("tc", 17.2) or 17.2
     soportes = [{"precio": round(z.get("precio",0)*tc_actual,2), "fuerza": z.get("fuerza",0)} for z in sr.get("soportes",[])[:3]]
     resists = [{"precio": round(z.get("precio",0)*tc_actual,2), "fuerza": z.get("fuerza",0)} for z in sr.get("resistencias",[])[:3]]
-    prompt = (f"Eres un analista de swing trading experto. Analiza este ticker para un trader mexicano que opera en GBM/SIC.\n\n"
-              f"TICKER: {ticker}\n"
-              f"Precio: ${precio:,.2f} MXN | Entrada EMA9: ${entrada:,.2f} | Stop: ${stop:,.2f} | Objetivo: ${obj:,.2f}\n"
-              f"Score: {score}/{total_c} | Estado: {estado} | R:R: {rr:.1f}x\n"
-              f"RSI: {rsi_v:.0f} | MACD: {'alcista' if macd_ok else 'bajista'} | EMA200: {'encima' if ema200_ok else 'debajo'}\n"
-              f"OBV: {obv} | ADX: {adx_v:.0f}\n"
-              f"Sector: {sector.get('desc','')}\n"
-              f"Ganga: {'Si, '+str(ganga_pct)+'% bajo objetivo' if es_ganga else 'No'} | Acumulacion: {nivel_ini or 'No'} | Capitulacion: {'Si' if es_cap else 'No'}\n"
-              f"Bloqueadores: {bloq or 'ninguno'}\n"
-              f"S/R contexto: {sr_ctx}\n"
-              f"Soportes: {soportes}\n"
-              f"Resistencias: {resists}\n\n"
-              f"Responde en exactamente 4 oraciones directas:\n"
-              f"1. Situacion tecnica actual\n"
-              f"2. Lo que favorece una entrada\n"
-              f"3. Lo que va en contra o riesgos\n"
-              f"4. Veredicto: COMPRAR en $X / VIGILAR / NO ENTRAR / SALIR\n\n"
-              f"Sin intro. Sin rodeos. Como trader hablando con trader.")
+    # ── Extraer campos adicionales del scanner ──
+    tfs         = r.get("tfs", {})
+    tf_1d       = tfs.get("1day", {})
+    tf_1w       = tfs.get("1week", {})
+    criterios   = r.get("criterios", {})
+    sizing      = r.get("sizing", {})
+    confluencia = r.get("confluencia", {})
+    setup_d     = r.get("setup", {})
+    exit_info   = r.get("exit_info", {})
+
+    ema21_mxn   = round((tf_1d.get("ema21", 0) or 0) * tc_actual, 2)
+    ema50_mxn   = round((tf_1d.get("ema50", 0) or 0) * tc_actual, 2)
+    ema200_mxn  = r.get("ema200_mxn", 0) or 0
+    rsi_1w      = tf_1w.get("rsi", 0) or 0
+    macd_1w     = tf_1w.get("macd_alcista", None)
+
+    titulos_sug  = sizing.get("titulos", 0) or 0
+    costo_op     = sizing.get("costo_total_mxn", 0) or 0
+    riesgo_op    = sizing.get("riesgo_mxn", 0) or 0
+    ganancia_op  = sizing.get("ganancia_potencial_mxn", 0) or 0
+
+    decision     = setup_d.get("decision_final", estado)
+    tipo_setup   = setup_d.get("tipo_setup", "—")
+    confianza    = setup_d.get("confianza", 0) or 0
+    advertencias = "; ".join(setup_d.get("advertencias", [])[:3])
+    bloq_lista   = setup_d.get("bloqueadores", [])
+
+    criterios_ok = [k for k,v in criterios.items() if v is True]
+    criterios_no = [k for k,v in criterios.items() if v is False]
+
+    obv_div     = (r.get("obv") or {}).get("divergencia", "")
+    conf_score  = confluencia.get("score", 0) or 0
+    conf_desc   = confluencia.get("descripcion", "")
+    exit_senal  = exit_info.get("senal", "")
+    exit_razon  = exit_info.get("razon", "")
+
+    specials = []
+    if es_ganga:  specials.append(f"GANGA: precio {ganga_pct}% bajo objetivo")
+    if nivel_ini: specials.append(f"INICIO DE MOVIMIENTO nivel {nivel_ini}")
+    if es_cap:    specials.append("CAPITULACION detectada")
+
+    prompt = (
+        f"Eres un analista experto de swing trading. Analiza {ticker} para un trader mexicano en GBM/SIC.\n"
+        f"Capital: $15,000 MXN | Riesgo por operación: 1% ($150 MXN) | R:R mínimo: 3x\n\n"
+        f"=== PRECIO Y NIVELES (MXN) ===\n"
+        f"Precio: ${precio:,.2f} | EMA9: ${entrada:,.2f} | EMA21: ${ema21_mxn:,.2f} | EMA50: ${ema50_mxn:,.2f} | EMA200: ${ema200_mxn:,.2f}\n"
+        f"Stop: ${stop:,.2f} | Objetivo: ${obj:,.2f} | R:R: {rr:.1f}x\n\n"
+        f"=== INDICADORES 1D ===\n"
+        f"RSI: {rsi_v:.0f} {'(sobrecomprado)' if rsi_v>70 else '(sobrevendido)' if rsi_v<30 else '(neutro)'} | MACD: {'ALCISTA' if macd_ok else 'BAJISTA'} | EMA200: {'ENCIMA' if ema200_ok else 'DEBAJO'}\n"
+        f"ADX: {adx_v:.0f} {'(tendencia fuerte)' if adx_v>25 else '(sin tendencia clara)'} | OBV: {obv}{' | Diverg: '+obv_div if obv_div else ''}\n\n"
+        f"=== TIMEFRAME SEMANAL ===\n"
+        f"RSI 1W: {rsi_1w:.0f} | MACD 1W: {'ALCISTA' if macd_1w else 'BAJISTA' if macd_1w is False else 'N/D'}\n\n"
+        f"=== ESTADO Y SETUP ===\n"
+        f"Estado: {estado} | Setup: {tipo_setup} | Confianza: {confianza}% | Score: {score}/{total_c} | Confluencia: {conf_score}/5\n"
+        f"Decisión sistema: {decision}\n"
+        f"Bloqueadores: {'; '.join(bloq_lista) if bloq_lista else 'ninguno'}\n"
+        f"Advertencias: {advertencias or 'ninguna'}\n"
+        f"Señales especiales: {' | '.join(specials) if specials else 'ninguna'}\n\n"
+        f"=== CRITERIOS TÉCNICOS ===\n"
+        f"Cumplen ({len(criterios_ok)}): {', '.join(criterios_ok[:10]) or 'ninguno'}\n"
+        f"No cumplen ({len(criterios_no)}): {', '.join(criterios_no[:10]) or 'ninguno'}\n\n"
+        f"=== SOPORTE / RESISTENCIA ===\n"
+        f"Contexto: {sr_ctx} | Soportes: {soportes} | Resistencias: {resists}\n\n"
+        f"=== SIZING ===\n"
+        f"Títulos: {titulos_sug:.2f} | Costo: ${costo_op:,.0f} | Riesgo: ${riesgo_op:,.0f} | Ganancia potencial: ${ganancia_op:,.0f}\n\n"
+        f"=== SECTOR ===\n"
+        f"Sector: {sector.get('desc','N/A')} | Tendencia: {sector.get('tendencia','N/A')}\n\n"
+        + (f"=== SEÑAL DE SALIDA ===\nSeñal: {exit_senal} | Razón: {exit_razon}\n\n" if exit_senal else "")
+        + f"Responde EXACTAMENTE en este formato (sin asteriscos ni markdown):\n\n"
+        f"SITUACION: [Qué está haciendo el precio con los indicadores. Números concretos en MXN.]\n\n"
+        f"ENTRADA: [Precio exacto de entrada en MXN y condición para entrar. Si bloqueado: qué debe pasar para desbloquearse.]\n\n"
+        f"STOP Y OBJETIVO: [Stop: $X MXN ({'{:.1f}'.format(abs(stop-precio)/precio*100 if precio else 0)}% abajo). Objetivo: $X MXN. Con el sizing: pérdida máx ${riesgo_op:,.0f} / ganancia potencial ${ganancia_op:,.0f}.]\n\n"
+        f"RIESGOS: [3 riesgos concretos y específicos de {ticker} ahora mismo.]\n\n"
+        f"VEREDICTO: [COMPRAR AHORA / ESPERAR CONFIRMACION / VIGILAR / NO ENTRAR / SALIR] — [2 oraciones explicando por qué.]"
+    )
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if not gemini_key:
         return jsonify({"ok": False, "error": "GEMINI_API_KEY no configurada en Render"}), 500
@@ -8179,7 +8160,7 @@ def api_ia_analisis(ticker):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         resp = _req.post(url,
             json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"maxOutputTokens": 1500, "temperature": 0.4}},
+                  "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
             headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
         # Extraer texto de la respuesta de Gemini
