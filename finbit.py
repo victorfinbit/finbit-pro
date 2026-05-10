@@ -8093,7 +8093,18 @@ def api_ia_analisis(ticker):
                   "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4}},
             headers={"Content-Type": "application/json"}, timeout=30)
         data = resp.json()
-        texto = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "Sin respuesta")
+        # Extraer texto de la respuesta de Gemini
+        candidates = data.get("candidates", [])
+        if not candidates:
+            error_msg = data.get("error", {}).get("message", "Sin candidatos en respuesta")
+            print(f"[IA] Gemini sin candidatos para {ticker}: {data}")
+            return jsonify({"ok": False, "error": error_msg}), 500
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        texto = parts[0].get("text", "") if parts else ""
+        if not texto:
+            print(f"[IA] Gemini texto vacío para {ticker}: {data}")
+            return jsonify({"ok": False, "error": "Gemini no generó texto"}), 500
         return jsonify({"ok": True, "analisis": texto, "ticker": ticker})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
