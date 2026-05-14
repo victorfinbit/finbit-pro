@@ -2503,15 +2503,35 @@ def evaluar_setup(nombre: str, tf_1d: dict, tfs: dict,
         elif not c.get("soporte", True):
             estado_base = "RUPTURA"
         else:
-            estado_base = "BLOQUEADO"
+            # ── PRE-ENTRADA: bloqueado pero con potencial alto ─────────────
+            # Si score >= 7, RSI entre 40-68 (no sobrecomprado), MACD alcista
+            # y el único bloqueador es volumen o ADX borderline → PRE-ENTRADA
+            bloqs_tecnicos = [b for b in bloqueadores if "Volumen" in b or "ADX" in b]
+            bloqs_duros = [b for b in bloqueadores if "Volumen" not in b and "ADX" not in b]
+            es_pre_entrada = (
+                score >= 7
+                and 40 <= rsi_v <= 68
+                and macd_ok
+                and c.get("ema200", False)
+                and len(bloqs_duros) == 0   # sin bloqueos duros
+                and len(bloqs_tecnicos) >= 1  # solo bloqueado por volumen o ADX
+            )
+            estado_base = "PRE-ENTRADA" if es_pre_entrada else "BLOQUEADO"
+
         razon_principal = bloqueadores[0] if bloqueadores else "Filtros de seguridad activos"
+        decision_texto = (
+            f"⚡ CASI LISTO: Score {score}/{total}, RSI {rsi_v:.0f}, MACD alcista. "
+            f"Falta: {razon_principal}. Monitorea mañana pre-apertura."
+            if estado_base == "PRE-ENTRADA"
+            else f"🚫 NO ENTRAR: {razon_principal}"
+        )
         return {
             "estado": estado_base,
-            "tipo_setup": "Bloqueado",
+            "tipo_setup": "Pre-entrada" if estado_base == "PRE-ENTRADA" else "Bloqueado",
             "bloqueadores": bloqueadores,
             "advertencias": advertencias,
-            "decision_final": f"🚫 NO ENTRAR: {razon_principal}",
-            "confianza": 0,
+            "decision_final": decision_texto,
+            "confianza": int(score / total * 100) if estado_base == "PRE-ENTRADA" else 0,
             "pasa_filtros": False,
             "score_drop": score_drop,
         }
@@ -3498,15 +3518,16 @@ def badge_senal(s):
     c,t=m.get(s,("b-none",s)); return badge(c,t)
 def badge_estado(s):
     m={
-        "ROCKET":   ("b-rocket", "🚀 Explosión"),
-        "BUY":      ("b-buy",    "↑ Compra"),
-        "WATCH":    ("b-hold",   "👁 Vigilar"),
-        "SKIP":     ("b-none",   "Esperar"),
-        "SHORT":    ("b-sell",   "↓ Bajista"),
-        "EXIT":     ("b-exit",   "⚠️ EXIT YA"),
-        "BLOQUEADO":("b-blocked","🔒 Bloqueado"),
-        "LATERAL":  ("b-blocked","〰️ Lateral"),
-        "RUPTURA":  ("b-sell",   "💥 Ruptura"),
+        "ROCKET":      ("b-rocket", "🚀 Explosión"),
+        "BUY":         ("b-buy",    "↑ Compra"),
+        "WATCH":       ("b-hold",   "👁 Vigilar"),
+        "SKIP":        ("b-none",   "Esperar"),
+        "SHORT":       ("b-sell",   "↓ Bajista"),
+        "EXIT":        ("b-exit",   "⚠️ EXIT YA"),
+        "PRE-ENTRADA": ("b-pre",    "⚡ Pre-entrada"),
+        "BLOQUEADO":   ("b-blocked","🔒 Bloqueado"),
+        "LATERAL":     ("b-blocked","〰️ Lateral"),
+        "RUPTURA":     ("b-sell",   "💥 Ruptura"),
     }
     c,t=m.get(s,("b-none",s)); return badge(c,t)
 
@@ -3533,6 +3554,8 @@ def render_decision_box(setup: dict) -> str:
         bg,brd,col = "#f6ffed","#b7eb8f","#135200"
     elif estado == "EXIT":
         bg,brd,col = "#fff1f0","#ffa39e","#7f1d1d"
+    elif estado == "PRE-ENTRADA":
+        bg,brd,col = "#f5f3ff","#c4b5fd","#5b21b6"
     elif estado in ("BLOQUEADO","LATERAL","RUPTURA"):
         bg,brd,col = "#fff7e6","#ffd591","#613400"
     elif estado == "SHORT":
@@ -5675,6 +5698,7 @@ td strong{{font-size:13px;font-weight:500}}
 .num{{font-family:var(--mono)}}
 .badge{{display:inline-flex;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:500;white-space:nowrap}}
 .b-buy{{background:var(--green-l);color:var(--green);border:1px solid var(--green-b)}}
+.b-pre{{background:#f5f3ff;color:#7c3aed;border:1px solid #c4b5fd;font-weight:700}}
 .b-sell{{background:var(--red-l);color:var(--red);border:1px solid var(--red-b)}}
 .b-hold{{background:var(--yellow-l);color:var(--yellow);border:1px solid var(--yellow-b)}}
 .b-none{{background:var(--surface2);color:var(--muted);border:1px solid var(--brd)}}
@@ -7933,6 +7957,7 @@ _IA_JS = r'''
 
   var ESTADO_BADGE = {
     'RUPTURA':           { emoji: '🚀', color: '#16a34a', bg: '#f0fdf4', border: '#86efac' },
+    'PRE-ENTRADA':       { emoji: '⚡', color: '#7c3aed', bg: '#f5f3ff', border: '#c4b5fd' },
     'PRE-BREAKOUT':      { emoji: '⚡', color: '#b45309', bg: '#fffbeb', border: '#fcd34d' },
     'TENDENCIA_ALCISTA': { emoji: '📈', color: '#2563eb', bg: '#eff6ff', border: '#93c5fd' },
     'ACUMULACION':       { emoji: '🟡', color: '#92400e', bg: '#fef3c7', border: '#fcd34d' },
