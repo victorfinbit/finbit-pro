@@ -7574,7 +7574,8 @@ def api_tickers():
         except Exception:
             del_rows = []
         con.close()
-        eliminados = [r["ticker"] for r in del_rows if r["ticker"] in SCANNER_TICKERS]
+        # Incluir TODOS los eliminados (defaults Y custom)
+        eliminados = [r["ticker"] for r in del_rows]
         return jsonify({
             "defaults":  defaults_activos,
             "custom":    custom_activos,
