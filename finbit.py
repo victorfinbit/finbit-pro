@@ -10,7 +10,7 @@ INSTALACIÓN (solo la primera vez):
 API KEY GRATIS (800 calls/día):
     1. Ve a https://twelvedata.com  → Sign Up (gratis)
     2. Dashboard → API Keys → copia tu key
-    3. Pégala abajo en API_KEY
+    3. Pegala abajo en API_KEY
 """
 
 import sqlite3, requests, json, os, webbrowser, time, threading
