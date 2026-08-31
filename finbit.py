@@ -2922,8 +2922,11 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
 
     syms = [s.upper() for s in symbols if s]
     seen = set(); syms = [s for s in syms if not (s in seen or seen.add(s))]
-    CHUNK  = 12   # plan Grow permite 55+ calls/min — chunks más grandes
-    n_keys = len(_TD_KEYS)
+    # Plan Basic 8: máximo 8 calls/min. Batch de 1 call = hasta 8 símbolos.
+    # Con 2 intervalos (1day + 1week) = 2 calls por chunk.
+    # Usamos chunks de 4 para dejar margen a otras llamadas (sector ETF, SPY, etc.)
+    n_keys  = len([k for k in _TD_KEYS if k])
+    CHUNK   = min(4, max(1, 8 // max(1, len(intervals or ["1day", "1week"]))))
 
     print(f"  [batch] {len(syms)} tickers × {len(intervals)} intervalos | "
           f"{n_keys} key(s) disponibles | chunks de {CHUNK}")
@@ -2946,7 +2949,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
             print(f"  [batch] {interval} chunk {idx+1}/{len(chunks)} "
                   f"k=…{key_use[-4:]} → {', '.join(chunk)}")
 
-            batch = api_timeseries_batch(chunk, interval, outputsize=200, key=key_use)
+            batch = api_timeseries_batch(chunk, interval, outputsize=100, key=key_use)
 
             faltantes = [s for s in chunk if s.upper() not in batch]
             if faltantes:
@@ -2956,7 +2959,7 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                     key2 = _key_activa()
                     if not key2:
                         break
-                    vals = api_timeseries(sym_f, interval, 200, key=key2)
+                    vals = api_timeseries(sym_f, interval, 100, key=key2)
                     if vals:
                         batch[sym_f.upper()] = vals
                         print(f"  [batch] ✅ Recuperado {sym_f}")
@@ -2970,9 +2973,9 @@ def _precargar_cache_batch(symbols: list, intervals: list = None):
                     _TD_CACHE[f"{sym}:{interval}"] = None
 
             if idx < len(chunks) - 1:
-                time.sleep(1)
+                time.sleep(8)   # pausa entre chunks: respetar 8 calls/min
 
-        time.sleep(1)   # pausa entre intervalos — plan Grow aguanta
+        time.sleep(8)   # pausa entre intervalos: respetar 8 calls/min
 
     con_datos = sum(1 for v in _TD_CACHE.values() if v)
     sin_datos = sum(1 for v in _TD_CACHE.values() if v is None)
