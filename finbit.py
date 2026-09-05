@@ -3275,6 +3275,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                     "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None,
                     "rsi": 0, "rr": 0, "macd_ok": False, "ema200_ok": False,
                     "score": 0, "score_ajustado": 0, "total_criterios": 11,
+                    "pct_obj": 0, "cumple_ideal": False,
                     "criterios": {}, "sizing": {}, "tfs": an["tf"],
                     "confluencia": {}, "titulos_cartera": port_map.get(nombre, 0),
                     "etf_apalancado": False, "exit_info": {}, "vix": vix,
@@ -3333,6 +3334,21 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
 
             c = {k: v["ok"] for k, v in tf_1d["criterios"].items()}
 
+            # ── % HACIA EL OBJETIVO ATR (normaliza oportunidades sin importar el precio) ──
+            pct_obj = ((tf_1d["objetivo"] - precio_usd) / precio_usd * 100) if precio_usd else 0
+
+            # ── PALOMITA "SETUP IDEAL" — las 6 condiciones que Víctor definió ──────────
+            obv_tend        = tf_1d.get("obv", {}).get("tendencia", "")
+            div_rsi_bajista = tf_1d.get("div_rsi", {}).get("bajista", False)
+            cumple_ideal = (
+                c.get("rr", False)                                  # R:R >= mínimo configurado
+                and c.get("volumen", False)                         # Volumen >= 1.5x media
+                and score >= 7                                      # Score >= 7/13
+                and c.get("ema200", False)                          # EMA200 alcista
+                and obv_tend in ("alcista", "divergencia alcista")  # OBV a favor
+                and not div_rsi_bajista                             # sin divergencia RSI bajista
+            )
+
             # ── PLAN DCA ──────────────────────────────────────────────────────
             sr_scan  = an.get("sr", {})
             soportes_mxn = [dict(z, precio_mxn=z["precio"]*tc) for z in sr_scan.get("soportes", [])]
@@ -3354,6 +3370,7 @@ def correr_scanner(tc, capital, riesgo_pct, rr_min, tickers_extra: dict | None =
                 "ema200_mxn": round(tf_1d.get("ema200", 0) * tc, 2),
                 "score": score, "score_ajustado": score_ajustado,
                 "total_criterios": tf_1d.get("total_criterios", 11),
+                "pct_obj": pct_obj, "cumple_ideal": cumple_ideal,
                 "criterios": tf_1d["criterios"], "sizing": tf_1d.get("sizing", {}),
                 "tfs": an["tf"], "confluencia": an["confluencia"], "titulos_cartera": tit,
                 "etf_apalancado": etf_peligroso,
@@ -4913,8 +4930,13 @@ def render_scan_rows(scanner, tc):
             f'{etapa_badge}'
             f'{"<br><span style=font-size:9px;color:var(--muted)>adj VIX</span>" if penaliz>0 else ""}'
             f'</td>'
+            f'<td class="num" style="color:{"var(--green)" if r.get("pct_obj",0)>0 else "var(--muted)"};'
+            f'font-family:var(--mono);font-weight:600">{r.get("pct_obj",0):+.1f}%</td>'
+            f'<td style="text-align:center">'
+            f'{"<span style=color:var(--green);font-size:16px>✅</span>" if r.get("cumple_ideal") else "<span style=color:var(--muted)>—</span>"}'
+            f'</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="13" style="padding:0">{detail}</td></tr>')
     return h
 
 def render_hist_rows(ops):
@@ -6211,8 +6233,10 @@ td strong{{font-size:13px;font-weight:500}}
         <th>MACD</th><th>EMA200</th><th style="color:var(--green)">Orden GBM 🎯</th>
         <th class="sr-th" title="Soporte y Resistencia automáticos">📊 S/R</th>
         <th onclick="sortScanner(10,'num')" style="cursor:pointer;user-select:none" title="Ordenar por Score">Score <span id="srt10">⇅</span></th>
+        <th onclick="sortScanner(11,'num')" style="cursor:pointer;user-select:none" title="Ordenar por % hacia el objetivo">% Obj <span id="srt11">⇅</span></th>
+        <th title="Cumple las 6 condiciones ideales: R:R≥3x, Vol≥1.5x, Score≥7, EMA200 alcista, OBV a favor, sin divergencia RSI bajista">✅ Ideal</th>
       </tr></thead>
-      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
+      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
 </div>
