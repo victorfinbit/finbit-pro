@@ -3134,71 +3134,88 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
     resultados = []
 
     for pos in posiciones:
-
         ticker = pos["ticker"]
-
-        symbol, exchange = tickers_db.get(
-            ticker,
-            (
-                ticker.replace(" CPO", "CPO").replace(" ", ""),
-                "BMV" if pos["origen"] == "MX" else ""
+        try:
+            symbol, exchange = tickers_db.get(
+                ticker,
+                (
+                    ticker.replace(" CPO", "CPO").replace(" ", ""),
+                    "BMV" if pos["origen"] == "MX" else ""
+                )
             )
-        )
 
-        an = analizar_ticker_1d(
-            ticker,
-            symbol,
-            exchange,
-            capital,
-            riesgo_pct,
-            rr_min,
-            titulos_en_cartera=pos["titulos"],
-            tc=tc,
-            origen=pos.get("origen", "USA")
-        )
+            an = analizar_ticker_1d(
+                ticker,
+                symbol,
+                exchange,
+                capital,
+                riesgo_pct,
+                rr_min,
+                titulos_en_cartera=pos["titulos"],
+                tc=tc,
+                origen=pos.get("origen", "USA")
+            )
 
-        precio_usd = an["precio_actual"]
+            precio_usd = an["precio_actual"]
 
-        precio_mxn = (
-            precio_usd * tc
-            if precio_usd and pos["origen"] == "USA"
-            else precio_usd
-        )
+            precio_mxn = (
+                precio_usd * tc
+                if precio_usd and pos["origen"] == "USA"
+                else precio_usd
+            )
 
-        cto_mxn = pos["cto_prom_mxn"]
+            cto_mxn = pos["cto_prom_mxn"]
 
-        valor_mxn = (precio_mxn or cto_mxn) * pos["titulos"]
+            valor_mxn = (precio_mxn or cto_mxn) * pos["titulos"]
 
-        costo_total = cto_mxn * pos["titulos"]
+            costo_total = cto_mxn * pos["titulos"]
 
-        pl_mxn = valor_mxn - costo_total
+            pl_mxn = valor_mxn - costo_total
 
-        pl_pct = (pl_mxn / costo_total * 100) if costo_total else 0
+            pl_pct = (pl_mxn / costo_total * 100) if costo_total else 0
 
-        alertas = []
-        if precio_mxn:
-            cambio_pct = ((precio_mxn-cto_mxn)/cto_mxn)*100
-            if cambio_pct >= ALERTA_SUBIDA:
-                alertas.append(f"🟢 +{cambio_pct:.1f}% desde tu precio de compra — considera tomar ganancias")
-            elif cambio_pct <= -ALERTA_BAJADA:
-                alertas.append(f"🔴 {cambio_pct:.1f}% desde tu precio de compra — evalúa stop loss")
+            alertas = []
+            if precio_mxn:
+                cambio_pct = ((precio_mxn-cto_mxn)/cto_mxn)*100
+                if cambio_pct >= ALERTA_SUBIDA:
+                    alertas.append(f"🟢 +{cambio_pct:.1f}% desde tu precio de compra — considera tomar ganancias")
+                elif cambio_pct <= -ALERTA_BAJADA:
+                    alertas.append(f"🔴 {cambio_pct:.1f}% desde tu precio de compra — evalúa stop loss")
 
-        tf_1d = an["tf"].get("1D",{})
-        mult  = tc if pos["origen"]=="USA" else 1.0
-        entrada_mxn = tf_1d.get("entrada_sugerida",0)*mult if tf_1d.get("valido") else None
-        stop_mxn    = tf_1d.get("stop",0)*mult if tf_1d.get("valido") else None
-        obj_mxn     = tf_1d.get("objetivo",0)*mult if tf_1d.get("valido") else None
+            tf_1d = an["tf"].get("1D",{})
+            mult  = tc if pos["origen"]=="USA" else 1.0
+            entrada_mxn = tf_1d.get("entrada_sugerida",0)*mult if tf_1d.get("valido") else None
+            stop_mxn    = tf_1d.get("stop",0)*mult if tf_1d.get("valido") else None
+            obj_mxn     = tf_1d.get("objetivo",0)*mult if tf_1d.get("valido") else None
 
-        # ── RECOMENDACIÓN CLARA para el portafolio ──────────────────────
-        recomendacion = _calcular_recomendacion_port(
-            pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct
-        )
+            # ── RECOMENDACIÓN CLARA para el portafolio ──────────────────────
+            recomendacion = _calcular_recomendacion_port(
+                pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct
+            )
 
-        resultados.append({**pos, "analisis":an,
-                "precio_actual_usd":precio_usd,"precio_actual_mxn":precio_mxn,
-                "valor_mxn":valor_mxn,"costo_total":costo_total,"pl_mxn":pl_mxn,"pl_pct":pl_pct,
-                "alertas":alertas,"entrada_mxn":entrada_mxn,"stop_mxn":stop_mxn,"obj_mxn":obj_mxn,
-                "recomendacion":recomendacion})
+            resultados.append({**pos, "analisis":an,
+                    "precio_actual_usd":precio_usd,"precio_actual_mxn":precio_mxn,
+                    "valor_mxn":valor_mxn,"costo_total":costo_total,"pl_mxn":pl_mxn,"pl_pct":pl_pct,
+                    "alertas":alertas,"entrada_mxn":entrada_mxn,"stop_mxn":stop_mxn,"obj_mxn":obj_mxn,
+                    "recomendacion":recomendacion})
+        except Exception as e:
+            # No dejar que UNA posición con error tumbe el análisis de TODO
+            # el portafolio — antes, cualquier excepción aquí hacía que
+            # analizar_portafolio() devolviera [] completo (todas las
+            # posiciones sin análisis, aunque el resto sí tuviera datos).
+            import traceback
+            print(f"  [portafolio] ⚠️  {ticker}: error en análisis, se omite ({e})")
+            traceback.print_exc()
+            cto_mxn = pos.get("cto_prom_mxn", 0)
+            resultados.append({**pos, "analisis": None,
+                    "precio_actual_usd": None, "precio_actual_mxn": None,
+                    "valor_mxn": cto_mxn * pos.get("titulos", 0),
+                    "costo_total": cto_mxn * pos.get("titulos", 0),
+                    "pl_mxn": 0, "pl_pct": 0,
+                    "alertas": [], "entrada_mxn": None, "stop_mxn": None, "obj_mxn": None,
+                    "recomendacion": {"accion": "SIN DATOS", "color": "var(--muted)", "icono": "—",
+                                      "mensaje": f"Error al analizar {ticker} — revisa logs del servidor",
+                                      "stop": None, "objetivo": None}})
     return resultados
 
 def _calcular_recomendacion_port(pos, precio_mxn, cto_mxn, tf_1d, mult, pl_pct) -> dict:
@@ -3991,8 +4008,10 @@ def render_port_rows(posiciones, tc):
             f'<td>{_render_rec_badge(pos.get("recomendacion",{}))}</td>'
             f'<td>{sr_inline_port}</td>'
             f'<td>{gbm_cell(pos.get("entrada_mxn"),pos.get("stop_mxn"),pos.get("obj_mxn"))}</td>'
+            f'<td onclick="event.stopPropagation()">'
+            f'<button class="btn-sm btn-del" onclick="borrarPosicion(\'{pos["ticker"]}\')" title="Borra la posición completa: portafolio, operaciones y diario de este ticker">Borrar</button></td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="11" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="12" style="padding:0">{detail}</td></tr>')
     return h
 
 def calcular_etapa(r: dict) -> tuple[str, str, str]:
@@ -4452,7 +4471,7 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
                            f'💡 <em>{e["aprendizaje"]}</em></div>'
                            if e.get("aprendizaje") else "")
             entradas_html += f'''
-    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px;margin-bottom:10px">
+    <div style="background:var(--surface);border:1px solid var(--brd);border-radius:12px;padding:16px;margin-bottom:10px" id="diario_{e["id"]}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
         <div>
           <span style="font-size:16px">{dot}</span>
@@ -4470,6 +4489,9 @@ def render_tab_diario(entradas: list, stats: dict) -> str:
       </div>
       {aprend_html}
       {f'<div style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right">Cerrada: {e["fecha_cierre"]}</div>' if e.get("fecha_cierre") else ""}
+      <div style="margin-top:8px;text-align:right">
+        <button class="btn-sm btn-del" onclick="borrarDiario({e["id"]})">Borrar</button>
+      </div>
     </div>'''
 
     return f'''<div id="tab-diario" class="tab">
@@ -5029,7 +5051,7 @@ def render_hist_rows(ops):
         ofecha = op['fecha']
         onotas = (op.get('notas','') or '').replace("'","\\'")
         edit_fn= f"editOp({oid},'{oticker}','{otype}',{otit},{oprecio},'{ofecha}','{onotas}')"
-        del_fn = f"delOp({oid},'{oticker}')"
+        del_fn = f"delOp({oid},'{oticker}','{ofecha[:10]}','{otype}',{otit},{oprecio})"
         h+=(f'<tr>'
             f'<td>{op["fecha"][:10]}</td>'
             f'<td><strong>{op["ticker"]}</strong></td>'
@@ -6013,7 +6035,7 @@ td strong{{font-size:13px;font-weight:500}}
         <th>Valor MXN</th><th>P&L MXN</th><th>% Var</th><th>Señal</th>
         <th style="color:var(--green)">¿Qué hago?</th>
         <th class="sr-th" title="Soporte / Resistencia automáticos">📊 S/R</th>
-        <th style="color:var(--green)">Orden GBM 🎯</th></tr></thead>
+        <th style="color:var(--green)">Orden GBM 🎯</th><th>Borrar</th></tr></thead>
       <tbody id="port_tbody">{port_rows}</tbody>
     </table></div>
   </div>
@@ -6612,15 +6634,64 @@ function actualizarTablaPortafolio(){{
       +`<td class="num">—</td><td class="num">—</td>`
       +`<td><span class="badge b-none">Sin análisis</span></td>`
       +`<td><span style="font-size:10px;color:var(--muted)">Actualiza ↺ para ver recomendación</span></td>`
-      +`<td>—</td><td>—</td>`;
+      +`<td>—</td><td>—</td>`
+      +`<td onclick="event.stopPropagation()"><button class="btn-sm btn-del" onclick="borrarPosicion('${{tk}}')" title="Borra la posición completa: portafolio, operaciones y diario de este ticker">Borrar</button></td>`;
     tbody.appendChild(newRow);
     const detRow=document.createElement('tr');
     detRow.className='detail'; detRow.id=rid;
-    detRow.innerHTML='<td colspan="11" style="padding:0"><div class="detail-panel">'
+    detRow.innerHTML='<td colspan="12" style="padding:0"><div class="detail-panel">'
       +'<p class="hint">Presiona ↺ Actualizar para ver el análisis completo de esta posición.</p>'
       +'</div></td>';
     tbody.appendChild(detRow);
   }});
+}}
+
+// ── Borrar entrada del diario ──────────────────────────────
+function borrarDiario(id){{
+  if(!confirm('¿Borrar esta entrada del diario? No se puede deshacer.'))return;
+  fetch('/api/diario/delete',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{id:id}})
+  }}).then(r=>r.json()).then(d=>{{
+    if(d.status==='ok'){{
+      const el=document.getElementById('diario_'+id);
+      if(el) el.remove();
+    }} else {{
+      alert('Error al borrar: '+d.error);
+    }}
+  }}).catch(e=>alert('Error de red: '+e));
+}}
+
+// ── Borrar posición completa (portafolio + operaciones + diario) ──
+function borrarPosicion(ticker){{
+  if(!confirm('¿Borrar por completo la posición de '+ticker+'? Esto elimina la posición, TODAS sus operaciones registradas y sus entradas de diario. No se puede deshacer.'))return;
+  fetch('/api/portafolio/delete',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{ticker:ticker}})
+  }}).then(r=>r.json()).then(d=>{{
+    // Igual que con delOp: localStorage es la fuente de verdad, así que
+    // quitamos ahí también todas las operaciones de este ticker para que
+    // no reaparezcan en el próximo auto-sync.
+    let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+    const antes=ops.length;
+    ops=ops.filter(o=>o.ticker!==ticker);
+    if(ops.length!==antes) localStorage.setItem('finbit_ops',JSON.stringify(ops));
+    document.querySelectorAll('#port_tbody tr.datarow, #hist_body tr').forEach(tr=>{{
+      const tk=tr.querySelector('td strong')?.textContent?.trim();
+      if(tk===ticker){{
+        const next=tr.nextElementSibling;
+        if(next&&next.classList.contains('detail')) next.remove();
+        tr.remove();
+      }}
+    }});
+    actualizarTablaPortafolio();
+    if(ops.length) _sincronizarOpsServidor(ops);
+    if(d.status!=='ok'){{
+      console.warn('Borrado local aplicado; el servidor reportó: '+d.error);
+    }}
+  }}).catch(e=>alert('Error de red: '+e));
 }}
 
 // ── Filtro tabla portafolio ───────────────────────────────
@@ -6867,22 +6938,33 @@ function editOp(id,ticker,tipo,titulos,precio,fecha,notas){{
   document.getElementById('edit_notas').value=notas;
   document.getElementById('editModal').classList.add('open');
 }}
-function delOp(id,ticker){{
+function delOp(id,ticker,fecha,tipo,titulos,precio){{
   if(!confirm('¿Borrar operación #'+id+' de '+ticker+'?'))return;
   fetch('/api/operaciones/delete',{{
     method:'POST',
     headers:{{'Content-Type':'application/json'}},
     body:JSON.stringify({{id:id}})
   }}).then(r=>r.json()).then(d=>{{
-    if(d.status==='ok'){{
-      // Eliminar la fila directamente sin recargar la página
-      const btn = document.querySelector('button[onclick*="delOp('+id+',"]');
-      if(btn){{
-        const row = btn.closest('tr');
-        if(row) row.remove();
-      }}
-    }} else {{
-      alert('Error al borrar: '+d.error);
+    // localStorage es la fuente de verdad (se re-sincroniza completa al
+    // servidor en cada carga de página) — si solo se borra en el servidor
+    // y no aquí, la operación "resucita" en el próximo auto-sync. Por eso
+    // quitamos también la que haga match exacto en localStorage, pase lo
+    // que pase con el id en el servidor (puede haber quedado desfasado
+    // por un import previo).
+    let ops=JSON.parse(localStorage.getItem('finbit_ops')||'[]');
+    const idx=ops.findIndex(o=>o.ticker===ticker && o.tipo===tipo &&
+      Math.abs((o.titulos||0)-titulos)<0.0001 && Math.abs((o.precio_mxn||0)-precio)<0.01 &&
+      (o.fecha||'').slice(0,10)===fecha);
+    if(idx>=0){{ ops.splice(idx,1); localStorage.setItem('finbit_ops',JSON.stringify(ops)); }}
+    const btn = document.querySelector('button[onclick*="delOp('+id+',"]');
+    if(btn){{
+      const row = btn.closest('tr');
+      if(row) row.remove();
+    }}
+    actualizarTablaPortafolio();
+    _sincronizarOpsServidor(ops);
+    if(d.status!=='ok'){{
+      console.warn('Borrado local aplicado; el servidor reportó: '+d.error);
     }}
   }}).catch(e=>alert('Error de red: '+e));
 }}
@@ -8083,6 +8165,49 @@ def api_diario_cerrar():
 @app.route("/api/diario")
 def api_diario_lista():
     return jsonify(get_diario(limite=100))
+
+@app.route("/api/diario/delete", methods=["POST"])
+def api_diario_delete():
+    """Borra una entrada del diario de trading por ID."""
+    try:
+        data = flask_req.get_json(force=True) or {}
+        did  = data.get("id")
+        if not did:
+            return jsonify({"status": "error", "error": "id requerido"}), 400
+        con = sqlite3.connect(DB_FILE)
+        con.execute("DELETE FROM diario_trading WHERE id=?", (int(did),))
+        con.commit()
+        con.close()
+        return jsonify({"status": "ok", "id": did})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/portafolio/delete", methods=["POST"])
+def api_portafolio_delete():
+    """
+    Borra por completo una posición: la fila en 'portafolio', TODAS las
+    operaciones (compras/ventas) de ese ticker y sus entradas de diario.
+    Úsalo para quitar posiciones "fantasma" (sin operaciones reales detrás,
+    como una que se haya agregado directo sin pasar por Registrar) o para
+    limpiar un ticker por completo, incluyendo su historial.
+    """
+    global _dash_html
+    try:
+        data   = flask_req.get_json(force=True) or {}
+        ticker = (data.get("ticker") or "").upper().strip()
+        if not ticker:
+            return jsonify({"status": "error", "error": "ticker requerido"}), 400
+        con = sqlite3.connect(DB_FILE)
+        con.execute("DELETE FROM portafolio WHERE ticker=?", (ticker,))
+        con.execute("DELETE FROM operaciones WHERE ticker=?", (ticker,))
+        con.execute("DELETE FROM diario_trading WHERE ticker=?", (ticker,))
+        con.commit()
+        con.close()
+        threading.Thread(target=db_backup_to_github, daemon=True).start()
+        _dash_html = ""
+        return jsonify({"status": "ok", "ticker": ticker})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 @app.route("/api/exportar/scanner")
 def api_exportar_scanner():
