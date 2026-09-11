@@ -19,6 +19,19 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 from flask import Flask, Response, request as flask_req, jsonify
 
+# ── SQLite: evitar "database is locked" ──────────────────────
+# Con varios procesos escribiendo casi al mismo tiempo (sincronización de
+# operaciones, reconstrucción del dashboard, alertas en segundo plano),
+# el timeout por default de sqlite3 (5s) se quedaba corto y tronaba con
+# "database is locked". Este wrapper le da más margen a TODAS las
+# conexiones del archivo (30s en vez de 5s) sin tener que tocar cada
+# sqlite3.connect(DB_FILE) uno por uno.
+_sqlite3_connect_original = sqlite3.connect
+def _sqlite3_connect_con_timeout(*args, **kwargs):
+    kwargs.setdefault("timeout", 30.0)
+    return _sqlite3_connect_original(*args, **kwargs)
+sqlite3.connect = _sqlite3_connect_con_timeout
+
 # ═══════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════
 API_KEY     = os.environ.get("TWELVEDATA_API_KEY",   "")
@@ -528,6 +541,14 @@ def _loop_alertas_telegram():
 
 def init_db():
     con = sqlite3.connect(DB_FILE)
+    # WAL permite lecturas y escrituras simultáneas sin bloquearse entre
+    # sí — es la causa más común de "database is locked" con varios
+    # procesos tocando la misma base de datos SQLite a la vez.
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
+    except Exception as e:
+        print(f"  [db] ⚠️  No se pudo activar WAL (continuando igual): {e}")
     con.executescript("""
     CREATE TABLE IF NOT EXISTS operaciones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
