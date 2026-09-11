@@ -3112,24 +3112,34 @@ def analizar_portafolio(tc, capital, riesgo_pct, rr_min):
     if not posiciones:
         return []
 
-    tickers_db = get_tickers_db()
+    # ── Preparación (tickers_db + precarga) — nunca debe tumbar TODO el
+    # portafolio: si algo aquí falla, seguimos con tickers_db vacío y sin
+    # precarga; cada posición se resuelve individualmente más abajo, con
+    # su propio try/except.
+    tickers_db = {}
+    try:
+        tickers_db = get_tickers_db()
 
-    syms_port = []
-    for pos in posiciones:
-        ticker = pos["ticker"]
-        symbol, exchange = tickers_db.get(
-            ticker,
-            (ticker.replace(" CPO","CPO").replace(" ",""),
-             "BMV" if pos["origen"] == "MX" else "")
-        )
-        key_1d = f"{symbol.upper()}:1day"
-        key_1w = f"{symbol.upper()}:1week"
-        if key_1d not in _TD_CACHE or _TD_CACHE[key_1d] is None:
-            syms_port.append(symbol)
+        syms_port = []
+        for pos in posiciones:
+            ticker = pos["ticker"]
+            symbol, exchange = tickers_db.get(
+                ticker,
+                (ticker.replace(" CPO","CPO").replace(" ",""),
+                 "BMV" if pos["origen"] == "MX" else "")
+            )
+            key_1d = f"{symbol.upper()}:1day"
+            key_1w = f"{symbol.upper()}:1week"
+            if key_1d not in _TD_CACHE or _TD_CACHE[key_1d] is None:
+                syms_port.append(symbol)
 
-    if syms_port:
-        print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
-        _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
+        if syms_port:
+            print(f"  [portafolio] Precargando {len(syms_port)} ticker(s) del portafolio...")
+            _precargar_cache_batch(list(set(syms_port)), ["1day", "1week"])
+    except Exception as e:
+        import traceback
+        print(f"  [portafolio] ⚠️  Error precargando tickers (continuando sin precarga): {e}")
+        traceback.print_exc()
 
     resultados = []
 
