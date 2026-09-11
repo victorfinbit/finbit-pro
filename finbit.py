@@ -761,9 +761,18 @@ def get_ultima_compra_map() -> dict:
             mapa[t] = row["precio_mxn"]
     return mapa
 
-def upsert_portafolio_from_op(op: dict):
-    """Actualiza portafolio en SQLite al importar una operación."""
-    con = sqlite3.connect(DB_FILE)
+def upsert_portafolio_from_op(op: dict, con=None):
+    """
+    Actualiza portafolio en SQLite al importar una operación.
+    Si se pasa `con` (una conexión ya abierta), la reutiliza en vez de abrir
+    una nueva — evitar dos conexiones escribiendo a la vez en la misma
+    llamada es justo lo que evita choques de "database is locked" cuando
+    quien llama (como /api/operaciones/import) ya tiene su propia conexión
+    abierta en ese momento.
+    """
+    con_propia = con is None
+    if con_propia:
+        con = sqlite3.connect(DB_FILE)
     con.row_factory = sqlite3.Row
     cur = con.cursor()
     cur.execute("SELECT * FROM portafolio WHERE ticker=?", (op["ticker"],))
@@ -785,7 +794,10 @@ def upsert_portafolio_from_op(op: dict):
             cur.execute("UPDATE portafolio SET titulos=0, activo=0 WHERE ticker=?", (op["ticker"],))
         else:
             cur.execute("UPDATE portafolio SET titulos=? WHERE ticker=?", (round(rest,6), op["ticker"]))
-    con.commit(); con.close()
+    if con_propia:
+        con.commit(); con.close()
+    else:
+        con.commit()   # deja la conexión abierta — es de quien la pasó
 
 # ── TIPO DE CAMBIO ────────────────────────────────────────
 def get_tipo_cambio(key: str) -> float:
@@ -7537,6 +7549,7 @@ def login_required(f):
 
 _dash_html: str = ""
 _dash_lock  = threading.Lock()
+_db_write_lock = threading.Lock()  # serializa escrituras pesadas (import/delete) para evitar choques de SQLite
 _scan_resultados: list = []  # últimos resultados del scanner para alertas Telegram
 _refresh_in_progress = False
 _build_start_time: float = 0.0   # para mostrar tiempo transcurrido
@@ -8043,27 +8056,26 @@ def api_ops_delete():
         oid  = data.get("id")
         if not oid:
             return jsonify({"status": "error", "error": "id requerido"}), 400
-        con = sqlite3.connect(DB_FILE)
-        con.execute("DELETE FROM operaciones WHERE id=?", (int(oid),))
-        con.commit()
-        con.close()
-        ops = get_operaciones()
-        con2 = sqlite3.connect(DB_FILE)
-        con2.execute("DELETE FROM portafolio")
-        con2.commit()
-        con2.close()
-        tc = get_tipo_cambio(API_KEY)
-        for op in sorted(ops, key=lambda x: x.get("fecha","")):
-            try:
-                upsert_portafolio_from_op({
-                    "ticker":     op.get("ticker","").upper(),
-                    "tipo":       op.get("tipo"),
-                    "titulos":    op.get("titulos",0),
-                    "precio_mxn": op.get("precio_mxn",0),
-                    "origen":     op.get("origen","USA"),
-                    "mercado":    op.get("mercado","SIC"),
-                })
-            except Exception: pass
+        with _db_write_lock:
+            con = sqlite3.connect(DB_FILE)
+            con.execute("DELETE FROM operaciones WHERE id=?", (int(oid),))
+            con.commit()
+            ops = get_operaciones()
+            con.execute("DELETE FROM portafolio")
+            con.commit()
+            tc = get_tipo_cambio(API_KEY)
+            for op in sorted(ops, key=lambda x: x.get("fecha","")):
+                try:
+                    upsert_portafolio_from_op({
+                        "ticker":     op.get("ticker","").upper(),
+                        "tipo":       op.get("tipo"),
+                        "titulos":    op.get("titulos",0),
+                        "precio_mxn": op.get("precio_mxn",0),
+                        "origen":     op.get("origen","USA"),
+                        "mercado":    op.get("mercado","SIC"),
+                    }, con=con)
+                except Exception: pass
+            con.close()
         threading.Thread(target=db_backup_to_github, daemon=True).start()
         _dash_html = ""
         return jsonify({"status": "ok", "id": oid})
@@ -8081,50 +8093,52 @@ def api_ops_import():
     try:
         ops = flask_req.get_json(force=True) or []
         tc  = get_tipo_cambio(API_KEY)
-        con = sqlite3.connect(DB_FILE)
 
-        con.execute("DELETE FROM operaciones")
-        con.execute("DELETE FROM portafolio")
-        con.commit()
+        with _db_write_lock:
+            con = sqlite3.connect(DB_FILE)
 
-        for op in sorted(ops, key=lambda x: x.get("fecha", "")):
-            try:
-                total_mxn = op.get("total_mxn") or (op.get("titulos",0) * op.get("precio_mxn",0))
-                cur = con.execute(
-                    "INSERT INTO operaciones (fecha,ticker,tipo,titulos,precio_mxn,total_mxn,tc_dia,origen,mercado,notas) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (op.get("fecha"), op.get("ticker","").upper(), op.get("tipo"),
-                     op.get("titulos"), op.get("precio_mxn"), total_mxn,
-                     op.get("tc_dia", tc), op.get("origen","USA"),
-                     op.get("mercado","SIC"), op.get("notas",""))
-                )
-                op_id = cur.lastrowid
-                con.commit()
-                razon = op.get("razon_entrada", "").strip()
-                if razon:
-                    con.execute(
-                        """INSERT OR IGNORE INTO diario_trading
-                           (ticker, fecha, tipo, precio_mxn, titulos, score_entrada,
-                            total_criterios, razon_entrada, setup_tipo, rr_esperado, resultado, op_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,'abierta',?)""",
-                        (op.get("ticker","").upper(), op.get("fecha",""),
-                         op.get("tipo",""), op.get("precio_mxn",0), op.get("titulos",0),
-                         op.get("score_entrada", 0), op.get("total_criterios", 13),
-                         razon, op.get("setup_tipo",""), op.get("rr_esperado", 0), op_id)
+            con.execute("DELETE FROM operaciones")
+            con.execute("DELETE FROM portafolio")
+            con.commit()
+
+            for op in sorted(ops, key=lambda x: x.get("fecha", "")):
+                try:
+                    total_mxn = op.get("total_mxn") or (op.get("titulos",0) * op.get("precio_mxn",0))
+                    cur = con.execute(
+                        "INSERT INTO operaciones (fecha,ticker,tipo,titulos,precio_mxn,total_mxn,tc_dia,origen,mercado,notas) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (op.get("fecha"), op.get("ticker","").upper(), op.get("tipo"),
+                         op.get("titulos"), op.get("precio_mxn"), total_mxn,
+                         op.get("tc_dia", tc), op.get("origen","USA"),
+                         op.get("mercado","SIC"), op.get("notas",""))
                     )
+                    op_id = cur.lastrowid
                     con.commit()
-                upsert_portafolio_from_op({
-                    "ticker":     op.get("ticker","").upper(),
-                    "tipo":       op.get("tipo"),
-                    "titulos":    op.get("titulos",0),
-                    "precio_mxn": op.get("precio_mxn",0),
-                    "origen":     op.get("origen","USA"),
-                    "mercado":    op.get("mercado","SIC"),
-                })
-            except Exception as e:
-                print(f"  [import] op skip: {e}")
+                    razon = op.get("razon_entrada", "").strip()
+                    if razon:
+                        con.execute(
+                            """INSERT OR IGNORE INTO diario_trading
+                               (ticker, fecha, tipo, precio_mxn, titulos, score_entrada,
+                                total_criterios, razon_entrada, setup_tipo, rr_esperado, resultado, op_id)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,'abierta',?)""",
+                            (op.get("ticker","").upper(), op.get("fecha",""),
+                             op.get("tipo",""), op.get("precio_mxn",0), op.get("titulos",0),
+                             op.get("score_entrada", 0), op.get("total_criterios", 13),
+                             razon, op.get("setup_tipo",""), op.get("rr_esperado", 0), op_id)
+                        )
+                        con.commit()
+                    upsert_portafolio_from_op({
+                        "ticker":     op.get("ticker","").upper(),
+                        "tipo":       op.get("tipo"),
+                        "titulos":    op.get("titulos",0),
+                        "precio_mxn": op.get("precio_mxn",0),
+                        "origen":     op.get("origen","USA"),
+                        "mercado":    op.get("mercado","SIC"),
+                    }, con=con)
+                except Exception as e:
+                    print(f"  [import] op skip: {e}")
 
-        con.close()
+            con.close()
         return jsonify({"status": "ok", "importadas": len(ops)})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
