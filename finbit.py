@@ -6852,7 +6852,7 @@ function registrarOp(){{
 }}
 
 function _sincronizarOpsServidor(ops) {{
-  if (!ops || !ops.length) return;
+  if (!ops || !ops.length) return Promise.resolve();
   const opsCompletas = ops.map(op => ({{
     ...op,
     total_mxn: op.total_mxn || (op.titulos * op.precio_mxn),
@@ -6860,11 +6860,11 @@ function _sincronizarOpsServidor(ops) {{
     origen:    op.origen    || 'USA',
     mercado:   op.mercado   || 'SIC',
   }}));
-  fetch('/api/operaciones/import', {{
+  return fetch('/api/operaciones/import', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify(opsCompletas)
-  }}).catch(()=>{{}}); // silencioso — no interrumpir al usuario
+  }}).catch(()=>{{}}); // silencioso — no interrumpir al usuario, pero sí es esperable
 }}
 function guardarPosicion(){{
   const pos={{ticker:(document.getElementById('p_ticker').value||'').toUpperCase().trim(),
@@ -7304,26 +7304,35 @@ function restaurarTickerScanner(ticker) {{
 
 function actualizarDashboard() {{
   const btn = document.getElementById('btn_update');
-  if (btn) {{ btn.disabled = true; btn.textContent = '↺ Actualizando...'; }}
-  fetch('/refresh', {{method:'POST'}})
-    .then(r => r.json())
-    .then(d => {{
-      if (d.status === 'busy') {{
-        if (btn) {{ btn.disabled = false; btn.textContent = '↺ Actualizar'; }}
-        alert('Ya hay una actualización en curso, espera un momento.');
-        return;
-      }}
-      // Poll until ready
-      const poll = setInterval(() => {{
-        fetch('/status').then(r=>r.json()).then(s => {{
-          if (s.ready) {{
-            clearInterval(poll);
-            location.reload();
-          }}
-        }});
-      }}, 3000);
-    }})
-    .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
+  if (btn) {{ btn.disabled = true; btn.textContent = '↺ Sincronizando...'; }}
+  // Antes de pedirle al servidor que arme el reporte, aseguramos que tus
+  // operaciones más recientes (localStorage) ya estén guardadas en el
+  // servidor. Sin esto, "Actualizar" podía correr ANTES de que una
+  // operación recién registrada llegara al servidor, y esa posición
+  // salía sin análisis aunque ya la hubieras dado de alta.
+  const ops = JSON.parse(localStorage.getItem('finbit_ops') || '[]');
+  _sincronizarOpsServidor(ops).finally(() => {{
+    if (btn) {{ btn.textContent = '↺ Actualizando...'; }}
+    fetch('/refresh', {{method:'POST'}})
+      .then(r => r.json())
+      .then(d => {{
+        if (d.status === 'busy') {{
+          if (btn) {{ btn.disabled = false; btn.textContent = '↺ Actualizar'; }}
+          alert('Ya hay una actualización en curso, espera un momento.');
+          return;
+        }}
+        // Poll until ready
+        const poll = setInterval(() => {{
+          fetch('/status').then(r=>r.json()).then(s => {{
+            if (s.ready) {{
+              clearInterval(poll);
+              location.reload();
+            }}
+          }});
+        }}, 3000);
+      }})
+      .catch(() => {{ if(btn){{btn.disabled=false;btn.textContent='↺ Actualizar';}} }});
+  }});
 }}
 
 // ── Sub-tabs de Mi Trading ────────────────────────────────────
