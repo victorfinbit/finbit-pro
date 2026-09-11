@@ -724,6 +724,22 @@ def get_operaciones():
     rows = con.execute("SELECT * FROM operaciones ORDER BY fecha DESC, id DESC").fetchall()
     con.close(); return [dict(r) for r in rows]
 
+def get_ultima_compra_map() -> dict:
+    """Precio MXN de la última COMPRA registrada por ticker — base para calcular
+    la siguiente compra válida (regla de espaciado mínimo por R:R)."""
+    con = sqlite3.connect(DB_FILE); con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT ticker, precio_mxn FROM operaciones "
+        "WHERE tipo='COMPRA' ORDER BY fecha DESC, id DESC"
+    ).fetchall()
+    con.close()
+    mapa = {}
+    for row in rows:
+        t = row["ticker"]
+        if t not in mapa:            # la primera que aparece es la más reciente
+            mapa[t] = row["precio_mxn"]
+    return mapa
+
 def upsert_portafolio_from_op(op: dict):
     """Actualiza portafolio en SQLite al importar una operación."""
     con = sqlite3.connect(DB_FILE)
@@ -1153,6 +1169,57 @@ def gestion_posicion(precio_entrada_mxn: float, precio_actual_mxn: float,
         "riesgo_orig":    round(riesgo_orig, 2),
         "parciales_50":   round(nivel1_precio, 2),  # compatibilidad legacy
     }
+
+def calcular_proxima_compra(precio_actual_mxn: float | None, ultima_compra_mxn: float | None,
+                            rr_val: float, en_acumulacion: bool) -> dict:
+    """
+    Regla de Víctor para compras escalonadas: no gastar una "bala" en ruido de
+    un solo día. Calcula el precio límite para la siguiente compra, exigiendo
+    espaciado mínimo desde la ÚLTIMA COMPRA EJECUTADA (no desde la entrada
+    original), y solo la marca como lista cuando además hay señal de
+    acumulación (🟡/🟠/🟢) en Finbit.
+
+    Espaciado según el valor mostrado en la columna R:R (lo que Víctor
+    referencia como "ATR" — la etiqueta bajo la barra de esa columna indica el
+    método de cálculo del objetivo, no el ATR crudo):
+      - R:R < 3x  → mínimo 5% de caída desde la última compra
+      - R:R >= 3x → mínimo 7% de caída desde la última compra
+    """
+    if not ultima_compra_mxn or ultima_compra_mxn <= 0:
+        return {"aplica": False}
+
+    pct           = 5.0 if (rr_val or 0) < 3.0 else 7.0
+    limite_mxn    = ultima_compra_mxn * (1 - pct / 100)
+    cumple_precio = precio_actual_mxn is not None and precio_actual_mxn <= limite_mxn
+    cumple_todo   = cumple_precio and en_acumulacion
+
+    return {
+        "aplica":         True,
+        "pct":            pct,
+        "ultima_compra":  ultima_compra_mxn,
+        "limite_mxn":     round(limite_mxn, 2),
+        "cumple_precio":  cumple_precio,
+        "cumple_todo":    cumple_todo,
+    }
+
+def proxima_compra_cell(pc: dict) -> str:
+    """Celda de la tabla del Scanner para la columna 'Próxima compra'."""
+    if not pc or not pc.get("aplica"):
+        return '<span class="hint" style="font-size:10px">—</span>'
+    limite = pc["limite_mxn"]
+    pct    = pc["pct"]
+    if pc["cumple_todo"]:
+        return (f'<div style="font-family:var(--mono);font-size:11px;color:var(--green);font-weight:700">'
+                f'✅ {fmt(limite)}</div>'
+                f'<div style="font-size:8px;color:var(--muted);margin-top:1px">-{pct:.0f}% vs última · con acumulación</div>')
+    elif pc["cumple_precio"]:
+        return (f'<div style="font-family:var(--mono);font-size:11px;color:var(--yellow)">'
+                f'{fmt(limite)}</div>'
+                f'<div style="font-size:8px;color:var(--muted);margin-top:1px">precio ok, falta acumulación</div>')
+    else:
+        return (f'<div style="font-family:var(--mono);font-size:11px;color:var(--muted)">'
+                f'≤ {fmt(limite)}</div>'
+                f'<div style="font-size:8px;color:var(--muted);margin-top:1px">-{pct:.0f}% vs última compra</div>')
 
 def calcular_dca(precio_actual_mxn: float, atr_mxn: float, soportes_mxn: list,
                  capital_total: float, es_etf_3x: bool = False) -> dict:
@@ -4753,6 +4820,7 @@ def render_mini_chart(nombre: str, tc: float, width: int = 560, height: int = 16
 
 def render_scan_rows(scanner, tc):
     h=""
+    ultima_compra_map = get_ultima_compra_map()
     for r in scanner:
         rid=f"sc_{r['nombre']}"
         rr_col=("var(--green)" if r["rr"]>=3 else "var(--yellow)" if r["rr"]>=2 else "var(--red)")
@@ -4778,6 +4846,13 @@ def render_scan_rows(scanner, tc):
         ganga_badge  = badge_ganga(r.get("ganga", {}))
         inicio_badge = badge_inicio_movimiento(r.get("inicio", {}))
         cap_badge    = badge_capitulacion(r.get("capitulacion", {}))
+
+        proxima_compra = calcular_proxima_compra(
+            precio_actual_mxn = r.get("precio_mxn"),
+            ultima_compra_mxn = ultima_compra_map.get(r["nombre"]),
+            rr_val            = r.get("rr", 0),
+            en_acumulacion    = bool(r.get("inicio", {}).get("es_inicio")),
+        )
 
         vol_rel_val  = r.get("tfs", {}).get("1D", {}).get("vol_rel", 0) or 0
         vol_badge    = badge_volumen_inusual(vol_rel_val)
@@ -4935,8 +5010,9 @@ def render_scan_rows(scanner, tc):
             f'<td style="text-align:center">'
             f'{"<span style=color:var(--green);font-size:16px>✅</span>" if r.get("cumple_ideal") else "<span style=color:var(--muted)>—</span>"}'
             f'</td>'
+            f'<td>{proxima_compra_cell(proxima_compra)}</td>'
             f'</tr>'
-            f'<tr class="detail" id="{rid}"><td colspan="13" style="padding:0">{detail}</td></tr>')
+            f'<tr class="detail" id="{rid}"><td colspan="14" style="padding:0">{detail}</td></tr>')
     return h
 
 def render_hist_rows(ops):
@@ -6235,8 +6311,9 @@ td strong{{font-size:13px;font-weight:500}}
         <th onclick="sortScanner(10,'num')" style="cursor:pointer;user-select:none" title="Ordenar por Score">Score <span id="srt10">⇅</span></th>
         <th onclick="sortScanner(11,'num')" style="cursor:pointer;user-select:none" title="Ordenar por % hacia el objetivo">% Obj <span id="srt11">⇅</span></th>
         <th title="Cumple las 6 condiciones ideales: R:R≥3x, Vol≥1.5x, Score≥7, EMA200 alcista, OBV a favor, sin divergencia RSI bajista">✅ Ideal</th>
+        <th title="Precio límite para tu siguiente compra escalonada: mínimo 5% de caída desde tu última compra si R:R&lt;3x, 7% si R:R≥3x — y con acumulación confirmada">🎯 Próxima compra</th>
       </tr></thead>
-      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
+      <tbody id="scan_tbody">{scan_rows or '<tr><td colspan="14" style="text-align:center;color:var(--muted);padding:24px;font-size:12px">Sin datos — verifica tu API key en <a href="/api/debug" target="_blank" style="color:var(--blue)">/api/debug</a></td></tr>'}</tbody>
     </table></div>
   </div>
 </div>
@@ -8014,14 +8091,22 @@ def api_exportar_scanner():
     try:
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Ticker","Precio MXN","Entrada EMA9","Stop","Objetivo","R:R","RSI","MACD","EMA200","Score","Estado"])
+        writer.writerow(["Ticker","Precio MXN","Entrada EMA9","Stop","Objetivo","R:R","RSI","MACD","EMA200","Score","Estado","Próxima compra MXN"])
 
         datos = _scan_resultados or []
         if not datos:
             writer.writerow(["Sin datos — actualiza el dashboard primero"])
         else:
+            ultima_compra_map = get_ultima_compra_map()
             for r in datos:
                 try:
+                    pc = calcular_proxima_compra(
+                        precio_actual_mxn = r.get("precio_mxn"),
+                        ultima_compra_mxn = ultima_compra_map.get(r.get("nombre","")),
+                        rr_val            = r.get("rr", 0),
+                        en_acumulacion    = bool(r.get("inicio", {}).get("es_inicio")),
+                    )
+                    proxima_txt = f"{pc['limite_mxn']:.2f}" if pc.get("aplica") else "—"
                     writer.writerow([
                         r.get("nombre",""),
                         f"{r.get('precio_mxn',0):.2f}",
@@ -8034,6 +8119,7 @@ def api_exportar_scanner():
                         "Sobre" if r.get("ema200_ok") else "Bajo",
                         f"{r.get('score',0)}/{r.get('total_criterios',13)}",
                         r.get("estado",""),
+                        proxima_txt,
                     ])
                 except Exception:
                     pass
